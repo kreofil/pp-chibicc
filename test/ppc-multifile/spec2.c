@@ -1,0 +1,5 @@
+#include "spec2.h"
+
+int MFValue<MFBase.trian *t>() {
+  return t->trian.a * 100 + t->trian.b * 10 + t->trian.c;
+}
