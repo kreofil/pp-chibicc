@@ -16,3 +16,4 @@ Run:
 
 ```sh
 make test
+```
