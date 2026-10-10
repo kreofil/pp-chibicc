@@ -7,6 +7,12 @@ TEST_SRCS=$(wildcard test/*.c)
 PPC_MULTIFILE_DIR=test/ppc-multifile
 PPC_MULTIFILE_OBJS=$(PPC_MULTIFILE_DIR)/base.o $(PPC_MULTIFILE_DIR)/spec.o $(PPC_MULTIFILE_DIR)/spec2.o $(PPC_MULTIFILE_DIR)/forward-use.o $(PPC_MULTIFILE_DIR)/main.o
 PPC_MULTIFILE_TEST=$(PPC_MULTIFILE_DIR)/ppc-multifile.exe
+# ADD
+STAGE2_TESTS=$(TEST_SRCS:test/%.c=stage2/test/%.exe)
+STAGE2_PPC_MULTIFILE_DIR=stage2/$(PPC_MULTIFILE_DIR)
+STAGE2_PPC_MULTIFILE_OBJS=$(PPC_MULTIFILE_OBJS:$(PPC_MULTIFILE_DIR)/%.o=$(STAGE2_PPC_MULTIFILE_DIR)/%.o)
+STAGE2_PPC_MULTIFILE_TEST=$(STAGE2_PPC_MULTIFILE_DIR)/ppc-multifile.exe
+# ---
 TESTS=$(TEST_SRCS:.c=.exe) $(PPC_MULTIFILE_TEST)
 
 # Stage 1
@@ -46,11 +52,22 @@ stage2/test/%.exe: stage2/chibicc test/%.c
 	./stage2/chibicc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
 	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
 
-test-stage2: $(TESTS:test/%=stage2/test/%)
+#test-stage2: $(TESTS:test/%=stage2/test/%)
+test-stage2: $(STAGE2_TESTS) $(STAGE2_PPC_MULTIFILE_TEST)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./stage2/chibicc
 
+# ADD
+$(STAGE2_PPC_MULTIFILE_DIR)/%.o: stage2/chibicc $(PPC_MULTIFILE_DIR)/%.c
+	mkdir -p $(@D)
+	./stage2/chibicc -Iinclude -Itest -I$(PPC_MULTIFILE_DIR) -c -o $@ $(PPC_MULTIFILE_DIR)/$*.c
+
+$(STAGE2_PPC_MULTIFILE_TEST): $(STAGE2_PPC_MULTIFILE_OBJS)
+	$(CC) -pthread -o $@ $^ -xc test/common
+
 # Misc.
+
+
 
 clean:
 	rm -rf chibicc tmp* $(TESTS) test/*.s test/*.exe stage2
