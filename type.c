@@ -40,6 +40,10 @@ bool is_numeric(Type *ty) {
   return is_integer(ty) || is_flonum(ty);
 }
 
+static bool is_aggregate(Type *ty) {
+  return ty->kind == TY_STRUCT || ty->kind == TY_UNION;
+}
+
 bool is_compatible(Type *t1, Type *t2) {
   if (t1 == t2)
     return true;
@@ -214,8 +218,12 @@ void add_type(Node *node) {
   case ND_ASSIGN:
     if (node->lhs->ty->kind == TY_ARRAY)
       error_tok(node->lhs->tok, "not an lvalue");
-    if (node->lhs->ty->kind != TY_STRUCT)
+    if (is_aggregate(node->lhs->ty) || is_aggregate(node->rhs->ty)) {
+      if (!is_compatible(node->lhs->ty, node->rhs->ty))
+        error_tok(node->rhs->tok, "incompatible aggregate assignment");
+    } else {
       node->rhs = new_cast(node->rhs, node->lhs->ty);
+    }
     node->ty = node->lhs->ty;
     return;
   case ND_EQ:
@@ -245,6 +253,10 @@ void add_type(Node *node) {
   case ND_COND:
     if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
       node->ty = ty_void;
+    } else if (is_aggregate(node->then->ty) || is_aggregate(node->els->ty)) {
+      if (!is_compatible(node->then->ty, node->els->ty))
+        error_tok(node->els->tok, "incompatible aggregate operands");
+      node->ty = node->then->ty;
     } else {
       usual_arith_conv(&node->then, &node->els);
       node->ty = node->then->ty;

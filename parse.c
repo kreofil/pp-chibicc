@@ -1338,6 +1338,8 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
     Node *expr = assign(rest, tok);
     add_type(expr);
     if (expr->ty->kind == TY_STRUCT) {
+      if (!is_compatible(init->ty, expr->ty))
+        error_tok(expr->tok, "incompatible struct initializer");
       init->expr = expr;
       return;
     }
@@ -1771,8 +1773,12 @@ static Node *stmt(Token **rest, Token *tok) {
 
     add_type(exp);
     Type *ty = current_fn->ty->return_ty;
-    if (ty->kind != TY_STRUCT && ty->kind != TY_UNION)
+    if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+      if (!is_compatible(ty, exp->ty))
+        error_tok(exp->tok, "incompatible return type");
+    } else {
       exp = new_cast(exp, current_fn->ty->return_ty);
+    }
 
     node->lhs = exp;
     return node;
@@ -3523,8 +3529,12 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
       error_tok(tok, "too many arguments");
 
     if (param_ty) {
-      if (param_ty->kind != TY_STRUCT && param_ty->kind != TY_UNION)
+      if (param_ty->kind == TY_STRUCT || param_ty->kind == TY_UNION) {
+        if (!is_compatible(param_ty, arg->ty))
+          error_tok(arg->tok, "incompatible argument type");
+      } else {
         arg = new_cast(arg, param_ty);
+      }
       param_ty = param_ty->next;
     } else if (arg->ty->kind == TY_FLOAT) {
       // If parameter type is omitted (e.g. in "..."), float

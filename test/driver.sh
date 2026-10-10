@@ -14,6 +14,36 @@ check() {
     fi
 }
 
+expect_fail() {
+    name=$1
+    cat > $tmp/fail.c
+    $chibicc -Iinclude -Itest -c -o $tmp/fail.o $tmp/fail.c >/dev/null 2>$tmp/fail.err
+    [ $? -ne 0 ]
+    check "$name"
+}
+
+expect_ppc_assign_fail() {
+    name=$1
+    stmt=$2
+    cat > $tmp/fail.c <<EOF
+typedef struct Rectangle { int x, y; } Rectangle;
+typedef struct Triangle { int a, b, c; } Triangle;
+typedef struct Figure {} case {} Figure;
+Figure + { Triangle t; };
+Figure + { Rectangle r; };
+int main() {
+  Figure f;
+  Figure.t t;
+  Figure.r r;
+  $stmt
+  return 0;
+}
+EOF
+    $chibicc -Iinclude -Itest -c -o $tmp/fail.o $tmp/fail.c >/dev/null 2>$tmp/fail.err
+    [ $? -ne 0 ]
+    check "$name"
+}
+
 # -o
 rm -f $tmp/out
 ./chibicc -c -o $tmp/out $tmp/empty.c
@@ -197,6 +227,52 @@ check '-x assembler'
 echo 'int x;' > $tmp/foo.c
 $chibicc -c -x assembler -x none -o $tmp/foo.o $tmp/foo.c
 check '-x none'
+
+expect_ppc_assign_fail 'PPC rejects specialization assignment t=r' 't = r;'
+expect_ppc_assign_fail 'PPC rejects specialization assignment r=t' 'r = t;'
+expect_ppc_assign_fail 'PPC rejects generalization assignment f=r' 'f = r;'
+expect_ppc_assign_fail 'PPC rejects generalization assignment f=t' 'f = t;'
+expect_ppc_assign_fail 'PPC rejects specialization assignment t=f' 't = f;'
+expect_ppc_assign_fail 'PPC rejects specialization assignment r=f' 'r = f;'
+expect_ppc_assign_fail 'PPC rejects specialization initializer' 'Figure.t u = r;'
+expect_fail 'PPC rejects specialization argument by value' <<'EOF'
+typedef struct Rectangle { int x, y; } Rectangle;
+typedef struct Triangle { int a, b, c; } Triangle;
+typedef struct Figure {} case {} Figure;
+Figure + { Triangle t; };
+Figure + { Rectangle r; };
+void take(Figure.t t) {}
+int main() {
+  Figure.r r;
+  take(r);
+  return 0;
+}
+EOF
+expect_fail 'PPC rejects specialization return by value' <<'EOF'
+typedef struct Rectangle { int x, y; } Rectangle;
+typedef struct Triangle { int a, b, c; } Triangle;
+typedef struct Figure {} case {} Figure;
+Figure + { Triangle t; };
+Figure + { Rectangle r; };
+Figure.t make(void) {
+  Figure.r r;
+  return r;
+}
+int main() { return 0; }
+EOF
+expect_fail 'PPC rejects specialization conditional value' <<'EOF'
+typedef struct Rectangle { int x, y; } Rectangle;
+typedef struct Triangle { int a, b, c; } Triangle;
+typedef struct Figure {} case {} Figure;
+Figure + { Triangle t; };
+Figure + { Rectangle r; };
+int main() {
+  Figure.t t;
+  Figure.r r;
+  (1 ? t : r);
+  return 0;
+}
+EOF
 
 # -E
 echo foo | $chibicc -E - | grep -q foo
