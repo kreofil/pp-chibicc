@@ -35,7 +35,7 @@
 
 CMakeCache.txt
 CMakeLists.txt.user
-Makefile
+# Makefile
 Makefile2
 project.kdev4
 
