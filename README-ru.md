@@ -56,6 +56,7 @@ set_source_files_properties(
     LANGUAGE C
 )
 ```
+
 ## Проверка после клонирования
 
 ```

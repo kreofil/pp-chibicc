@@ -92,8 +92,6 @@ test-examples: chibicc
 		diff -u $$dir/data/output1.txt $$result; \
 	done
 
-# test-all: test test-stage2 test-examples
-
 # Misc.
 
 
