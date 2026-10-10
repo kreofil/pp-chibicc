@@ -36,7 +36,7 @@ test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
 	test/driver.sh ./chibicc
 
-test-all: test test-stage2
+test-all: test test-stage2 test-examples
 
 # Stage 2
 
@@ -64,6 +64,35 @@ $(STAGE2_PPC_MULTIFILE_DIR)/%.o: stage2/chibicc $(PPC_MULTIFILE_DIR)/%.c
 
 $(STAGE2_PPC_MULTIFILE_TEST): $(STAGE2_PPC_MULTIFILE_OBJS)
 	$(CC) -pthread -o $@ $^ -xc test/common
+
+
+FIGURE_EVO_REUSE_STEPS = \
+	examples/evolution/figures/evo-reuse-code/01-start \
+	examples/evolution/figures/evo-reuse-code/02-new-spec \
+	examples/evolution/figures/evo-reuse-code/03-new-func \
+	examples/evolution/figures/evo-reuse-code/04-new-field \
+	examples/evolution/figures/evo-reuse-code/05-rect-only-out \
+	examples/evolution/figures/evo-reuse-code/06-mm \
+	examples/evolution/figures/evo-reuse-code/07-mm-new-spec \
+	examples/evolution/figures/evo-reuse-code/08-more-gen
+
+test-examples: chibicc
+	@set -e; \
+	for dir in $(FIGURE_EVO_REUSE_STEPS); do \
+		echo "testing $$dir"; \
+		name=$$(basename $$dir); \
+		out=/tmp/ppc-example-$$name; \
+		result=/tmp/ppc-example-$$name.out; \
+		srcdir=$$dir/src; \
+		files=$$(awk '/set\(SOURCE_FILES/{flag=1; next} /^\)/{flag=0} flag {print}' $$srcdir/CMakeLists.txt | sed 's/#.*//' | tr -s '[:space:]' '\n' | grep '\.c$$' | sed "s|^|$$srcdir/|"); \
+		incs="-Iinclude"; \
+		for d in examples/evolution/figures/evo-reuse-code/*/src; do incs="$$incs -I$$d"; done; \
+		./chibicc $$incs -o $$out $$files; \
+		$$out $$dir/data/input1.txt $$result >/tmp/ppc-example-$$name.stdout; \
+		diff -u $$dir/data/output1.txt $$result; \
+	done
+
+# test-all: test test-stage2 test-examples
 
 # Misc.
 

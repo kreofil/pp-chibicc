@@ -15,5 +15,6 @@ This repository is an experimental PPC/4P extension of chibicc.
 Run:
 
 ```sh
-make test
+make test      # быстрый основной тест
+make test-all  # полный тест со stage2
 ```

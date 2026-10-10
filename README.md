@@ -56,3 +56,11 @@ PROPERTIES
 LANGUAGE C
 )
 ```
+
+## Verification after cloning
+
+```
+git clone https://github.com/kreofil/pp-chibicc.git
+cd pp-chibicc
+make test-all
+```

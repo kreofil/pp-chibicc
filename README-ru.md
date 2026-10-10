@@ -56,3 +56,10 @@ set_source_files_properties(
     LANGUAGE C
 )
 ```
+## Проверка после клонирования
+
+```
+git clone https://github.com/kreofil/pp-chibicc.git
+cd pp-chibicc
+make test-all
+```
