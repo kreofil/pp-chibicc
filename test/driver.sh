@@ -235,6 +235,16 @@ expect_ppc_assign_fail 'PPC rejects generalization assignment f=t' 'f = t;'
 expect_ppc_assign_fail 'PPC rejects specialization assignment t=f' 't = f;'
 expect_ppc_assign_fail 'PPC rejects specialization assignment r=f' 'r = f;'
 expect_ppc_assign_fail 'PPC rejects specialization initializer' 'Figure.t u = r;'
+expect_fail 'PPC rejects typedef const generalization extension' <<'EOF'
+typedef struct ClosedFigure {} case { int first; } const ClosedFigure;
+ClosedFigure + { int second; };
+int main() { return 0; }
+EOF
+expect_fail 'PPC rejects tagged const generalization extension' <<'EOF'
+struct ClosedTag {} case { void first; } const;
+struct ClosedTag + { void second; };
+int main() { return 0; }
+EOF
 expect_fail 'PPC rejects specialization argument by value' <<'EOF'
 typedef struct Rectangle { int x, y; } Rectangle;
 typedef struct Triangle { int a, b, c; } Triangle;

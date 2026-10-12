@@ -3230,6 +3230,8 @@ static Type *ppc_type_suffix(Token **rest, Type *ty, Token *tok) {
 static Token *ppc_extend_generalization(Token *tok, Type *base) {
   if (!base->is_ppc_generalization)
     error_tok(tok, "not a PPC generalization");
+  if (base->is_ppc_const_generalization)
+    error_tok(tok, "cannot extend const PPC generalization");
 
   tok = skip(tok, "+");
   tok = skip(tok, "{");
@@ -3338,6 +3340,9 @@ static Type *struct_decl(Token **rest, Token *tok) {
     Type tmp = {};
     ppc_spec_members(&tok, tok, &tmp);
     append_ppc_specs(ty, tmp.members);
+
+    if (consume(&tok, tok, "const"))
+      ty->is_ppc_const_generalization = true;
   }
 
   *rest = tok;

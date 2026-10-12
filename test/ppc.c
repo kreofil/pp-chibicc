@@ -9,10 +9,17 @@ struct Figure + { struct Rectangle rectangle; };
 typedef struct Figure2 {} case {} Figure2;
 Figure2 + { int number; struct Triangle trian; };
 
-struct WeekDay { int week_number; } case { void Monday; };
+struct WeekDay { int week_number; } case { void Monday; } const;
 
 struct Switch {} case { void on; };
 struct Switch + { void off; };
+
+struct ConstPayload { int code; };
+typedef struct ConstKind { int line; } case {
+  void none;
+  struct ConstPayload payload;
+  int number;
+} const ConstKind;
 
 struct ShapeRect { int x, y; };
 struct ShapeTri { int a, b, c; };
@@ -98,6 +105,9 @@ int main() {
 
   ASSERT(8, ({ struct Figure.triangle t; t.color=7; t.triangle.a=1; t.color+t.triangle.a; }));
   ASSERT(7, ({ struct Figure.rectangle r; r.color=3; r.rectangle.x=4; r.color+r.rectangle.x; }));
+  ASSERT(7, ({ ConstKind.payload k={.line=2, .payload={5}}; k.line+k.payload.code; }));
+  ASSERT(12, ({ ConstKind.number k={.line=7, .number=5}; k.line+k.number; }));
+  ASSERT(4, get_spec_size(ConstKind));
   ASSERT(17, ({
     Shape.color.rect s;
     s.color.color=7;
