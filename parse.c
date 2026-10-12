@@ -4492,6 +4492,23 @@ static Node *ppc_table_size_expr(PpcFunc *ppc_fn, Token *tok) {
   return size;
 }
 
+static bool ppc_has_concrete_default_handler(PpcFunc *ppc_fn) {
+  for (PpcHandler *handler = ppc_fn->handlers; handler; handler = handler->next)
+    if (handler->is_default && !handler->is_abstract && handler->fn)
+      return true;
+  return false;
+}
+
+static bool ppc_needs_exhaustive_check(PpcFunc *ppc_fn) {
+  if (ppc_has_concrete_default_handler(ppc_fn))
+    return false;
+
+  for (int i = 0; i < ppc_fn->ppc_param_count; i++)
+    if (!ppc_fn->base_tys[i]->is_ppc_const_generalization)
+      return false;
+  return true;
+}
+
 static Node *ppc_mixed_index_expr(PpcFunc *ppc_fn, Node **tags, Token *tok) {
   Node *idx = tags[0];
 
@@ -4683,7 +4700,9 @@ static void ppc_make_table_ctor(PpcFunc *ppc_fn) {
                          new_add(new_var_node(i, tok), new_num(1, tok), tok), tok);
 
   Node *slot = ppc_table_slot(ppc_fn->table_var, new_var_node(i, tok), tok);
-  Node *def = ppc_cast_fnptr(new_var_node(ppc_default_handler(ppc_fn, tok), tok), fnptr_ty);
+  Node *def = ppc_needs_exhaustive_check(ppc_fn) ?
+    new_cast(new_num(0, tok), fnptr_ty) :
+    ppc_cast_fnptr(new_var_node(ppc_default_handler(ppc_fn, tok), tok), fnptr_ty);
   Node *fill = new_expr_stmt_node(new_binary(ND_ASSIGN, slot, def, tok), tok);
 
   Node *loop = new_node(ND_FOR, tok);
@@ -4700,6 +4719,61 @@ static void ppc_make_table_ctor(PpcFunc *ppc_fn) {
   stmt2->next = loop;
 
   fn->body = new_block_node(stmt1, tok);
+  fn->locals = locals;
+  add_type(fn->body);
+}
+
+static void ppc_make_exhaustive_check_ctor(PpcFunc *ppc_fn) {
+  if (!ppc_needs_exhaustive_check(ppc_fn))
+    return;
+
+  static int id = 0;
+  Token *tok = ppc_fn->name_tok;
+  Obj *fn = new_generated_func(format("__ppc_ctor_351_exhaustive_%d", id++),
+                               func_type(ty_void), 351);
+
+  Obj *locals = NULL;
+  fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
+  Obj *i = new_generated_lvar(&locals, ty_long);
+
+  Node *init = new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(i, tok),
+                                             new_num(0, tok), tok),
+                                  tok);
+  Node *cond = new_binary(ND_LT, new_var_node(i, tok),
+                          new_cast(ppc_table_size_expr(ppc_fn, tok), ty_long),
+                          tok);
+  Node *inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
+                         new_add(new_var_node(i, tok), new_num(1, tok), tok), tok);
+
+  Node *missing = new_unary(ND_NOT,
+                            ppc_table_slot(ppc_fn->table_var, new_var_node(i, tok), tok),
+                            tok);
+
+  char *fmt = format("PPC completeness error: missing handler for %s table slot %%ld\n",
+                     ppc_fn->name);
+  Obj *fmt_var = new_string_literal(fmt, array_of(ty_char, strlen(fmt) + 1));
+
+  Node *args = new_num(2, tok);
+  args->next = new_cast(new_var_node(fmt_var, tok), pointer_to(ty_char));
+  args->next->next = new_var_node(i, tok);
+
+  Node *print = new_expr_stmt_node(new_func_call_node(get_dprintf_func(), args, tok), tok);
+  Node *abort = new_expr_stmt_node(new_func_call_node(get_abort_func(), NULL, tok), tok);
+  print->next = abort;
+
+  Node *if_node = new_node(ND_IF, tok);
+  if_node->cond = missing;
+  if_node->then = new_block_node(print, tok);
+
+  Node *loop = new_node(ND_FOR, tok);
+  loop->init = init;
+  loop->cond = cond;
+  loop->inc = inc;
+  loop->then = new_block_node(if_node, tok);
+  loop->brk_label = new_unique_name();
+  loop->cont_label = new_unique_name();
+
+  fn->body = new_block_node(loop, tok);
   fn->locals = locals;
   add_type(fn->body);
 }
@@ -4779,6 +4853,7 @@ static void finalize_ppc_runtime(void) {
     ppc_make_table_dtor(fn);
     for (PpcHandler *handler = fn->handlers; handler; handler = handler->next)
       ppc_make_handler_ctor(fn, handler);
+    ppc_make_exhaustive_check_ctor(fn);
   }
 }
 

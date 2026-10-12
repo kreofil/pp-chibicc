@@ -22,6 +22,17 @@ expect_fail() {
     check "$name"
 }
 
+expect_run_fail() {
+    name=$1
+    cat > $tmp/fail.c
+    $chibicc -Iinclude -Itest -o $tmp/fail $tmp/fail.c >/dev/null 2>$tmp/fail.err
+    [ $? -eq 0 ] || false
+    check "$name build"
+    sh -c "$tmp/fail" >/dev/null 2>>$tmp/fail.err
+    [ $? -ne 0 ]
+    check "$name"
+}
+
 expect_ppc_assign_fail() {
     name=$1
     stmt=$2
@@ -243,6 +254,21 @@ EOF
 expect_fail 'PPC rejects tagged const generalization extension' <<'EOF'
 struct ClosedTag {} case { void first; } const;
 struct ClosedTag + { void second; };
+int main() { return 0; }
+EOF
+expect_run_fail 'PPC rejects incomplete const handler table' <<'EOF'
+typedef struct ClosedSwitch {} case { void on; void off; } const ClosedSwitch;
+int ClosedSwitchCode<ClosedSwitch *s>() = 0;
+int ClosedSwitchCode<ClosedSwitch.void *s>() { return 0; }
+int ClosedSwitchCode<ClosedSwitch.on *s>() { return 1; }
+int main() { return 0; }
+EOF
+expect_run_fail 'PPC rejects incomplete const multimethod table' <<'EOF'
+typedef struct ClosedBit {} case { void one; } const ClosedBit;
+int ClosedBitPair<ClosedBit *a, ClosedBit *b>() = 0;
+int ClosedBitPair<ClosedBit.void *a, ClosedBit.void *b>() { return 0; }
+int ClosedBitPair<ClosedBit.void *a, ClosedBit.one *b>() { return 1; }
+int ClosedBitPair<ClosedBit.one *a, ClosedBit.void *b>() { return 2; }
 int main() { return 0; }
 EOF
 expect_fail 'PPC rejects specialization argument by value' <<'EOF'

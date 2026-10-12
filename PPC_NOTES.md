@@ -6,6 +6,7 @@ This snapshot starts a Procedural-Parametric C experiment on top of
 Implemented so far:
 
 - `struct Name { ... } case { ... };`
+- closed generalizations with `struct Name { ... } case { ... } const;`
 - empty case lists, for example `struct Figure {} case {};`
 - decentralized extension with `struct Name + { ... };`
 - decentralized extension through a typedef name, for example `Figure2 + { ... };`
@@ -63,6 +64,8 @@ Implemented so far:
   one-PPC-parameter function model
 - generated finalizers for dynamically allocated PPC dispatch tables
 - diagnostic runtime handlers for uncovered abstract PPC dispatch cells
+- startup completeness checks for PPC functions whose dispatch axes are all
+  closed generalizations and that have no concrete all-general default handler
 - `create_spec(type-name)` for heap-creating PPC generalizations,
   specializations, and specialization chains with all reachable hidden runtime
   tags initialized
@@ -106,6 +109,8 @@ Current implementation strategy:
 - `Base.void` is a separate synthetic specialization type for PPC handler
   parameters. It is not taken from the `case` list and always denotes tag 0,
   i.e. the generalization object itself as a concrete dispatch-table coordinate.
+- A `const` generalization has a closed specialization set. Later `+`
+  extensions of such a generalization are rejected.
 - The hidden tag field is the first struct member. The generalization uses
   tag 0; concrete specializations receive tags 1..N at program startup.
 - Each generalization has a common runtime counter:
@@ -138,6 +143,10 @@ Current implementation strategy:
   `FigurePair<struct Figure *a, struct Figure *b>() { ... }`. If the
   generalizing handler is abstract or missing, the table is filled with a
   generated diagnostic handler.
+- If every PPC parameter of a function belongs to a closed generalization and
+  the function has no concrete all-general default handler, the table
+  constructor leaves cells empty and a later `.init_array.351` completeness
+  checker aborts before `main` if any specialization tuple is still uncovered.
 - The diagnostic handler has the same generic PPC signature as the table entry.
   It prints the PPC function name and the actual runtime tag coordinates, for
   example `PPC dispatch error: uncovered handler for Missing<0, 1>()`, and then

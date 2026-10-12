@@ -86,6 +86,24 @@ int SwitchCode<struct Switch *s>() = 0;
 int SwitchCode<struct Switch.on *s>() { return 1; }
 int SwitchCode<struct Switch.off *s>() { return 2; }
 
+int WeekDayCode<struct WeekDay *d>() = 0;
+int WeekDayCode<struct WeekDay.void *d>() { return d->week_number; }
+int WeekDayCode<struct WeekDay.Monday *d>() { return d->week_number + 1; }
+
+int WeekDayPairCode<struct WeekDay *a, struct WeekDay *b>() = 0;
+int WeekDayPairCode<struct WeekDay.void *a, struct WeekDay.void *b>() {
+  return 10 + a->week_number + b->week_number;
+}
+int WeekDayPairCode<struct WeekDay.void *a, struct WeekDay.Monday *b>() {
+  return 20 + a->week_number + b->week_number;
+}
+int WeekDayPairCode<struct WeekDay.Monday *a, struct WeekDay.void *b>() {
+  return 30 + a->week_number + b->week_number;
+}
+int WeekDayPairCode<struct WeekDay.Monday *a, struct WeekDay.Monday *b>() {
+  return 40 + a->week_number + b->week_number;
+}
+
 int FigureKind<struct Figure *f>() = 0;
 int FigureKind<struct Figure.void *f>() { return 10; }
 int FigureKind<struct Figure.triangle *f>() { return 11; }
@@ -450,6 +468,13 @@ int main() {
     n->number;
   }));
   ASSERT(1, ({ struct Switch.on *s=create_spec(struct Switch.on); SwitchCode<s>(); }));
+  ASSERT(5, ({ struct WeekDay d={5}; WeekDayCode<&d>(); }));
+  ASSERT(36, ({ struct WeekDay.Monday monday={35}; WeekDayCode<&monday>(); }));
+  ASSERT(73, ({
+    struct WeekDay.Monday a={11};
+    struct WeekDay.Monday b={22};
+    WeekDayPairCode<&a, &b>();
+  }));
   ASSERT(1, ({
     struct Switch s;
     *(int *)&s=0;
