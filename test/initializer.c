@@ -227,6 +227,10 @@ int main() {
   ASSERT(0, ({ struct { struct { int a,b; } c; } x={.c.b=1}; x.c.a; }));
   ASSERT(1, ({ struct { struct { int a,b; } c; } x={.c.b=1}; x.c.b; }));
 
+  ASSERT(10, ({ struct { struct { int x,y; } p,q; } x={.p.x=1, .p.y=2, .q.x=3, .q.y=4}; x.p.x+x.p.y+x.q.x+x.q.y; }));
+  ASSERT(10, ({ struct { struct { int x,y; } p,q; } x={.p.x=1, 2, .q.x=3, 4}; x.p.x+x.p.y+x.q.x+x.q.y; }));
+  ASSERT(6, ({ struct { struct { struct { int a,b; } inner; } mid; int c; } x={.mid.inner.a=1, .mid.inner.b=2, .c=3}; x.mid.inner.a+x.mid.inner.b+x.c; }));
+
   ASSERT(1, ({ struct { int a[2]; } x={.a=1,2}; x.a[0]; }));
   ASSERT(2, ({ struct { int a[2]; } x={.a=1,2}; x.a[1]; }));
 

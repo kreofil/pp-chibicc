@@ -21,6 +21,11 @@ typedef struct Shape {} case { struct ShapeRect rect; struct ShapeTri trian; } S
 typedef struct ShapeColor { int color; } case { Shape fig; } ShapeColor;
 Shape + { ShapeColor color; };
 
+struct PpcPoint { int x, y; };
+struct PpcRect { struct PpcPoint leftDown, rightTop; };
+typedef struct PpcColoredFigure { unsigned int color; } case {} PpcColoredFigure;
+PpcColoredFigure + { struct PpcRect rect; };
+
 struct Figure.rectangle global_rect;
 struct Figure.triangle global_triangle = {.color=11, .triangle={1, 2, 3}};
 Shape.color.rect global_shape_color_rect;
@@ -118,6 +123,14 @@ int main() {
   ASSERT(33, ({
     Shape.color.rect s={.color={.color=7, .fig={.rect={10, 16}}}};
     s.color.color+s.color.fig.rect.x+s.color.fig.rect.y;
+  }));
+  ASSERT(123, ({
+    PpcColoredFigure.rect s={
+      .color=33,
+      .rect.leftDown.x=10, .rect.leftDown.y=10,
+      .rect.rightTop.x=30, .rect.rightTop.y=40,
+    };
+    s.color+s.rect.leftDown.x+s.rect.leftDown.y+s.rect.rightTop.x+s.rect.rightTop.y;
   }));
   ASSERT(6, ({ Shape.color.rect a[2]; *(int *)&a[0]+*(int *)&a[1]; }));
   ASSERT(2, ({ Shape.color.rect a[2]; *(int *)&a[0].color+*(int *)&a[1].color; }));

@@ -1272,8 +1272,15 @@ static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Mem
   for (mem = next_user_member(mem); mem && !is_end(tok); mem = next_user_member(mem->next)) {
     Token *start = tok;
 
-    if (!first)
+    if (!first) {
       tok = skip(tok, ",");
+    } else if (equal(tok, ",")) {
+      if (equal(tok->next, "[") || equal(tok->next, ".") || is_end(tok->next)) {
+        *rest = start;
+        return;
+      }
+      tok = tok->next;
+    }
     first = false;
 
     if (equal(tok, "[") || equal(tok, ".")) {
