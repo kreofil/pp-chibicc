@@ -357,6 +357,7 @@ struct Type {
   // struct with an additional `case { ... }` specialization list.
   bool is_ppc_generalization;
   bool is_ppc_const_generalization;
+  bool is_ppc_zero_spec_disabled;
   Member *ppc_specs;
   char *ppc_name;
   Obj *ppc_count_var;

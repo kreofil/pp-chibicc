@@ -256,6 +256,48 @@ struct ClosedTag {} case { void first; } const;
 struct ClosedTag + { void second; };
 int main() { return 0; }
 EOF
+expect_fail 'PPC rejects disabled zero generalization object' <<'EOF'
+typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+int main() {
+  ClosedEnum e;
+  return 0;
+}
+EOF
+expect_fail 'PPC rejects disabled zero specialization type' <<'EOF'
+typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+int main() {
+  ClosedEnum.void e;
+  return 0;
+}
+EOF
+expect_fail 'PPC rejects disabled zero specialization handler' <<'EOF'
+typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+int ClosedEnumCode<ClosedEnum *e>() { return e->n; }
+int ClosedEnumCode<ClosedEnum.void *e>() { return 0; }
+int main() { return 0; }
+EOF
+expect_fail 'PPC rejects create_spec for disabled zero specialization' <<'EOF'
+typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+int main() {
+  ClosedEnum *e = create_spec(ClosedEnum);
+  return 0;
+}
+EOF
+expect_fail 'PPC rejects init_spec for disabled zero specialization' <<'EOF'
+typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+int main() {
+  char buf[sizeof(ClosedEnum.one)];
+  init_spec(ClosedEnum, buf);
+  return 0;
+}
+EOF
+expect_run_fail 'PPC rejects disabled zero dispatch coordinate' <<'EOF'
+typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+int ClosedEnumCode<ClosedEnum *e>() { return 7; }
+int main() {
+  return ClosedEnumCode<get_spec_ptr(ClosedEnum, 0)>();
+}
+EOF
 expect_run_fail 'PPC rejects incomplete const handler table' <<'EOF'
 typedef struct ClosedSwitch {} case { void on; void off; } const ClosedSwitch;
 int ClosedSwitchCode<ClosedSwitch *s>() = 0;

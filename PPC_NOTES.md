@@ -1,4 +1,4 @@
-# PPC extension snapshot 18
+# PPC extension snapshot 19
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
@@ -7,6 +7,8 @@ Implemented so far:
 
 - `struct Name { ... } case { ... };`
 - closed generalizations with `struct Name { ... } case { ... } const;`
+- zero-disabled generalizations with `struct Name { ... } case { ... } = 0;`
+  and `struct Name { ... } case { ... } const = 0;`
 - empty case lists, for example `struct Figure {} case {};`
 - decentralized extension with `struct Name + { ... };`
 - decentralized extension through a typedef name, for example `Figure2 + { ... };`
@@ -111,8 +113,16 @@ Current implementation strategy:
   i.e. the generalization object itself as a concrete dispatch-table coordinate.
 - A `const` generalization has a closed specialization set. Later `+`
   extensions of such a generalization are rejected.
+- A generalization declared with `= 0` disables the source-level zero
+  specialization. Direct objects of that generalization type, arrays of such
+  objects, `Base.void`, `create_spec(Base)`, `init_spec(Base, ptr)`, and
+  ordinary function parameters or return values that would pass such objects by
+  value are rejected. Pointers to the generalization remain valid and can be
+  used for default PPC handlers.
 - The hidden tag field is the first struct member. The generalization uses
-  tag 0; concrete specializations receive tags 1..N at program startup.
+  tag 0; concrete specializations receive tags 1..N at program startup. For
+  `= 0` generalizations, tag 0 remains a technical table coordinate but is not
+  a valid source-level specialization.
 - Each generalization has a common runtime counter:
   `__ppc_<type>_count`.
 - Generalizations used with `get_spec_ptr` also have a common runtime
@@ -147,6 +157,11 @@ Current implementation strategy:
   the function has no concrete all-general default handler, the table
   constructor leaves cells empty and a later `.init_array.351` completeness
   checker aborts before `main` if any specialization tuple is still uncovered.
+- If any PPC parameter belongs to a `= 0` generalization, a
+  `.init_array.341` constructor overwrites all dispatch-table cells whose
+  coordinate is zero on that axis with a generated diagnostic handler. Dense
+  table sizes are not compressed; zero-coordinate slots remain present as
+  runtime error slots.
 - The diagnostic handler has the same generic PPC signature as the table entry.
   It prints the PPC function name and the actual runtime tag coordinates, for
   example `PPC dispatch error: uncovered handler for Missing<0, 1>()`, and then
@@ -155,7 +170,8 @@ Current implementation strategy:
   allocates `sizeof(struct Figure.rectangle)` bytes with `calloc`, writes every
   reachable hidden tag field from the generated PPC type, and returns
   `struct Figure.rectangle *`. Passing a generalization type or `Base.void`
-  creates a tag-0 object.
+  creates a tag-0 object unless the generalization was declared with `= 0`, in
+  which case the compiler rejects the expression.
 - `create_spec(Shape.color.rect)` and recurrent forms such as
   `create_spec(Shape.color.color.rect)` use the same type-chain parser as
   variable declarations and initialize every tag in the allocated chain.
@@ -188,7 +204,9 @@ Current implementation strategy:
   `get_spec_ptr` and reset the common pointer to zero.
 - Handler constructors in `.init_array.301` write specialization handler
   pointers into the table by reading the runtime tag cell. A `Base.void`
-  handler contributes a literal zero coordinate.
+  handler contributes a literal zero coordinate. For a `= 0` generalization,
+  `Base.void` handlers are rejected and the later zero-slot constructor restores
+  the diagnostic handler for all zero-coordinate slots.
 - PPC handler implementation symbols follow ordinary C linkage rules. A
   non-`static` handler definition such as `RunThread<ThreadData.Rect *r>()`
   emits an externally visible generated symbol, so constructors emitted from
@@ -219,6 +237,10 @@ Still limited:
 - `get_spec_ptr` and `spec_index_cmp` are still first-tag helper operations.
   They do not yet produce or compare an entire specialization chain as a
   semantic unit.
+- for `= 0` generalizations, `get_spec_size`, `get_spec_ptr`, and
+  `spec_index_cmp` still expose the technical zero coordinate. The current
+  dispatch path rejects actual use of that coordinate with a runtime diagnostic;
+  the user-facing special-function semantics still need a separate pass.
 - mixed wildcard handlers such as `(specific, general)` are not expanded across
   a matching subspace yet; use `Base.void` for the concrete zero coordinate, or
   use the all-general handler as the default for the whole table
@@ -273,5 +295,11 @@ Validation:
   of `Shape.color.rect` and recurrent `Shape.color.color.rect`
 - PPC aggregate-initializer coverage in `test/ppc.c` for compact positional,
   grouped specialization-body, and designated-field initialization styles
+- zero-disabled specialization coverage in `test/ppc.c` and `test/driver.sh`
+  for `const = 0`, rejected `Base` objects, rejected `Base.void`, rejected
+  tag-0 `create_spec`/`init_spec`, default handlers for non-zero
+  specializations, strict handlers, and runtime rejection of a technical zero
+  dispatch coordinate
 - manual out-of-range `get_spec_ptr` diagnostic check
 - `make test`
+- `make test-all`

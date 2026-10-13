@@ -11,6 +11,11 @@ Figure2 + { int number; struct Triangle trian; };
 
 struct WeekDay { int week_number; } case { void Monday; } const;
 
+struct NoVoidDay { int week_number; } case {
+  void Monday;
+  void Tuesday;
+} const = 0;
+
 struct Switch {} case { void on; };
 struct Switch + { void off; };
 
@@ -103,6 +108,13 @@ int WeekDayPairCode<struct WeekDay.Monday *a, struct WeekDay.void *b>() {
 int WeekDayPairCode<struct WeekDay.Monday *a, struct WeekDay.Monday *b>() {
   return 40 + a->week_number + b->week_number;
 }
+
+int NoVoidDayCode<struct NoVoidDay *d>() { return 100 + d->week_number; }
+int NoVoidDayCode<struct NoVoidDay.Monday *d>() { return d->week_number + 1; }
+
+int NoVoidDayStrict<struct NoVoidDay *d>() = 0;
+int NoVoidDayStrict<struct NoVoidDay.Monday *d>() { return d->week_number + 10; }
+int NoVoidDayStrict<struct NoVoidDay.Tuesday *d>() { return d->week_number + 20; }
 
 int FigureKind<struct Figure *f>() = 0;
 int FigureKind<struct Figure.void *f>() { return 10; }
@@ -475,6 +487,10 @@ int main() {
     struct WeekDay.Monday b={22};
     WeekDayPairCode<&a, &b>();
   }));
+  ASSERT(36, ({ struct NoVoidDay.Monday monday={35}; NoVoidDayCode<&monday>(); }));
+  ASSERT(125, ({ struct NoVoidDay.Tuesday tuesday={25}; NoVoidDayCode<&tuesday>(); }));
+  ASSERT(45, ({ struct NoVoidDay.Monday monday={35}; NoVoidDayStrict<&monday>(); }));
+  ASSERT(45, ({ struct NoVoidDay.Tuesday tuesday={25}; NoVoidDayStrict<&tuesday>(); }));
   ASSERT(1, ({
     struct Switch s;
     *(int *)&s=0;

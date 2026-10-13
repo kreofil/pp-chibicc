@@ -78,6 +78,7 @@ struct PpcFunc {
   Type *fnptr_ty;
   Obj *table_var;
   Obj *default_fn;
+  Obj *zero_fn;
   PpcHandler *handlers;
 };
 
@@ -226,6 +227,8 @@ static Node *ppc_get_spec_ptr_expr(Token *tok, Type *ty, Node *idx);
 static Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs);
 static Node *ppc_funcall_expr(Token **rest, Token *tok);
 static Token *parse_typedef(Token *tok, Type *basety);
+static void ppc_reject_zero_spec_object(Token *tok, Type *ty, char *what);
+static void ppc_reject_zero_spec_func_type(Token *tok, Type *ty, char *what);
 static bool is_ppc_function(Token *tok);
 static Token *ppc_function(Token *tok, Type *basety, VarAttr *attr);
 static bool is_function(Token *tok);
@@ -932,6 +935,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       error_tok(tok, "variable declared void");
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
+    ppc_reject_zero_spec_object(ty->name, ty, "variable");
 
     if (attr && attr->is_static) {
       // static local variable
@@ -2791,6 +2795,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       Member *mem = calloc(1, sizeof(Member));
       mem->ty = basety;
       mem->tok = tok;
+      ppc_reject_zero_spec_object(tok, mem->ty, "struct member");
       mem->idx = idx++;
       mem->align = attr.align ? attr.align : mem->ty->align;
       cur = cur->next = mem;
@@ -2807,6 +2812,8 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       mem->tok = tok;
       mem->ty = declarator(&tok, tok, basety);
       mem->name = mem->ty->name;
+      ppc_reject_zero_spec_object(mem->name ? mem->name : mem->tok, mem->ty,
+                                  "struct member");
       mem->idx = idx++;
       mem->align = attr.align ? attr.align : mem->ty->align;
 
@@ -2850,6 +2857,8 @@ static void ppc_spec_members(Token **rest, Token *tok, Type *ty) {
       mem->tok = tok;
       mem->ty = declarator(&tok, tok, basety);
       mem->name = mem->ty->name;
+      ppc_reject_zero_spec_object(mem->name ? mem->name : mem->tok, mem->ty,
+                                  "PPC specialization member");
       mem->idx = idx++;
       mem->align = attr.align ? attr.align : mem->ty->align;
 
@@ -3001,6 +3010,9 @@ static Type *try_ppc_nested_specialization_type(Type *outer, Token *name);
 static Type *try_ppc_member_specialization_type(Type *ty, Token *name);
 
 static Type *ppc_void_specialization_type(Type *base, Token *name) {
+  if (base->is_ppc_zero_spec_disabled)
+    error_tok(name, "PPC zero specialization is disabled");
+
   if (base->ppc_void_ty)
     return base->ppc_void_ty;
 
@@ -3343,6 +3355,13 @@ static Type *struct_decl(Token **rest, Token *tok) {
 
     if (consume(&tok, tok, "const"))
       ty->is_ppc_const_generalization = true;
+
+    if (consume(&tok, tok, "=")) {
+      if (tok->kind != TK_NUM || tok->val != 0)
+        error_tok(tok, "expected 0");
+      ty->is_ppc_zero_spec_disabled = true;
+      tok = tok->next;
+    }
   }
 
   *rest = tok;
@@ -3843,6 +3862,7 @@ static void create_param_lvars(Type *param) {
     create_param_lvars(param->next);
     if (!param->name)
       error_tok(param->name_pos, "parameter name omitted");
+    ppc_reject_zero_spec_object(param->name, param, "parameter");
     new_lvar(get_ident(param->name), param);
   }
 }
@@ -3881,6 +3901,32 @@ static Obj *find_func(char *name) {
 
 static bool is_incomplete_struct(Type *ty) {
   return ty->kind == TY_STRUCT && ty->size < 0;
+}
+
+static Type *ppc_zero_spec_object_base(Type *ty) {
+  while (ty->kind == TY_ARRAY)
+    ty = ty->base;
+
+  if (ty->kind == TY_STRUCT && ty->is_ppc_generalization &&
+      ty->is_ppc_zero_spec_disabled)
+    return ty;
+  return NULL;
+}
+
+static void ppc_reject_zero_spec_object(Token *tok, Type *ty, char *what) {
+  Type *base = ppc_zero_spec_object_base(ty);
+  if (base)
+    error_tok(tok, "%s cannot use a PPC generalization with disabled zero specialization",
+              what);
+}
+
+static void ppc_reject_zero_spec_func_type(Token *tok, Type *ty, char *what) {
+  if (ty->kind != TY_FUNC)
+    return;
+
+  ppc_reject_zero_spec_object(tok, ty->return_ty, what);
+  for (Type *param = ty->params; param; param = param->next)
+    ppc_reject_zero_spec_object(param->name ? param->name : tok, param, what);
 }
 
 static Type *assume_external_ppc_generalization(Type *ty, Token *tok) {
@@ -4225,6 +4271,7 @@ static Node *ppc_create_spec_expr(Token *tok, Type *ty) {
     error_tok(tok, "create_spec is not allowed outside a function");
 
   ppc_object_family_base_ty(tok, ty, "create_spec");
+  ppc_reject_zero_spec_object(tok, ty, "create_spec");
 
   if (!ppc_type_has_tag(ty, false))
     error_tok(tok, "PPC type has no specialization tag");
@@ -4259,6 +4306,7 @@ static Node *ppc_init_spec_expr(Token *tok, Type *ty, Node *ptr) {
     error_tok(tok, "init_spec is not allowed outside a function");
 
   Type *base = ppc_object_family_base_ty(tok, ty, "init_spec");
+  ppc_reject_zero_spec_object(tok, ty, "init_spec");
 
   add_type(ptr);
   if (ptr->ty->kind != TY_PTR)
@@ -4472,6 +4520,49 @@ static Obj *ppc_default_handler(PpcFunc *ppc_fn, Token *tok) {
   return fn;
 }
 
+static Obj *ppc_zero_handler(PpcFunc *ppc_fn, Token *tok) {
+  if (ppc_fn->zero_fn)
+    return ppc_fn->zero_fn;
+
+  Obj *fn = new_generated_func(format("__ppc_%s_zero_disabled", ppc_fn->name),
+                               ppc_generic_func_type(ppc_fn), 0);
+  fn->is_static = true;
+  fn->init_priority = 0;
+
+  Obj *locals = NULL;
+  Obj **params = calloc(ppc_fn->ppc_param_count, sizeof(Obj *));
+  for (int i = ppc_fn->ppc_param_count - 1; i >= 0; i--)
+    params[i] = new_generated_lvar(&locals, pointer_to(ppc_fn->base_tys[i]));
+  fn->params = locals;
+  fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
+
+  char *fmt = format("PPC dispatch error: zero specialization is disabled for %s<",
+                     ppc_fn->name);
+  for (int i = 0; i < ppc_fn->ppc_param_count; i++)
+    fmt = format("%s%s%%d", fmt, i ? ", " : "");
+  fmt = format("%s>()\n", fmt);
+
+  Obj *fmt_var = new_string_literal(fmt, array_of(ty_char, strlen(fmt) + 1));
+
+  Node head = {};
+  Node *cur = &head;
+  cur = cur->next = new_num(2, tok);
+  cur = cur->next = new_cast(new_var_node(fmt_var, tok), pointer_to(ty_char));
+  for (int i = 0; i < ppc_fn->ppc_param_count; i++)
+    cur = cur->next = ppc_tag_expr(params[i], ppc_fn->base_tys[i], tok);
+
+  Node *print = new_expr_stmt_node(new_func_call_node(get_dprintf_func(), head.next, tok), tok);
+  Node *abort = new_expr_stmt_node(new_func_call_node(get_abort_func(), NULL, tok), tok);
+  print->next = abort;
+
+  fn->body = new_block_node(print, tok);
+  fn->locals = locals;
+  add_type(fn->body);
+
+  ppc_fn->zero_fn = fn;
+  return fn;
+}
+
 static Node *ppc_table_slot(Obj *table, Node *idx, Token *tok) {
   return new_unary(ND_DEREF, new_add(new_var_node(table, tok), idx, tok), tok);
 }
@@ -4490,6 +4581,13 @@ static Node *ppc_table_size_expr(PpcFunc *ppc_fn, Token *tok) {
   for (int i = 0; i < ppc_fn->ppc_param_count; i++)
     size = new_binary(ND_MUL, size, ppc_extent_expr(ppc_fn->base_tys[i], tok), tok);
   return size;
+}
+
+static bool ppc_has_zero_disabled_axis(PpcFunc *ppc_fn) {
+  for (int i = 0; i < ppc_fn->ppc_param_count; i++)
+    if (ppc_fn->base_tys[i]->is_ppc_zero_spec_disabled)
+      return true;
+  return false;
 }
 
 static bool ppc_has_concrete_default_handler(PpcFunc *ppc_fn) {
@@ -4517,6 +4615,31 @@ static Node *ppc_mixed_index_expr(PpcFunc *ppc_fn, Node **tags, Token *tok) {
     idx = new_add(idx, tags[i], tok);
   }
   return idx;
+}
+
+static Node *ppc_axis_stride_expr(PpcFunc *ppc_fn, int axis, Token *tok) {
+  Node *stride = new_num(1, tok);
+  for (int i = axis + 1; i < ppc_fn->ppc_param_count; i++)
+    stride = new_binary(ND_MUL, stride, ppc_extent_expr(ppc_fn->base_tys[i], tok), tok);
+  return stride;
+}
+
+static Node *ppc_zero_disabled_slot_expr(PpcFunc *ppc_fn, Obj *idx, Token *tok) {
+  Node *cond = NULL;
+
+  for (int i = 0; i < ppc_fn->ppc_param_count; i++) {
+    Type *base = ppc_fn->base_tys[i];
+    if (!base->is_ppc_zero_spec_disabled)
+      continue;
+
+    Node *coord = new_binary(ND_DIV, new_var_node(idx, tok),
+                             ppc_axis_stride_expr(ppc_fn, i, tok), tok);
+    coord = new_binary(ND_MOD, coord, ppc_extent_expr(base, tok), tok);
+    Node *is_zero = new_binary(ND_EQ, coord, new_num(0, tok), tok);
+    cond = cond ? new_binary(ND_LOGOR, cond, is_zero, tok) : is_zero;
+  }
+
+  return cond ? cond : new_num(0, tok);
 }
 
 static Node *ppc_handler_tag_expr(Type *param_ty, Token *tok) {
@@ -4723,6 +4846,50 @@ static void ppc_make_table_ctor(PpcFunc *ppc_fn) {
   add_type(fn->body);
 }
 
+static void ppc_make_zero_slots_ctor(PpcFunc *ppc_fn) {
+  if (!ppc_has_zero_disabled_axis(ppc_fn))
+    return;
+
+  static int id = 0;
+  Token *tok = ppc_fn->name_tok;
+  Type *fnptr_ty = pointer_to(ppc_generic_func_type(ppc_fn));
+  Obj *fn = new_generated_func(format("__ppc_ctor_341_zero_slots_%d", id++),
+                               func_type(ty_void), 341);
+
+  Obj *locals = NULL;
+  fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
+  Obj *i = new_generated_lvar(&locals, ty_long);
+
+  Node *init = new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(i, tok),
+                                             new_num(0, tok), tok),
+                                  tok);
+  Node *cond = new_binary(ND_LT, new_var_node(i, tok),
+                          new_cast(ppc_table_size_expr(ppc_fn, tok), ty_long),
+                          tok);
+  Node *inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
+                         new_add(new_var_node(i, tok), new_num(1, tok), tok), tok);
+
+  Node *slot = ppc_table_slot(ppc_fn->table_var, new_var_node(i, tok), tok);
+  Node *rhs = ppc_cast_fnptr(new_var_node(ppc_zero_handler(ppc_fn, tok), tok), fnptr_ty);
+  Node *set_zero = new_expr_stmt_node(new_binary(ND_ASSIGN, slot, rhs, tok), tok);
+
+  Node *if_node = new_node(ND_IF, tok);
+  if_node->cond = ppc_zero_disabled_slot_expr(ppc_fn, i, tok);
+  if_node->then = new_block_node(set_zero, tok);
+
+  Node *loop = new_node(ND_FOR, tok);
+  loop->init = init;
+  loop->cond = cond;
+  loop->inc = inc;
+  loop->then = new_block_node(if_node, tok);
+  loop->brk_label = new_unique_name();
+  loop->cont_label = new_unique_name();
+
+  fn->body = new_block_node(loop, tok);
+  fn->locals = locals;
+  add_type(fn->body);
+}
+
 static void ppc_make_exhaustive_check_ctor(PpcFunc *ppc_fn) {
   if (!ppc_needs_exhaustive_check(ppc_fn))
     return;
@@ -4853,6 +5020,7 @@ static void finalize_ppc_runtime(void) {
     ppc_make_table_dtor(fn);
     for (PpcHandler *handler = fn->handlers; handler; handler = handler->next)
       ppc_make_handler_ctor(fn, handler);
+    ppc_make_zero_slots_ctor(fn);
     ppc_make_exhaustive_check_ctor(fn);
   }
 }
@@ -4940,6 +5108,7 @@ static Token *ppc_function(Token *tok, Type *basety, VarAttr *attr) {
   if (!equal(tok, "("))
     error_tok(tok, "expected '(' after PPC parameter list");
   Type *ordinary_fn_ty = func_params(&tok, tok->next, basety);
+  ppc_reject_zero_spec_func_type(name, ordinary_fn_ty, "PPC function");
 
   int ppc_param_count = type_list_len(ppc_param_tys);
   if (!ppc_param_count)
@@ -5137,6 +5306,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   Type *ty = declarator(&tok, tok, basety);
   if (!ty->name)
     error_tok(ty->name_pos, "function name omitted");
+  ppc_reject_zero_spec_func_type(ty->name, ty, "function");
   char *name_str = get_ident(ty->name);
 
   Obj *fn = find_func(name_str);
@@ -5176,6 +5346,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     Type *ty = declarator(&tok, tok, basety);
     if (!ty->name)
       error_tok(ty->name_pos, "variable name omitted");
+    ppc_reject_zero_spec_object(ty->name, ty, "variable");
 
     Obj *var = new_gvar(get_ident(ty->name), ty);
     var->is_definition = !attr->is_extern;
