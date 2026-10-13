@@ -79,8 +79,8 @@ Implemented so far:
   tags in an already allocated PPC object or memory area
 - `init_spec(type-name[N], pointer)` for initializing all reachable hidden
   runtime tags in every element of an already allocated PPC array or memory area
-- `get_spec_size(generalization-type)` for reading the runtime number of PPC
-  dispatch coordinates, including coordinate 0 for the generalization itself
+- `get_spec_size(generalization-type)` for reading the runtime number of
+  user-visible PPC specialization indices
 - `get_spec_ptr(generalization-type, index)` for obtaining a stable tag-only
   pseudo pointer that can be passed as a PPC dispatch argument
 - `spec_index_cmp(pointer, pointer)` for comparing two PPC specialization
@@ -189,14 +189,19 @@ Current implementation strategy:
 - `init_spec(Shape.color.rect[2], ptr)` casts `ptr` to the corresponding
   element pointer type, initializes the tag chain in every fixed-size array
   element, and still accepts `void *` for arbitrary caller-provided memory.
-- `get_spec_size(struct Figure)` lowers to `__ppc_Figure_count + 1`.
+- `get_spec_size(struct Figure)` lowers to `__ppc_Figure_count + 1` for an
+  ordinary generalization and to `__ppc_Figure_count` for a `= 0`
+  generalization.
 - `get_spec_ptr(struct Figure, i)` stores `i` in a local temporary, checks that
-  `0 <= i < get_spec_size(struct Figure)`, and returns
-  `(struct Figure *)&__ppc_Figure_spec_ptr_tags[i]`. The returned pointer is a
-  tag-only pseudo object and must not be used for field access.
+  `0 <= i < get_spec_size(struct Figure)` for an ordinary generalization, or
+  `1 <= i <= get_spec_size(struct Figure)` for a `= 0` generalization, and
+  returns `(struct Figure *)&__ppc_Figure_spec_ptr_tags[i]`. The returned
+  pointer is a tag-only pseudo object and must not be used for field access.
 - `spec_index_cmp(a, b)` stores both operands in temporaries, reads their
   hidden tag fields, and returns the common tag value if they match, otherwise
-  `-1`. Both operands must point into the same PPC generalization family.
+  `-1`. Both operands must point into the same PPC generalization family. For a
+  `= 0` generalization, a zero tag in either operand is rejected at runtime
+  instead of being returned as a valid specialization index.
 - Table finalizers in `.fini_array.201` call `free()` for allocated dispatch
   tables and reset the common table pointer to zero. They are safe if several
   translation units emitted the same finalizer pattern.
@@ -237,10 +242,6 @@ Still limited:
 - `get_spec_ptr` and `spec_index_cmp` are still first-tag helper operations.
   They do not yet produce or compare an entire specialization chain as a
   semantic unit.
-- for `= 0` generalizations, `get_spec_size`, `get_spec_ptr`, and
-  `spec_index_cmp` still expose the technical zero coordinate. The current
-  dispatch path rejects actual use of that coordinate with a runtime diagnostic;
-  the user-facing special-function semantics still need a separate pass.
 - mixed wildcard handlers such as `(specific, general)` are not expanded across
   a matching subspace yet; use `Base.void` for the concrete zero coordinate, or
   use the all-general handler as the default for the whole table
@@ -282,11 +283,12 @@ Validation:
 - `init_spec` coverage for arbitrary memory passed as `void *`, including
   `Shape.color.rect` and recurrent `Shape.color.color.rect` chains
 - `get_spec_size` and `get_spec_ptr` coverage in `test/ppc.c` for ordinary,
-  typedef-based, enum-like, and bodyless PPC generalizations, including
-  tag-only dispatch for one-parameter functions and multimethods
+  typedef-based, enum-like, bodyless, and zero-disabled PPC generalizations,
+  including tag-only dispatch for one-parameter functions and multimethods
 - `spec_index_cmp` coverage in `test/ppc.c` for equal concrete
   specializations, different concrete specializations, tag-only pseudo
-  pointers, the zero coordinate, and bodyless specializations
+  pointers, the zero coordinate, bodyless specializations, and zero-disabled
+  concrete indices
 - specialization-chain variable coverage in `test/ppc.c` for
   `Shape.color.rect`, recurrent `Shape.color.color.rect`, nested field access,
   local tag initialization, and global/static constructor tag initialization
@@ -300,6 +302,9 @@ Validation:
   tag-0 `create_spec`/`init_spec`, default handlers for non-zero
   specializations, strict handlers, and runtime rejection of a technical zero
   dispatch coordinate
+- special-function boundary coverage in `test/driver.sh` for ordinary
+  `get_spec_ptr` lower/upper bounds, zero-disabled `get_spec_ptr` lower/upper
+  bounds, and zero-disabled `spec_index_cmp` on a forged tag-0 pointer
 - manual out-of-range `get_spec_ptr` diagnostic check
 - `make test`
 - `make test-all`

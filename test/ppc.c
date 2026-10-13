@@ -116,6 +116,10 @@ int NoVoidDayStrict<struct NoVoidDay *d>() = 0;
 int NoVoidDayStrict<struct NoVoidDay.Monday *d>() { return d->week_number + 10; }
 int NoVoidDayStrict<struct NoVoidDay.Tuesday *d>() { return d->week_number + 20; }
 
+int NoVoidDayTag<struct NoVoidDay *d>() = 0;
+int NoVoidDayTag<struct NoVoidDay.Monday *d>() { return 1; }
+int NoVoidDayTag<struct NoVoidDay.Tuesday *d>() { return 2; }
+
 int FigureKind<struct Figure *f>() = 0;
 int FigureKind<struct Figure.void *f>() { return 10; }
 int FigureKind<struct Figure.triangle *f>() { return 11; }
@@ -202,6 +206,7 @@ int main() {
   ASSERT(3, get_spec_size(struct Figure));
   ASSERT(3, get_spec_size(Figure2));
   ASSERT(2, get_spec_size(struct WeekDay));
+  ASSERT(2, get_spec_size(struct NoVoidDay));
   ASSERT(3, get_spec_size(struct Switch));
   ASSERT(4, get_spec_size(Shape));
   ASSERT(2, get_spec_size(ShapeColor));
@@ -211,6 +216,10 @@ int main() {
   ASSERT(10, FigureKind<get_spec_ptr(struct Figure, 0)>());
   ASSERT(11, FigureKind<get_spec_ptr(struct Figure, 1)>());
   ASSERT(12, FigureKind<get_spec_ptr(struct Figure, 2)>());
+  ASSERT(1, ({ struct NoVoidDay *d=get_spec_ptr(struct NoVoidDay, 1); *(int *)d; }));
+  ASSERT(2, ({ struct NoVoidDay *d=get_spec_ptr(struct NoVoidDay, 2); *(int *)d; }));
+  ASSERT(1, NoVoidDayTag<get_spec_ptr(struct NoVoidDay, 1)>());
+  ASSERT(2, NoVoidDayTag<get_spec_ptr(struct NoVoidDay, 2)>());
   ASSERT(112, ({
     struct Figure *a=get_spec_ptr(struct Figure, 1);
     struct Figure *b=get_spec_ptr(struct Figure, 2);
@@ -237,6 +246,8 @@ int main() {
   }));
   ASSERT(1, ({ struct Switch.on a; spec_index_cmp(&a, get_spec_ptr(struct Switch, 1)); }));
   ASSERT(-1, ({ struct Switch.on a; spec_index_cmp(&a, get_spec_ptr(struct Switch, 2)); }));
+  ASSERT(1, ({ struct NoVoidDay.Monday a; spec_index_cmp(&a, get_spec_ptr(struct NoVoidDay, 1)); }));
+  ASSERT(-1, ({ struct NoVoidDay.Monday a; spec_index_cmp(&a, get_spec_ptr(struct NoVoidDay, 2)); }));
   ASSERT(2, *(int *)&global_rect);
   ASSERT(1, *(int *)&global_triangle);
   ASSERT(11, global_triangle.color);

@@ -4351,7 +4351,8 @@ static Type *ppc_generalization_arg(Token *tok, Type *ty, char *name) {
 
 static Node *ppc_get_spec_size_expr(Token *tok, Type *ty) {
   Type *base = ppc_generalization_arg(tok, ty, "get_spec_size");
-  return ppc_extent_expr(base, tok);
+  return base->is_ppc_zero_spec_disabled ?
+    new_var_node(base->ppc_count_var, tok) : ppc_extent_expr(base, tok);
 }
 
 static Node *ppc_get_spec_ptr_expr(Token *tok, Type *ty, Node *idx) {
@@ -4368,9 +4369,13 @@ static Node *ppc_get_spec_ptr_expr(Token *tok, Type *ty, Node *idx) {
                                   new_cast(idx, ty_long), tok),
                        tok);
 
-  Node *lower = new_binary(ND_LT, new_var_node(idx_var, tok), new_num(0, tok), tok);
-  Node *upper = new_binary(ND_LE, ppc_get_spec_size_expr(tok, base),
-                           new_var_node(idx_var, tok), tok);
+  Node *size = base->is_ppc_zero_spec_disabled ?
+    new_var_node(base->ppc_count_var, tok) : ppc_extent_expr(base, tok);
+  Node *lower_bound = new_num(base->is_ppc_zero_spec_disabled ? 1 : 0, tok);
+  Node *lower = new_binary(ND_LT, new_var_node(idx_var, tok), lower_bound, tok);
+  Node *upper = base->is_ppc_zero_spec_disabled ?
+    new_binary(ND_LT, size, new_var_node(idx_var, tok), tok) :
+    new_binary(ND_LE, size, new_var_node(idx_var, tok), tok);
   Node *cond = new_binary(ND_LOGOR, lower, upper, tok);
 
   char *fmt =
@@ -4381,7 +4386,8 @@ static Node *ppc_get_spec_ptr_expr(Token *tok, Type *ty, Node *idx) {
   Node *args = new_num(2, tok);
   args->next = new_cast(new_var_node(fmt_var, tok), pointer_to(ty_char));
   args->next->next = new_var_node(idx_var, tok);
-  args->next->next->next = ppc_get_spec_size_expr(tok, base);
+  args->next->next->next = base->is_ppc_zero_spec_disabled ?
+    new_var_node(base->ppc_count_var, tok) : ppc_extent_expr(base, tok);
 
   Node *print = new_expr_stmt_node(new_func_call_node(get_dprintf_func(), args, tok), tok);
   Node *abort = new_expr_stmt_node(new_func_call_node(get_abort_func(), NULL, tok), tok);
@@ -4439,6 +4445,28 @@ static Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs) {
                                   ppc_tag_expr(rhs_ptr, base, tok), tok),
                        tok);
 
+  Node *zero_check = NULL;
+  if (base->is_ppc_zero_spec_disabled) {
+    char *fmt =
+      format("PPC spec_index_cmp error: zero specialization is disabled for %s\n",
+             ppc_type_name(base));
+    Obj *fmt_var = new_string_literal(fmt, array_of(ty_char, strlen(fmt) + 1));
+
+    Node *args = new_num(2, tok);
+    args->next = new_cast(new_var_node(fmt_var, tok), pointer_to(ty_char));
+
+    Node *print = new_expr_stmt_node(new_func_call_node(get_dprintf_func(), args, tok), tok);
+    Node *abort = new_expr_stmt_node(new_func_call_node(get_abort_func(), NULL, tok), tok);
+    print->next = abort;
+
+    Node *lhs_is_zero = new_binary(ND_EQ, new_var_node(lhs_idx, tok), new_num(0, tok), tok);
+    Node *rhs_is_zero = new_binary(ND_EQ, new_var_node(rhs_idx, tok), new_num(0, tok), tok);
+
+    zero_check = new_node(ND_IF, tok);
+    zero_check->cond = new_binary(ND_LOGOR, lhs_is_zero, rhs_is_zero, tok);
+    zero_check->then = new_block_node(print, tok);
+  }
+
   Node *ret = new_node(ND_COND, tok);
   ret->cond = new_binary(ND_EQ, new_var_node(lhs_idx, tok), new_var_node(rhs_idx, tok), tok);
   ret->then = new_var_node(lhs_idx, tok);
@@ -4448,7 +4476,12 @@ static Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs) {
   assign_lhs_ptr->next = assign_rhs_ptr;
   assign_rhs_ptr->next = assign_lhs_idx;
   assign_lhs_idx->next = assign_rhs_idx;
-  assign_rhs_idx->next = ret_stmt;
+  if (zero_check) {
+    assign_rhs_idx->next = zero_check;
+    zero_check->next = ret_stmt;
+  } else {
+    assign_rhs_idx->next = ret_stmt;
+  }
 
   Node *node = new_node(ND_STMT_EXPR, tok);
   node->body = assign_lhs_ptr;

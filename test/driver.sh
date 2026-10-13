@@ -291,11 +291,40 @@ int main() {
   return 0;
 }
 EOF
-expect_run_fail 'PPC rejects disabled zero dispatch coordinate' <<'EOF'
-typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
-int ClosedEnumCode<ClosedEnum *e>() { return 7; }
+expect_run_fail 'PPC rejects get_spec_ptr ordinary lower bound' <<'EOF'
+typedef struct OpenEnum { int n; } case { void one; } OpenEnum;
 int main() {
-  return ClosedEnumCode<get_spec_ptr(ClosedEnum, 0)>();
+  OpenEnum *e = get_spec_ptr(OpenEnum, -1);
+  return *(int *)e;
+}
+EOF
+expect_run_fail 'PPC rejects get_spec_ptr ordinary upper bound' <<'EOF'
+typedef struct OpenEnum { int n; } case { void one; } OpenEnum;
+int main() {
+  OpenEnum *e = get_spec_ptr(OpenEnum, 2);
+  return *(int *)e;
+}
+EOF
+expect_run_fail 'PPC rejects disabled zero get_spec_ptr lower bound' <<'EOF'
+typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+int main() {
+  ClosedEnum *e = get_spec_ptr(ClosedEnum, 0);
+  return *(int *)e;
+}
+EOF
+expect_run_fail 'PPC rejects disabled zero get_spec_ptr upper bound' <<'EOF'
+typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+int main() {
+  ClosedEnum *e = get_spec_ptr(ClosedEnum, 2);
+  return *(int *)e;
+}
+EOF
+expect_run_fail 'PPC rejects disabled zero spec_index_cmp coordinate' <<'EOF'
+typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+int main() {
+  int tag = 0;
+  ClosedEnum *e = (ClosedEnum *)&tag;
+  return spec_index_cmp(e, e);
 }
 EOF
 expect_run_fail 'PPC rejects incomplete const handler table' <<'EOF'
