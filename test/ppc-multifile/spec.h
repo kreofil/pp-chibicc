@@ -12,4 +12,7 @@ struct MFBase + { MFRect rect; };
 
 int MFValue<MFBase.rect *r>();
 
+MFPointer + { MFRect *rect; };
+int MFPointerValue<MFPointer.rect *r>();
+
 #endif

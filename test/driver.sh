@@ -113,6 +113,80 @@ expect_nullptr_fail 'nullptr rejects integer function result' <<'EOF'
 int f(void) { return nullptr; }
 EOF
 
+# Check the supplied pointer-list example and its complete output.
+$chibicc -Iinclude -o $tmp/pointer-list examples/pointer-list/main.c
+check 'PPC nullptr example build'
+$tmp/pointer-list > $tmp/pointer-list.txt
+check 'PPC nullptr example run'
+diff -u examples/pointer-list/expected.txt $tmp/pointer-list.txt
+check 'PPC nullptr example output'
+
+for body in 'int value;' 'int *a, b;' 'int *a[2];' 'int *a:1;' 'int *a(void);' \
+    'void none;' 'int;' 'default void *none;' '_Alignas(16) int *a;'; do
+    expect_fail "PPC nullptr rejects $body" <<EOF
+struct PointerBad {} nullptr { $body };
+EOF
+    expect_fail "PPC nullptr extension rejects $body" <<EOF
+typedef struct PointerBad {} nullptr {} PointerBad;
+PointerBad + { $body };
+EOF
+done
+
+for stmt in 'a = b;' 'a = p;' 'p = other;' 'a = other;' \
+    'struct PointerBad.a x = b;' 'struct PointerBad.a x = p;'; do
+    expect_fail "PPC nullptr rejects assignment $stmt" <<EOF
+struct PointerBad {} nullptr { int *a; int *b; };
+struct PointerOther {} nullptr { int *a; };
+int main(void) {
+  struct PointerBad.a a;
+  struct PointerBad.b b;
+  struct PointerBad p;
+  struct PointerOther other;
+  $stmt
+}
+EOF
+done
+
+expect_fail 'PPC nullptr rejects enum feature extension' <<'EOF'
+typedef struct PointerBad {} nullptr {} PointerBad;
+PointerBad + { one, two };
+EOF
+
+expect_fail 'PPC nullptr rejects const extension' <<'EOF'
+typedef struct PointerBad {} nullptr {} const PointerBad;
+PointerBad + { int *value; };
+EOF
+
+expect_fail 'PPC nullptr rejects duplicate specialization names' <<'EOF'
+typedef struct PointerBad {} nullptr { int *value; } PointerBad;
+PointerBad + { char *value; };
+EOF
+
+expect_fail 'PPC nullptr rejects common-field name collision' <<'EOF'
+struct PointerBad { int value; } nullptr { int *value; };
+EOF
+
+expect_fail 'PPC nullptr rejects changed common-member size' <<'EOF'
+typedef struct Inner {} case { long number; } Inner;
+typedef struct PointerBad { Inner inner; } nullptr { int *value; } PointerBad;
+int main(void) { PointerBad p; PointerBad.value.number q; p = q; }
+EOF
+
+expect_fail 'PPC nullptr rejects enum redeclaration' <<'EOF'
+struct PointerBad {} nullptr {};
+struct PointerBad enum { one };
+EOF
+
+expect_fail 'PPC nullptr rejects repeated nullptr declaration' <<'EOF'
+struct PointerBad {} nullptr {};
+struct PointerBad nullptr {};
+EOF
+
+expect_fail 'PPC nullptr rejects const extension through case redeclaration' <<'EOF'
+struct PointerBad {} nullptr {} const;
+struct PointerBad case { int *value; };
+EOF
+
 # -o
 rm -f $tmp/out
 ./chibicc -c -o $tmp/out $tmp/empty.c

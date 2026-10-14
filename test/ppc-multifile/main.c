@@ -3,6 +3,7 @@
 #include "spec2.h"
 
 int MFForwardUse(MFBase *x);
+int MFPointerForwardUse(MFPointer *x);
 
 int main(void) {
   MFBase.rect r;
@@ -18,6 +19,20 @@ int main(void) {
   ASSERT(123, MFUse((MFBase *)&t));
   ASSERT(47, MFForwardUse((MFBase *)&r));
   ASSERT(123, MFForwardUse((MFBase *)&t));
+
+  MFPointer.rect pr = {2, &r.rect};
+  MFPointer.trian pt = {3, &t.trian};
+  MFPointer values[3] = {pr, pt};
+  ASSERT(sizeof(MFPointer), sizeof(MFPointer.rect));
+  ASSERT(sizeof(MFPointer), sizeof(MFPointer.trian));
+  ASSERT(3, get_spec_size(MFPointer));
+  ASSERT(49, MFPointerUse(&values[0]));
+  ASSERT(126, MFPointerUse(&values[1]));
+  ASSERT(0, MFPointerUse(&values[2]));
+  ASSERT(49, MFPointerCopy(&values[2], &values[0]));
+  ASSERT(126, MFPointerCopy(&values[0], &values[1]));
+  ASSERT(126, MFPointerForwardUse(&values[0]));
+  ASSERT(49, MFPointerForwardUse(&values[2]));
   printf("OK\n");
   return 0;
 }

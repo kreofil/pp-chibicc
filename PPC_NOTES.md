@@ -1,4 +1,4 @@
-# PPC extension snapshot 23
+# PPC extension snapshot 24
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
@@ -20,6 +20,12 @@ Implemented so far:
 - `struct Name { ... } case { ... };`
 - `struct Name { ... } enum { a, b, c };` as ADT-like sugar for bodyless
   specializations
+- `struct Name { ... } nullptr { Type *a, *b; OtherType *c; };` for
+  pointer-only specialization lists, with optional `const` and pointer-only
+  `Name + { Type *d; };` extensions
+- pointer-list zero specializations (`Base` and `Base.void`) reserve a
+  `void *` payload, including for an initially empty `nullptr {}` list;
+  the zero payload is accessible as `.void`
 - closed generalizations with `struct Name { ... } case { ... } const;`
 - named default zero specializations with
   `struct Name { ... } case { default Type name; ... };`
@@ -109,7 +115,7 @@ Implemented so far:
   pseudo pointer that can be passed as a PPC dispatch argument
 - `spec_index_cmp(pointer, pointer)` for comparing two PPC specialization
   indices from the same generalization family
-- ADT-like enum generalizations allow assignment from any specialization in the
+- Enum and pointer-list generalizations allow assignment from any specialization in the
   same family to the zero specialization (`Base` or `Base.void`), because all
   generated alternatives have the same object layout
 
@@ -144,6 +150,23 @@ Current implementation strategy:
   list extension (`Name + { feature };`) does the same for an already enum-like
   generalization. If it is applied to a `case` generalization, all existing
   specializations must be bodyless; otherwise the extension is rejected.
+- A `nullptr { ... }` list requires an explicit pointer declarator for every
+  specialization, for example `Rectangle *rect, *box; Triangle *trian;`.
+  Non-pointer alternatives, array/function alternatives, bit-fields, and
+  pointer members with a different alignment are rejected. The list can be
+  empty and is extended only with pointer declarations.
+- Pointer-list layout is the hidden tag, common fields, and a single pointer
+  payload. The base/zero type stores `void *` in that payload; a concrete
+  specialization stores its declared pointer type at the same offset. Thus
+  every alternative, including zero, has the same size and alignment, even
+  when the common fields are packed or over-aligned.
+- Pointer-list specialization initialization uses the ordinary aggregate
+  initializer rules. With no common fields, `Figure.rect fr = &r;` and
+  `Figure f = nullptr;` initialize the single visible pointer payload. With
+  common fields, use positional or designated initializers such as
+  `{7, &r}` or `{.color=7, .rect=&r}`. Omitted fields in an initializer are
+  zero-initialized, so omitted elements of an initialized `Figure` array
+  select tag 0 with a null `void *` payload.
 - `Base.void` is a separate synthetic specialization type for PPC handler
   parameters when a `case` generalization has no named default specialization.
   It is not taken from the `case` list and denotes tag 0, i.e. the
@@ -152,13 +175,18 @@ Current implementation strategy:
   specialization is tag 0. The generalization object uses the default
   specialization layout, so direct objects can be initialized with the default
   payload, and `Base.name` is used for concrete tag-0 handlers.
-- Ordinary PPC aggregate assignment remains strict for non-enum generalizations.
+- Ordinary `case` aggregate assignment remains strict.
   For a named default specialization, `Base` and `Base.default_name` are treated
   as the same concrete zero specialization for aggregate assignment.
-  Enum-like generalizations add only the one-way polymorphic value assignment
+  Enum and pointer-list generalizations add the polymorphic value assignment
   `Base = Base.some` and `Base.void = Base.some`; concrete-to-concrete
   cross-specialization assignment and assignment from zero to a concrete
   specialization remain rejected.
+- Polymorphic value assignment copies the tag, common fields, and pointer
+  payload together; copying a zero-typed variable preserves its current
+  dynamic specialization. Pointer copies are shallow and retain the same
+  referenced object. The size and alignment must match, so a specialization
+  chain that enlarges a common member cannot be copied into a smaller base.
 - A `const` generalization has a closed specialization set. Later `+`
   extensions of such a generalization are rejected.
 - The hidden tag field is the first struct member. The generalization uses
@@ -353,5 +381,12 @@ Validation:
 - `nullptr` constraint diagnostics in `test/driver.sh` and PPC pointer
   initialization in `test/ppc.c`; rules follow WG14 N3096 sections 6.3.2.4,
   6.5.4, 6.5.9, 6.5.15 and 7.21.2
+- pointer-list coverage in `test/ppc.c`, `test/ppc-multifile`, and
+  `test/driver.sh` for empty/closed lists, comma-separated pointer declarations,
+  layout, static initialization, zero aliases, polymorphic copying, arrays,
+  multimethod dispatch, separate extensions, and rejected declarations or
+  assignments
+- the original pointer-list example in `examples/pointer-list/main.c`, built
+  and compared against `expected.txt` by the driver tests
 - `make test`
 - `make test-all`

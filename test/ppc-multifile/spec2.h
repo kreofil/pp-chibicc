@@ -13,4 +13,7 @@ struct MFBase + { MFTri trian; };
 
 int MFValue<MFBase.trian *t>();
 
+MFPointer + { MFTri *trian; };
+int MFPointerValue<MFPointer.trian *t>();
+
 #endif

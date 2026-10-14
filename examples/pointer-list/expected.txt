@@ -1,0 +1,10 @@
+Rectangle (3, 10)
+Rectangle (13, 10)
+Triangle (3, 4, 5)
+Triangle (30, 40, 50)
+Triangle (30, 40, 50)
+Rectangle (3, 10)
+Rectangle (13, 10)
+Triangle (3, 4, 5)
+Triangle (30, 40, 50)
+No figure

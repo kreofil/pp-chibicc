@@ -179,7 +179,165 @@ int FigurePairKind<struct Figure *a, struct Figure *b>() = 0;
 int FigurePairKind<struct Figure.void *a, struct Figure.rectangle *b>() { return 102; }
 int FigurePairKind<struct Figure.triangle *a, struct Figure.rectangle *b>() { return 112; }
 
+typedef struct PointerFigure { int color; } nullptr {
+  struct Rectangle *rect, *box;
+  struct Triangle *trian;
+} PointerFigure;
+PointerFigure + { int *number; void *raw; };
+
+typedef struct EmptyPointer {} nullptr {} EmptyPointer;
+EmptyPointer.void empty_pointer_before_extension;
+EmptyPointer + { char *text; };
+typedef struct ClosedPointer {} nullptr { int *value; } const ClosedPointer;
+typedef struct ClosedEmptyPointer {} nullptr {} const ClosedEmptyPointer;
+typedef struct __attribute__((packed)) PackedPointer { char c; } nullptr {
+  int *value;
+} PackedPointer;
+typedef struct AlignedPointer { _Alignas(32) char c; } nullptr {
+  int *value;
+} AlignedPointer;
+
+static struct Rectangle pointer_rectangle = {3, 10};
+static PointerFigure.rect global_pointer_rect = {2, &pointer_rectangle};
+static PointerFigure global_pointer_zero = {.color=7, .void=nullptr};
+static PointerFigure.rect global_null_pointer_rect = {5, nullptr};
+
+int PointerCode<PointerFigure *p>() { return -1; }
+int PointerCode<PointerFigure.void *p>() { return p->color; }
+int PointerCode<PointerFigure.rect *p>() {
+  return p->color + (p->rect ? p->rect->x + p->rect->y : 100);
+}
+int PointerCode<PointerFigure.box *p>() { return p->color + p->box->x; }
+int PointerCode<PointerFigure.trian *p>() {
+  return p->color + p->trian->a + p->trian->b + p->trian->c;
+}
+int PointerCode<PointerFigure.number *p>() { return p->color + *p->number; }
+int PointerPair<PointerFigure *a, PointerFigure *b>() { return -1; }
+int PointerPair<PointerFigure.rect *a, PointerFigure.trian *b>() {
+  return a->rect->x + b->trian->c;
+}
+
+static void test_pointer_generalizations(void) {
+  ASSERT(sizeof(PointerFigure), sizeof(PointerFigure.void));
+  ASSERT(sizeof(PointerFigure), sizeof(PointerFigure.rect));
+  ASSERT(sizeof(PointerFigure), sizeof(PointerFigure.trian));
+  ASSERT(sizeof(PointerFigure), sizeof(PointerFigure.raw));
+  ASSERT(_Alignof(PointerFigure), _Alignof(PointerFigure.trian));
+  ASSERT(sizeof(EmptyPointer), sizeof(EmptyPointer.text));
+  ASSERT(sizeof(EmptyPointer), sizeof(EmptyPointer.void));
+  ASSERT(16, sizeof(ClosedEmptyPointer));
+  ASSERT(sizeof(ClosedPointer), sizeof(ClosedPointer.value));
+  ASSERT(sizeof(PackedPointer), sizeof(PackedPointer.value));
+  ASSERT(sizeof(PackedPointer), sizeof(PackedPointer.void));
+  ASSERT(sizeof(AlignedPointer), sizeof(AlignedPointer.value));
+  ASSERT(_Alignof(AlignedPointer), _Alignof(AlignedPointer.value));
+  ASSERT(1, _Generic(global_pointer_zero.void, void *: 1, default: 0));
+  ASSERT(1, global_pointer_zero.void == nullptr);
+  ASSERT(1, empty_pointer_before_extension.void == nullptr);
+  ASSERT(15, PointerCode<&global_pointer_rect>());
+  ASSERT(7, PointerCode<&global_pointer_zero>());
+  ASSERT(105, PointerCode<&global_null_pointer_rect>());
+  ASSERT(6, get_spec_size(PointerFigure));
+  ASSERT(2, get_spec_size(EmptyPointer));
+  ASSERT(1, get_spec_size(ClosedEmptyPointer));
+
+  struct Rectangle r = {3, 10};
+  struct Triangle t = {3, 4, 5};
+  PointerFigure.rect rect = {2, &r};
+  PointerFigure.rect copy = rect;
+  PointerFigure.trian trian = {.color=4, .trian=&t};
+  PointerFigure.void zero = {9, nullptr};
+  PointerFigure p = rect;
+  ASSERT(15, PointerCode<&p>());
+  ASSERT(15, PointerCode<&copy>());
+  p = trian;
+  ASSERT(16, PointerCode<&p>());
+  ASSERT(8, (PointerPair<&rect, &p>()));
+  zero = p;
+  ASSERT(16, PointerCode<&zero>());
+  p = zero;
+  ASSERT(16, PointerCode<&p>());
+  PointerFigure empty = {9, nullptr};
+  zero = empty;
+  p = zero;
+  ASSERT(9, PointerCode<&p>());
+  ASSERT(1, p.void == nullptr);
+  ASSERT(0, spec_index_cmp(&p, get_spec_ptr(PointerFigure, 0)));
+  p = rect;
+  ASSERT(1, spec_index_cmp(&p, &rect));
+
+  PointerFigure values[4] = {rect, trian, p};
+  ASSERT(15, PointerCode<&values[0]>());
+  ASSERT(16, PointerCode<&values[1]>());
+  ASSERT(15, PointerCode<&values[2]>());
+  ASSERT(0, PointerCode<&values[3]>());
+  ASSERT(1, values[3].void == nullptr);
+  for (int i = 0; i < 3; i++) values[i + 1] = values[i];
+  ASSERT(15, PointerCode<&values[3]>());
+  values[0] = trian;
+  values[1] = empty;
+  ASSERT(16, PointerCode<&values[0]>());
+  ASSERT(9, PointerCode<&values[1]>());
+
+  struct { long before; PointerFigure value; long after; } guard = {17, {}, 29};
+  guard.value = trian;
+  ASSERT(17, guard.before);
+  ASSERT(29, guard.after);
+  ASSERT(16, PointerCode<&guard.value>());
+
+  int n = 42;
+  PointerFigure.number number = {1, &n};
+  p = number;
+  ASSERT(43, PointerCode<&p>());
+  PointerFigure.box box = {5, &r};
+  p = box;
+  ASSERT(8, PointerCode<&p>());
+  PointerFigure.raw raw = {6, &r};
+  p = raw;
+  ASSERT(1, p.void == &r);
+  ASSERT(-1, PointerCode<&p>());
+  p = rect;
+  r.x = 8;
+  ASSERT(20, PointerCode<&p>());
+  r.x = 3;
+  int count = 0;
+  int source_count = 0;
+  values[count++] = (source_count++, trian);
+  ASSERT(1, count);
+  ASSERT(1, source_count);
+  ASSERT(16, PointerCode<&values[0]>());
+  static PointerFigure.rect local_static = {3, &pointer_rectangle};
+  ASSERT(16, PointerCode<&local_static>());
+
+  EmptyPointer.text text = "hello";
+  EmptyPointer e = text;
+  ASSERT(1, spec_index_cmp(&e, &text));
+  ASSERT(1, e.void == text.text);
+  EmptyPointer nil = nullptr;
+  ASSERT(1, nil.void == nullptr);
+  EmptyPointer.text null_text = nullptr;
+  ASSERT(1, null_text.text == nullptr);
+  e = nil;
+  ASSERT(0, spec_index_cmp(&e, &nil));
+
+  PointerFigure *allocated = create_spec(PointerFigure);
+  ASSERT(1, allocated->void == nullptr);
+  *allocated = rect;
+  ASSERT(15, PointerCode<allocated>());
+  init_spec(PointerFigure.void, allocated);
+  ASSERT(2, PointerCode<allocated>());
+  PackedPointer.value packed = {'a', &n};
+  PackedPointer packed_base = packed;
+  ASSERT(1, packed_base.void == &n);
+  ASSERT('a', packed_base.c);
+  AlignedPointer.value aligned = {'b', &n};
+  AlignedPointer aligned_base = aligned;
+  ASSERT(1, aligned_base.void == &n);
+  ASSERT('b', aligned_base.c);
+}
+
 int main() {
+  test_pointer_generalizations();
   ASSERT(1, ({
     struct Figure *p = nullptr;
     struct Figure.rectangle *r = nullptr;

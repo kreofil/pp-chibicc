@@ -1091,7 +1091,8 @@ static void array_designator(Token **rest, Token *tok, Type *ty, int *begin, int
 static Member *struct_designator(Token **rest, Token *tok, Type *ty) {
   Token *start = tok;
   tok = skip(tok, ".");
-  if (tok->kind != TK_IDENT)
+  Member *zero = equal(tok, "void") ? get_struct_member(ty, tok) : NULL;
+  if (tok->kind != TK_IDENT && !(zero && zero->is_ppc_pointer_zero_member))
     error_tok(tok, "expected a field designator");
 
   for (Member *mem = ty->members; mem; mem = mem->next) {
@@ -2943,7 +2944,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
   ty->members = head.next;
 }
 
-static void ppc_spec_members(Token **rest, Token *tok, Type *ty) {
+static void ppc_spec_members(Token **rest, Token *tok, Type *ty, bool pointers_only) {
   Member head = {};
   Member *cur = &head;
   int idx = 0;
@@ -2953,11 +2954,16 @@ static void ppc_spec_members(Token **rest, Token *tok, Type *ty) {
     Type *basety = declspec(&tok, tok, &attr);
     bool first = true;
 
+    if (pointers_only && !equal(tok, "*"))
+      error_tok(tok, "PPC nullptr specialization requires a pointer declarator");
+
     while (!consume(&tok, tok, ";")) {
       if (!first)
         tok = skip(tok, ",");
       first = false;
 
+      if (pointers_only && !equal(tok, "*"))
+        error_tok(tok, "PPC nullptr specialization requires a pointer declarator");
       Member *mem = calloc(1, sizeof(Member));
       mem->tok = tok;
       mem->ty = declarator(&tok, tok, basety);
@@ -2969,6 +2975,10 @@ static void ppc_spec_members(Token **rest, Token *tok, Type *ty) {
         mem->is_bitfield = true;
         mem->bit_width = const_expr(&tok, tok);
       }
+
+      if (pointers_only && (mem->ty->kind != TY_PTR || mem->is_bitfield ||
+                            mem->align != mem->ty->align))
+        error_tok(mem->tok, "PPC nullptr specialization must be an ordinary pointer");
 
       cur = cur->next = mem;
     }
@@ -3034,6 +3044,8 @@ static bool ppc_specs_are_void(Member *specs) {
 }
 
 static void ppc_mark_enum_generalization(Type *base, Token *tok) {
+  if (base->is_ppc_pointer_generalization)
+    error_tok(tok, "PPC nullptr generalization cannot use enum specializations");
   if (base->ppc_default_spec)
     error_tok(tok, "PPC enum generalization cannot have a default specialization");
   if (!ppc_specs_are_void(base->ppc_specs))
@@ -3201,6 +3213,10 @@ static Type *ppc_void_specialization_type(Type *base, Token *name) {
     return base->ppc_void_ty;
 
   Type *ty = struct_type();
+  if (base->is_ppc_pointer_generalization) {
+    ty->is_packed = base->is_packed;
+    ty->align = base->align;
+  }
   ty->ppc_base = base;
   ty->ppc_spec_name = name;
   ty->ppc_name = ppc_named_coord(ppc_type_name(base), name);
@@ -3256,6 +3272,8 @@ static void append_ppc_default_spec(Type *base, Member *spec) {
 }
 
 static void append_ppc_specs(Type *base, Member *specs) {
+  if (specs && base->is_ppc_const_generalization)
+    error_tok(specs->tok, "cannot extend const PPC generalization");
   base->is_ppc_generalization = true;
   ensure_ppc_tag_member(base);
   ensure_ppc_count_var(base);
@@ -3273,6 +3291,11 @@ static void append_ppc_specs(Type *base, Member *specs) {
     if (!mem->name)
       error_tok(mem->tok, "PPC specialization name omitted");
 
+    if (base->is_ppc_pointer_generalization &&
+        (mem->ty->kind != TY_PTR || mem->is_bitfield ||
+         mem->align != mem->ty->align))
+      error_tok(mem->tok, "PPC nullptr generalization can only contain pointer specializations");
+
     if (get_struct_member(base, mem->name) || find_ppc_spec(base, mem->name))
       error_tok(mem->name, "duplicate PPC specialization name");
 
@@ -3285,6 +3308,30 @@ static void append_ppc_specs(Type *base, Member *specs) {
   }
 
   *tail = specs;
+}
+
+static void ppc_mark_pointer_generalization(Type *base, Token *tok) {
+  if (base->is_ppc_generalization)
+    error_tok(tok, "PPC nullptr generalization already declared; use + to extend it");
+  base->is_ppc_pointer_generalization = true;
+  ensure_ppc_tag_member(base);
+
+  // Reserve the same payload slot in the base/zero type as in every
+  // pointer specialization. `void` also remains its specialization name.
+  Token *name = calloc(1, sizeof(Token));
+  *name = *tok;
+  name->kind = TK_KEYWORD;
+  name->loc = "void";
+  name->len = 4;
+
+  Member *mem = calloc(1, sizeof(Member));
+  mem->tok = tok;
+  mem->name = name;
+  mem->ty = pointer_to(ty_void);
+  mem->align = mem->ty->align;
+  mem->is_ppc_pointer_zero_member = true;
+  *member_tail(&base->members) = mem;
+  renumber_members(base);
 }
 
 static Type *ppc_direct_specialization_type(Type *base, Token *name) {
@@ -3304,6 +3351,10 @@ static Type *ppc_direct_specialization_type(Type *base, Token *name) {
   bool is_default_spec = spec == base->ppc_default_spec;
 
   Type *ty = struct_type();
+  if (base->is_ppc_pointer_generalization) {
+    ty->is_packed = base->is_packed;
+    ty->align = base->align;
+  }
   ty->ppc_base = base;
   ty->ppc_spec_name = spec->name;
   ty->ppc_name = ppc_named_coord(ppc_type_name(base), spec->name);
@@ -3313,6 +3364,8 @@ static Type *ppc_direct_specialization_type(Type *base, Token *name) {
   int idx = 0;
 
   for (Member *mem = base->members; mem; mem = mem->next) {
+    if (mem->is_ppc_pointer_zero_member)
+      continue;
     if (mem->is_ppc_default_spec_member && !is_default_spec)
       continue;
 
@@ -3469,13 +3522,17 @@ static Token *ppc_extend_generalization(Token *tok, Type *base) {
   tok = skip(tok, "+");
   tok = skip(tok, "{");
 
-  if (base->is_ppc_enum_generalization || is_ppc_enum_extension_list(tok)) {
+  if (base->is_ppc_pointer_generalization) {
+    Type tmp = {};
+    ppc_spec_members(&tok, tok, &tmp, true);
+    append_ppc_specs(base, tmp.members);
+  } else if (base->is_ppc_enum_generalization || is_ppc_enum_extension_list(tok)) {
     if (!base->is_ppc_enum_generalization)
       ppc_mark_enum_generalization(base, tok);
     append_ppc_specs(base, ppc_enum_members(&tok, tok));
   } else {
     Type tmp = {};
-    ppc_spec_members(&tok, tok, &tmp);
+    ppc_spec_members(&tok, tok, &tmp, false);
     append_ppc_specs(base, tmp.members);
   }
   return tok;
@@ -3581,13 +3638,20 @@ static Type *struct_decl(Token **rest, Token *tok) {
       default_spec = ppc_default_spec_member(&tok, tok);
 
     Type tmp = {};
-    ppc_spec_members(&tok, tok, &tmp);
+    ppc_spec_members(&tok, tok, &tmp, false);
     append_ppc_default_spec(ty, default_spec);
     append_ppc_specs(ty, tmp.members);
   } else if (equal(tok, "enum")) {
     tok = skip(tok->next, "{");
     ppc_mark_enum_generalization(ty, tok);
     append_ppc_specs(ty, ppc_enum_members(&tok, tok));
+  } else if (equal(tok, "nullptr")) {
+    Token *start = tok;
+    tok = skip(tok->next, "{");
+    ppc_mark_pointer_generalization(ty, start);
+    Type tmp = {};
+    ppc_spec_members(&tok, tok, &tmp, true);
+    append_ppc_specs(ty, tmp.members);
   }
 
   if (ty->is_ppc_generalization) {
