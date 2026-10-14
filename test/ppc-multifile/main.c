@@ -5,6 +5,8 @@
 int MFForwardUse(MFBase *x);
 int MFPointerForwardUse(MFPointer *x);
 
+static MFEnum global_enum_features[2] = {MFMonday, MFThursday};
+
 int main(void) {
   MFBase.rect r;
   r.rect.x = 4;
@@ -33,6 +35,19 @@ int main(void) {
   ASSERT(126, MFPointerCopy(&values[0], &values[1]));
   ASSERT(126, MFPointerForwardUse(&values[0]));
   ASSERT(49, MFPointerForwardUse(&values[2]));
+
+  ASSERT(10, MFEnumValue<&global_enum_features[0]>());
+  ASSERT(20, MFEnumValue<&global_enum_features[1]>());
+  MFEnum e = MFMonday;
+  e.seed = 7;
+  ASSERT(17, MFEnumValue<&e>());
+  MFEnumSetThursday(&e);
+  ASSERT(27, MFEnumValue<&e>());
+  ASSERT(7, e.seed);
+  MFEnumSetMonday(&e);
+  ASSERT(17, MFEnumValue<&e>());
+  e = MFThursday;
+  ASSERT(27, MFEnumValue<&e>());
   printf("OK\n");
   return 0;
 }

@@ -16,4 +16,7 @@ int MFValue<MFBase.trian *t>();
 MFPointer + { MFTri *trian; };
 int MFPointerValue<MFPointer.trian *t>();
 
+MFEnum + { MFThursday };
+int MFEnumValue<MFEnum.MFThursday *x>();
+
 #endif

@@ -15,4 +15,7 @@ int MFValue<MFBase.rect *r>();
 MFPointer + { MFRect *rect; };
 int MFPointerValue<MFPointer.rect *r>();
 
+MFEnum + { MFMonday };
+int MFEnumValue<MFEnum.MFMonday *x>();
+
 #endif

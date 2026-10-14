@@ -1,4 +1,4 @@
-# PPC extension snapshot 24
+# PPC extension snapshot 25
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
@@ -20,6 +20,9 @@ Implemented so far:
 - `struct Name { ... } case { ... };`
 - `struct Name { ... } enum { a, b, c };` as ADT-like sugar for bodyless
   specializations
+- enum feature initialization and assignment into a zero-typed receiver:
+  `WeekDay wd = Monday;`, `WeekDay days[3] = {Sunday, Thursday, Friday};`,
+  `wd = Tuesday;`, and `days[2] = Monday;`
 - `struct Name { ... } nullptr { Type *a, *b; OtherType *c; };` for
   pointer-only specialization lists, with optional `const` and pointer-only
   `Name + { Type *d; };` extensions
@@ -187,6 +190,24 @@ Current implementation strategy:
   dynamic specialization. Pointer copies are shallow and retain the same
   referenced object. The size and alignment must match, so a specialization
   chain that enlarges a common member cannot be copied into a smaller base.
+- An enum feature assigned directly to `Base` or `Base.void` changes only
+  the runtime specialization tag and preserves all common data. The lvalue
+  is evaluated once, including in `days[i++] = Monday`. The assignment
+  expression has the receiver's aggregate type and value, so chaining and
+  ordinary copying of its result work as for other aggregate assignments.
+  Concrete specialization receivers are rejected, even if the feature name
+  matches their declared specialization.
+- Bare enum feature names are resolved against the receiver's enum family
+  in direct assignment/initialization contexts; they are not integer constants
+  in the ordinary C namespace. Different families can reuse the same feature
+  names. A visible ordinary C binding takes precedence and keeps its existing
+  meaning. Parenthesized features and single-feature braced initializers are
+  supported. This syntax does not apply to ordinary `case` or pointer lists.
+- Initializing an enum object from a feature initializes its common fields to
+  zero. Feature initializers work for automatic, global and local `static`
+  objects, arrays, nested aggregate members and automatic compound literals. Global and
+  static feature tags are initialized at startup from registered runtime tag
+  cells, including for specializations declared in other translation units.
 - A `const` generalization has a closed specialization set. Later `+`
   extensions of such a generalization are rejected.
 - The hidden tag field is the first struct member. The generalization uses
@@ -289,12 +310,16 @@ Current implementation strategy:
   `create_spec`, or specialization fields are used.
 - Global/static PPC variable constructors in `.init_array.401` initialize all
   runtime hidden tag fields reachable inside the variable after specialization
-  tags have been assigned.
+  tags have been assigned. Enum feature initializers retain their selected
+  feature for each initialized object or array element instead of resetting
+  those objects to the declared zero specialization.
 - PPC calls are lowered to a table lookup by reading the hidden first tag field;
   the previous `switch`-based prototype dispatch has been removed.
 
 Still limited:
 
+- enum feature initialization of thread-local storage is not supported;
+  such initializers are diagnosed
 - multimethod dispatch is implemented as a dense flat table; sparse-table
   compression is not implemented yet
 - chain-aware PPC function dispatch is not implemented yet; PPC calls still
@@ -388,5 +413,9 @@ Validation:
   assignments
 - the original pointer-list example in `examples/pointer-list/main.c`, built
   and compared against `expected.txt` by the driver tests
+- enum feature assignment coverage in `test/ppc.c`, `test/driver.sh` and
+  `test/ppc-multifile` for preserved common fields, zero aliases, array lvalues
+  with side effects, reused names, initialization and constructor ordering,
+  runtime tag registration across translation units, and rejected receivers
 - `make test`
 - `make test-all`

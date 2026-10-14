@@ -187,6 +187,43 @@ struct PointerBad {} nullptr {} const;
 struct PointerBad case { int *value; };
 EOF
 
+for stmt in 'Day.Monday d; d = Monday;' 'Day.Monday d; d = Tuesday;' \
+    'Day.Monday d = Monday;' 'Day.Monday d = {Monday};' \
+    'Day d; d = Unknown;' 'Day d; d = Wednesday;' \
+    'Day d; d += Monday;' 'int i = Monday;' \
+    'int Monday = 1; Day d; d = Monday;'; do
+    expect_fail "PPC enum feature rejects $stmt" <<EOF
+typedef struct Day { int week; } enum { Monday, Tuesday } Day;
+typedef struct OtherDay {} enum { Wednesday } OtherDay;
+int main(void) { $stmt }
+EOF
+done
+
+expect_fail 'PPC enum feature rejects concrete global initialization' <<'EOF'
+typedef struct Day {} enum { Monday, Tuesday } Day;
+Day.Monday d = Tuesday;
+EOF
+
+expect_fail 'PPC enum feature rejects ordinary case specialization names' <<'EOF'
+typedef struct Day {} case { void Monday; } Day;
+int main(void) { Day d; d = Monday; }
+EOF
+
+expect_fail 'PPC enum feature rejects pointer specialization names' <<'EOF'
+typedef struct Day {} nullptr { int *Monday; } Day;
+int main(void) { Day d; d = Monday; }
+EOF
+
+expect_fail 'PPC enum feature rejects thread-local initialization' <<'EOF'
+typedef struct Day {} enum { Monday } Day;
+_Thread_local Day d = Monday;
+EOF
+
+expect_fail 'PPC enum feature rejects static thread-local initialization' <<'EOF'
+typedef struct Day {} enum { Monday } Day;
+int main(void) { static _Thread_local Day d = Monday; }
+EOF
+
 # -o
 rm -f $tmp/out
 ./chibicc -c -o $tmp/out $tmp/empty.c

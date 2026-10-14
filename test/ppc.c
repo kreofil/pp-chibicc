@@ -336,7 +336,149 @@ static void test_pointer_generalizations(void) {
   ASSERT('b', aligned_base.c);
 }
 
+typedef struct FeatureDay { int week_number; } enum {
+  Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday
+} const FeatureDay;
+typedef struct FeatureState { long stamp; int data[3]; } enum {
+  Monday, Tuesday
+} FeatureState;
+
+static FeatureDay feature_global = Monday;
+static FeatureDay feature_globals[4] = {Sunday, Thursday, Friday};
+static FeatureDay feature_matrix[2][2] = {{Monday, Tuesday}, {Friday, Sunday}};
+static struct { int before; FeatureDay day; int after; } feature_wrapper =
+  {17, Tuesday, 29};
+static union { FeatureDay day; long other; } feature_union = {.day=Friday};
+static FeatureDay *feature_compound = &(FeatureDay){Saturday};
+
+int FeatureDayCode<FeatureDay *d>() = 0;
+int FeatureDayCode<FeatureDay.void *d>() { return 0; }
+int FeatureDayCode<FeatureDay.Monday *d>() { return 1; }
+int FeatureDayCode<FeatureDay.Tuesday *d>() { return 2; }
+int FeatureDayCode<FeatureDay.Wednesday *d>() { return 3; }
+int FeatureDayCode<FeatureDay.Thursday *d>() { return 4; }
+int FeatureDayCode<FeatureDay.Friday *d>() { return 5; }
+int FeatureDayCode<FeatureDay.Saturday *d>() { return 6; }
+int FeatureDayCode<FeatureDay.Sunday *d>() { return 7; }
+
+static FeatureDay *feature_address(FeatureDay *d, int *count) {
+  (*count)++;
+  return d;
+}
+
+static int feature_static_sequence(void) {
+  static FeatureDay d = Monday;
+  int old = FeatureDayCode<&d>();
+  d = Tuesday;
+  return old;
+}
+
+static void test_enum_feature_assignment(void) {
+  ASSERT(1, FeatureDayCode<&feature_global>());
+  ASSERT(0, feature_global.week_number);
+  ASSERT(7, FeatureDayCode<&feature_globals[0]>());
+  ASSERT(4, FeatureDayCode<&feature_globals[1]>());
+  ASSERT(5, FeatureDayCode<&feature_globals[2]>());
+  ASSERT(0, FeatureDayCode<&feature_globals[3]>());
+  ASSERT(2, FeatureDayCode<&feature_matrix[0][1]>());
+  ASSERT(7, FeatureDayCode<&feature_matrix[1][1]>());
+  ASSERT(2, FeatureDayCode<&feature_wrapper.day>());
+  ASSERT(17, feature_wrapper.before);
+  ASSERT(29, feature_wrapper.after);
+  ASSERT(5, FeatureDayCode<&feature_union.day>());
+  ASSERT(6, FeatureDayCode<feature_compound>());
+  feature_global.week_number = 88;
+  feature_global = Sunday;
+  ASSERT(7, FeatureDayCode<&feature_global>());
+  ASSERT(88, feature_global.week_number);
+  ASSERT(1, feature_static_sequence());
+  ASSERT(2, feature_static_sequence());
+
+  FeatureDay wd1 = Monday;
+  FeatureDay wd2[3] = {Sunday, Thursday, Friday};
+  ASSERT(1, FeatureDayCode<&wd1>());
+  ASSERT(0, wd1.week_number);
+  wd1.week_number = 42;
+  wd1 = Tuesday;
+  ASSERT(2, FeatureDayCode<&wd1>());
+  ASSERT(42, wd1.week_number);
+  wd2[2].week_number = 17;
+  wd2[2] = Monday;
+  ASSERT(1, FeatureDayCode<&wd2[2]>());
+  ASSERT(17, wd2[2].week_number);
+  ASSERT(7, FeatureDayCode<&wd2[0]>());
+  ASSERT(4, FeatureDayCode<&wd2[1]>());
+  FeatureDay.void zero = Sunday;
+  zero.week_number = 23;
+  zero = Friday;
+  ASSERT(5, FeatureDayCode<&zero>());
+  ASSERT(23, zero.week_number);
+  FeatureDay braced = {Wednesday,};
+  FeatureDay parenthesized = ((Thursday));
+  FeatureDay compound = (FeatureDay){Friday};
+  ASSERT(3, FeatureDayCode<&braced>());
+  ASSERT(4, FeatureDayCode<&parenthesized>());
+  ASSERT(5, FeatureDayCode<&compound>());
+  wd1 = (Sunday);
+  ASSERT(7, FeatureDayCode<&wd1>());
+  ASSERT(42, wd1.week_number);
+  FeatureDay designated[3] = {[2]=Tuesday};
+  ASSERT(0, FeatureDayCode<&designated[0]>());
+  ASSERT(2, FeatureDayCode<&designated[2]>());
+  static FeatureDay local_static = Saturday;
+  static FeatureDay static_array[2] = {Friday, Sunday};
+  ASSERT(6, FeatureDayCode<&local_static>());
+  ASSERT(5, FeatureDayCode<&static_array[0]>());
+  ASSERT(7, FeatureDayCode<&static_array[1]>());
+
+  int index = 0;
+  wd2[index++] = Wednesday;
+  ASSERT(1, index);
+  ASSERT(3, FeatureDayCode<&wd2[0]>());
+  int calls = 0;
+  *feature_address(&wd1, &calls) = Monday;
+  ASSERT(1, calls);
+  ASSERT(1, FeatureDayCode<&wd1>());
+  ASSERT(42, wd1.week_number);
+  FeatureDay copied = (wd1 = Tuesday);
+  ASSERT(2, FeatureDayCode<&copied>());
+  ASSERT(42, copied.week_number);
+  wd2[0] = wd1 = Friday;
+  ASSERT(5, FeatureDayCode<&wd2[0]>());
+  ASSERT(42, wd2[0].week_number);
+
+  FeatureState state = {.stamp=123456789, .data={7, 8, 9}};
+  FeatureState.Monday monday = {};
+  state = Monday;
+  ASSERT(1, spec_index_cmp(&state, &monday) >= 0);
+  ASSERT(123456789, state.stamp);
+  ASSERT(7, state.data[0]);
+  ASSERT(8, state.data[1]);
+  ASSERT(9, state.data[2]);
+  state = Tuesday;
+  ASSERT(123456789, state.stamp);
+  ASSERT(9, state.data[2]);
+  struct CaseKind converted = first;
+  converted.group = 67;
+  converted = second;
+  struct CaseKind.second second_value = {};
+  ASSERT(1, spec_index_cmp(&converted, &second_value) >= 0);
+  ASSERT(67, converted.group);
+
+  // An existing C binding takes precedence over a contextual feature name.
+  {
+    FeatureDay Monday = Sunday;
+    Monday.week_number = 73;
+    FeatureDay copy = Monday;
+    ASSERT(7, FeatureDayCode<&copy>());
+    ASSERT(73, copy.week_number);
+    copy = Monday;
+    ASSERT(73, copy.week_number);
+  }
+}
+
 int main() {
+  test_enum_feature_assignment();
   test_pointer_generalizations();
   ASSERT(1, ({
     struct Figure *p = nullptr;

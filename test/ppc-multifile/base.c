@@ -15,3 +15,5 @@ int MFPointerCopy(MFPointer *dst, MFPointer *src) {
   *dst = *src;
   return MFPointerUse(dst);
 }
+
+int MFEnumValue<MFEnum *x>() { return 0; }

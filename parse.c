@@ -103,6 +103,7 @@ struct Initializer {
   Type *ty;
   Token *tok;
   bool is_flexible;
+  Member *ppc_enum_feature;
 
   // If it's not an aggregate type and has an initializer,
   // `expr` has an initialization expression.
@@ -175,10 +176,15 @@ static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Mem
 static void initializer2(Token **rest, Token *tok, Initializer *init);
 static Initializer *initializer(Token **rest, Token *tok, Type *ty, Type **new_ty);
 static Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
-static void gvar_initializer(Token **rest, Token *tok, Obj *var);
+static Initializer *gvar_initializer(Token **rest, Token *tok, Obj *var);
 static Node *ppc_tag_value(Member *mem, Token *tok);
 static Node *ppc_tag_initializer(Obj *var, Token *tok);
-static void ppc_gvar_tag_initializer(Obj *var, Token *tok);
+static void ppc_gvar_tag_initializer(Obj *var, Initializer *init, Token *tok);
+static bool ppc_initializer_has_enum_feature(Initializer *init);
+static Member *ppc_read_enum_feature(Token **rest, Token *tok, Type *ty);
+static void ppc_check_enum_feature_target(Type *ty, Token *tok);
+static Node *ppc_enum_feature_assignment(Node *lhs, Member *feature, Token *tok);
+static Member *find_ppc_spec(Type *base, Token *name);
 static Node *compound_stmt(Token **rest, Token *tok);
 static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
@@ -948,9 +954,12 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       // static local variable
       Obj *var = new_anon_gvar(ty);
       push_scope(get_ident(ty->name))->var = var;
+      Initializer *init = NULL;
       if (equal(tok, "="))
-        gvar_initializer(&tok, tok->next, var);
-      ppc_gvar_tag_initializer(var, tok);
+        init = gvar_initializer(&tok, tok->next, var);
+      if (attr->is_tls && ppc_initializer_has_enum_feature(init))
+        error_tok(tok, "PPC enum feature initialization of thread-local storage is not supported");
+      ppc_gvar_tag_initializer(var, init, tok);
       continue;
     }
 
@@ -1346,6 +1355,19 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
   }
 
   if (init->ty->kind == TY_STRUCT) {
+    Token *end;
+    bool braced = equal(tok, "{");
+    Member *feature = ppc_read_enum_feature(&end, braced ? tok->next : tok, init->ty);
+    if (feature) {
+      if (braced && equal(end, ","))
+        end = end->next;
+      if (!braced || equal(end, "}")) {
+        ppc_check_enum_feature_target(init->ty, tok);
+        init->ppc_enum_feature = feature;
+        *rest = braced ? end->next : end;
+        return;
+      }
+    }
     if (equal(tok, "{")) {
       struct_initializer1(rest, tok, init);
       return;
@@ -1465,7 +1487,8 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
 
       if (mem->is_ppc_tag) {
         Node *lhs = init_desg_expr(&desg2, tok);
-        Node *rhs = ppc_tag_value(mem, tok);
+        Member *feature = init->ppc_enum_feature;
+        Node *rhs = ppc_tag_value(feature ? feature : mem, tok);
         node = new_binary(ND_COMMA, node, new_binary(ND_ASSIGN, lhs, rhs, tok), tok);
         continue;
       }
@@ -1548,6 +1571,65 @@ static Node *ppc_tag_value(Member *mem, Token *tok) {
   return new_num(0, tok);
 }
 
+static Type *ppc_enum_family(Type *ty) {
+  while (ty->origin)
+    ty = ty->origin;
+  Type *base = ty->ppc_base ? ty->ppc_base : ty;
+  return base->is_ppc_enum_generalization ? base : NULL;
+}
+
+// Feature names are contextual: they do not create integer constants or
+// interfere with visible ordinary C names. Parentheses preserve this sugar.
+static Member *ppc_read_enum_feature(Token **rest, Token *tok, Type *ty) {
+  Type *base = ppc_enum_family(ty);
+  if (!base)
+    return NULL;
+  if (equal(tok, "(")) {
+    Token *end;
+    Member *feature = ppc_read_enum_feature(&end, tok->next, ty);
+    if (feature && equal(end, ")")) {
+      *rest = end->next;
+      return feature;
+    }
+    return NULL;
+  }
+  if (tok->kind != TK_IDENT || find_var(tok))
+    return NULL;
+  Member *feature = find_ppc_spec(base, tok);
+  if (feature) {
+    *rest = tok->next;
+    return feature;
+  }
+  return NULL;
+}
+
+static void ppc_check_enum_feature_target(Type *ty, Token *tok) {
+  while (ty->origin)
+    ty = ty->origin;
+  Type *base = ppc_enum_family(ty);
+  Member *tag = ppc_tag_member(ty);
+  if (!base || ty->size != base->size || ty->align != base->align ||
+      (ty != base && (!tag || tag->ppc_index != 0)))
+    error_tok(tok, "PPC enum feature requires a zero-specialization target");
+}
+
+static Node *ppc_enum_feature_assignment(Node *lhs, Member *feature, Token *tok) {
+  ppc_check_enum_feature_target(lhs->ty, tok);
+  if (!current_fn)
+    error_tok(tok, "PPC enum feature assignment is not a constant initializer");
+
+  // Keep the address so array indices and other lvalue side effects run once.
+  Obj *ptr = new_lvar("", pointer_to(lhs->ty));
+  Node *save = new_binary(ND_ASSIGN, new_var_node(ptr, tok),
+                         new_unary(ND_ADDR, lhs, tok), tok);
+  Node *tag = new_unary(ND_MEMBER,
+                       new_unary(ND_DEREF, new_var_node(ptr, tok), tok), tok);
+  tag->member = ppc_tag_member(lhs->ty);
+  Node *set = new_binary(ND_ASSIGN, tag, ppc_tag_value(feature, tok), tok);
+  Node *value = new_unary(ND_DEREF, new_var_node(ptr, tok), tok);
+  return new_binary(ND_COMMA, save, new_binary(ND_COMMA, set, value, tok), tok);
+}
+
 static bool ppc_type_has_tag(Type *ty, bool runtime_only) {
   if (ty->kind == TY_ARRAY)
     return ppc_type_has_tag(ty->base, runtime_only);
@@ -1569,16 +1651,22 @@ static bool ppc_type_has_tag(Type *ty, bool runtime_only) {
   return false;
 }
 
-static Node *ppc_tag_initializer2(Type *ty, InitDesg *desg, Token *tok) {
+static Node *ppc_tag_initializer2(Type *ty, InitDesg *desg, Token *tok, Initializer *init) {
   Node *node = new_node(ND_NULL_EXPR, tok);
 
   if (ty->kind == TY_ARRAY) {
     for (int i = 0; i < ty->array_len; i++) {
       InitDesg desg2 = {desg, i};
-      Node *rhs = ppc_tag_initializer2(ty->base, &desg2, tok);
+      Node *rhs = ppc_tag_initializer2(ty->base, &desg2, tok, init ? init->children[i] : NULL);
       node = new_binary(ND_COMMA, node, rhs, tok);
     }
     return node;
+  }
+
+  if (ty->kind == TY_UNION && init && init->mem) {
+    Member *mem = init->mem;
+    InitDesg desg2 = {desg, 0, mem};
+    return ppc_tag_initializer2(mem->ty, &desg2, tok, init->children[mem->idx]);
   }
 
   if (ty->kind != TY_STRUCT)
@@ -1589,12 +1677,14 @@ static Node *ppc_tag_initializer2(Type *ty, InitDesg *desg, Token *tok) {
 
     if (mem->is_ppc_tag) {
       Node *lhs = init_desg_expr(&desg2, tok);
-      Node *rhs = ppc_tag_value(mem, tok);
+      Member *feature = init ? init->ppc_enum_feature : NULL;
+      Node *rhs = ppc_tag_value(feature ? feature : mem, tok);
       node = new_binary(ND_COMMA, node, new_binary(ND_ASSIGN, lhs, rhs, tok), tok);
       continue;
     }
 
-    Node *rhs = ppc_tag_initializer2(mem->ty, &desg2, tok);
+    Node *rhs = ppc_tag_initializer2(mem->ty, &desg2, tok,
+                                     init ? init->children[mem->idx] : NULL);
     node = new_binary(ND_COMMA, node, rhs, tok);
   }
 
@@ -1606,11 +1696,28 @@ static Node *ppc_tag_initializer(Obj *var, Token *tok) {
     return NULL;
 
   InitDesg var_desg = {NULL, 0, NULL, var};
-  return ppc_tag_initializer2(var->ty, &var_desg, tok);
+  return ppc_tag_initializer2(var->ty, &var_desg, tok, NULL);
 }
 
-static void ppc_gvar_tag_initializer(Obj *var, Token *tok) {
-  if (!ppc_type_has_tag(var->ty, true))
+static bool ppc_initializer_has_enum_feature(Initializer *init) {
+  if (!init)
+    return false;
+  if (init->ppc_enum_feature)
+    return true;
+  if (init->ty->kind == TY_ARRAY) {
+    for (int i = 0; i < init->ty->array_len; i++)
+      if (ppc_initializer_has_enum_feature(init->children[i]))
+        return true;
+  } else if (init->ty->kind == TY_STRUCT || init->ty->kind == TY_UNION) {
+    for (Member *mem = init->ty->members; mem; mem = mem->next)
+      if (ppc_initializer_has_enum_feature(init->children[mem->idx]))
+        return true;
+  }
+  return false;
+}
+
+static void ppc_gvar_tag_initializer(Obj *var, Initializer *init, Token *tok) {
+  if (!ppc_type_has_tag(var->ty, true) && !ppc_initializer_has_enum_feature(init))
     return;
 
   static int id = 0;
@@ -1621,7 +1728,7 @@ static void ppc_gvar_tag_initializer(Obj *var, Token *tok) {
   fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
 
   InitDesg var_desg = {NULL, 0, NULL, var};
-  Node *stmt = new_expr_stmt_node(ppc_tag_initializer2(var->ty, &var_desg, tok), tok);
+  Node *stmt = new_expr_stmt_node(ppc_tag_initializer2(var->ty, &var_desg, tok, init), tok);
 
   fn->body = new_block_node(stmt, tok);
   fn->locals = locals;
@@ -1728,14 +1835,17 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
 // embedded to .data section. This function serializes Initializer
 // objects to a flat byte array. It is a compile error if an
 // initializer list contains a non-constant expression.
-static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
+static Initializer *gvar_initializer(Token **rest, Token *tok, Obj *var) {
   Initializer *init = initializer(rest, tok, var->ty, &var->ty);
+  if (var->is_tls && ppc_initializer_has_enum_feature(init))
+    error_tok(tok, "PPC enum feature initialization of thread-local storage is not supported");
 
   Relocation head = {};
   char *buf = calloc(1, var->ty->size);
   write_gvar_data(&head, init, var->ty, buf, 0);
   var->init_data = buf;
   var->rel = head.next;
+  return init;
 }
 
 // Returns true if a given token represents a type.
@@ -2481,8 +2591,13 @@ static Node *to_assign(Node *binary) {
 static Node *assign(Token **rest, Token *tok) {
   Node *node = conditional(&tok, tok);
 
-  if (equal(tok, "="))
+  if (equal(tok, "=")) {
+    add_type(node);
+    Member *feature = ppc_read_enum_feature(rest, tok->next, node->ty);
+    if (feature)
+      return ppc_enum_feature_assignment(node, feature, tok);
     return new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+  }
 
   if (equal(tok, "+="))
     return to_assign(new_add(node, assign(rest, tok->next), tok));
@@ -3775,7 +3890,8 @@ static Node *postfix(Token **rest, Token *tok) {
 
     if (scope->next == NULL) {
       Obj *var = new_anon_gvar(ty);
-      gvar_initializer(rest, tok, var);
+      Initializer *init = gvar_initializer(rest, tok, var);
+      ppc_gvar_tag_initializer(var, init, tok);
       return new_var_node(var, start);
     }
 
@@ -4567,7 +4683,7 @@ static Node *ppc_create_spec_expr(Token *tok, Type *ty) {
                        tok);
 
   InitDesg ptr_desg = {NULL, 0, NULL, ptr, ty->kind != TY_ARRAY};
-  Node *assign_tags = new_expr_stmt_node(ppc_tag_initializer2(ty, &ptr_desg, tok), tok);
+  Node *assign_tags = new_expr_stmt_node(ppc_tag_initializer2(ty, &ptr_desg, tok, NULL), tok);
 
   Node *ret = new_expr_stmt_node(new_var_node(ptr, tok), tok);
   assign_ptr->next = assign_tags;
@@ -4605,7 +4721,7 @@ static Node *ppc_init_spec_expr(Token *tok, Type *ty, Node *ptr) {
                        tok);
 
   InitDesg ptr_desg = {NULL, 0, NULL, spec_ptr, ty->kind != TY_ARRAY};
-  Node *assign_tags = new_expr_stmt_node(ppc_tag_initializer2(ty, &ptr_desg, tok), tok);
+  Node *assign_tags = new_expr_stmt_node(ppc_tag_initializer2(ty, &ptr_desg, tok, NULL), tok);
   Node *zero = new_expr_stmt_node(new_num(0, tok), tok);
 
   assign_ptr->next = assign_tags;
@@ -5512,15 +5628,16 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     if (attr->align)
       var->align = attr->align;
 
+    Initializer *init = NULL;
     if (equal(tok, "="))
-      gvar_initializer(&tok, tok->next, var);
+      init = gvar_initializer(&tok, tok->next, var);
     else if (!attr->is_extern && !attr->is_tls) {
       if (!var->init_data)
         var->is_tentative = true;
     }
 
     if (!attr->is_extern && !attr->is_tls)
-      ppc_gvar_tag_initializer(var, tok);
+      ppc_gvar_tag_initializer(var, init, tok);
   }
   return tok;
 }

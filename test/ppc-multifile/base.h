@@ -11,4 +11,9 @@ int MFPointerValue<MFPointer *x>();
 int MFPointerUse(MFPointer *x);
 int MFPointerCopy(MFPointer *dst, MFPointer *src);
 
+typedef struct MFEnum { int seed; } enum {} MFEnum;
+int MFEnumValue<MFEnum *x>();
+void MFEnumSetMonday(MFEnum *x);
+void MFEnumSetThursday(MFEnum *x);
+
 #endif
