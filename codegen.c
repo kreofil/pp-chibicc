@@ -1100,7 +1100,8 @@ static void gen_expr(Node *node) {
 
   char *ax, *di, *dx;
 
-  if (node->lhs->ty->kind == TY_LONG || node->lhs->ty->base) {
+  if (node->lhs->ty->kind == TY_LONG || node->lhs->ty->kind == TY_NULLPTR ||
+      node->lhs->ty->base) {
     ax = "%rax";
     di = "%rdi";
     dx = "%rdx";

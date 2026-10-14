@@ -2,6 +2,7 @@
 
 Type *ty_void = &(Type){TY_VOID, 1, 1};
 Type *ty_bool = &(Type){TY_BOOL, 1, 1};
+Type *ty_nullptr = &(Type){TY_NULLPTR, 8, 8};
 
 Type *ty_char = &(Type){TY_CHAR, 1, 1};
 Type *ty_short = &(Type){TY_SHORT, 2, 2};
@@ -108,6 +109,7 @@ bool is_compatible(Type *t1, Type *t2) {
   case TY_FLOAT:
   case TY_DOUBLE:
   case TY_LDOUBLE:
+  case TY_NULLPTR:
     return true;
   case TY_PTR:
     return is_compatible(t1->base, t2->base);
@@ -247,7 +249,33 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
 //
 // This operation is called the "usual arithmetic conversion".
 static void usual_arith_conv(Node **lhs, Node **rhs) {
+  if ((*lhs)->ty->kind == TY_NULLPTR || (*rhs)->ty->kind == TY_NULLPTR)
+    error_tok((*lhs)->tok, "invalid nullptr_t operands");
   Type *ty = get_common_type((*lhs)->ty, (*rhs)->ty);
+  *lhs = new_cast(*lhs, ty);
+  *rhs = new_cast(*rhs, ty);
+}
+
+// Apply array/function decay when nullptr_t meets a pointer operand.
+static Type *decayed_pointer_type(Type *ty) {
+  if (ty->kind == TY_PTR)
+    return ty;
+  if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+    return pointer_to(ty->base);
+  if (ty->kind == TY_FUNC)
+    return pointer_to(ty);
+  return NULL;
+}
+
+static void nullptr_conversion(Node **lhs, Node **rhs, bool equality) {
+  Node *other = (*lhs)->ty->kind == TY_NULLPTR ? *rhs : *lhs;
+  Type *ty = decayed_pointer_type(other->ty);
+  if (!ty) {
+    if (other->ty->kind != TY_NULLPTR &&
+        !(equality && is_null_pointer_constant(other)))
+      error_tok(other->tok, "invalid nullptr_t operands");
+    ty = ty_nullptr;
+  }
   *lhs = new_cast(*lhs, ty);
   *rhs = new_cast(*rhs, ty);
 }
@@ -285,6 +313,8 @@ void add_type(Node *node) {
     node->ty = node->lhs->ty;
     return;
   case ND_NEG: {
+    if (node->lhs->ty->kind == TY_NULLPTR)
+      error_tok(node->tok, "invalid nullptr_t operand");
     Type *ty = get_common_type(ty_int, node->lhs->ty);
     node->lhs = new_cast(node->lhs, ty);
     node->ty = ty;
@@ -303,6 +333,12 @@ void add_type(Node *node) {
     return;
   case ND_EQ:
   case ND_NE:
+    if (node->lhs->ty->kind == TY_NULLPTR || node->rhs->ty->kind == TY_NULLPTR)
+      nullptr_conversion(&node->lhs, &node->rhs, true);
+    else
+      usual_arith_conv(&node->lhs, &node->rhs);
+    node->ty = ty_int;
+    return;
   case ND_LT:
   case ND_LE:
     usual_arith_conv(&node->lhs, &node->rhs);
@@ -319,6 +355,9 @@ void add_type(Node *node) {
   case ND_BITNOT:
   case ND_SHL:
   case ND_SHR:
+    if (node->lhs->ty->kind == TY_NULLPTR ||
+        (node->rhs && node->rhs->ty->kind == TY_NULLPTR))
+      error_tok(node->tok, "invalid nullptr_t operands");
     node->ty = node->lhs->ty;
     return;
   case ND_VAR:
@@ -326,6 +365,11 @@ void add_type(Node *node) {
     node->ty = node->var->ty;
     return;
   case ND_COND:
+    if (node->then->ty->kind == TY_NULLPTR || node->els->ty->kind == TY_NULLPTR) {
+      nullptr_conversion(&node->then, &node->els, false);
+      node->ty = node->then->ty;
+      return;
+    }
     if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
       node->ty = ty_void;
     } else if (is_aggregate(node->then->ty) || is_aggregate(node->els->ty)) {

@@ -180,6 +180,11 @@ int FigurePairKind<struct Figure.void *a, struct Figure.rectangle *b>() { return
 int FigurePairKind<struct Figure.triangle *a, struct Figure.rectangle *b>() { return 112; }
 
 int main() {
+  ASSERT(1, ({
+    struct Figure *p = nullptr;
+    struct Figure.rectangle *r = nullptr;
+    p == nullptr && r == nullptr;
+  }));
   ASSERT(20, ({ struct Figure.triangle t; sizeof(t); }));
   ASSERT(16, ({ struct Figure.rectangle r; sizeof(r); }));
   ASSERT(8, ({ struct WeekDay.Monday monday; sizeof(monday); }));

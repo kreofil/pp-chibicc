@@ -320,6 +320,14 @@ static Node *new_vla_ptr(Obj *var, Token *tok) {
 Node *new_cast(Node *expr, Type *ty) {
   add_type(expr);
 
+  if (ty->kind == TY_NULLPTR) {
+    if (expr->ty->kind != TY_NULLPTR && !is_null_pointer_constant(expr))
+      error_tok(expr->tok, "conversion to nullptr_t requires a null pointer constant");
+  } else if (expr->ty->kind == TY_NULLPTR && ty->kind != TY_VOID &&
+             ty->kind != TY_BOOL && ty->kind != TY_PTR) {
+    error_tok(expr->tok, "nullptr_t converts only to void, _Bool or a pointer");
+  }
+
   Node *node = calloc(1, sizeof(Node));
   node->kind = ND_CAST;
   node->tok = expr->tok;
@@ -720,6 +728,9 @@ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
   }
 
   Node *expr = conditional(&tok, tok);
+  add_type(expr);
+  if (expr->ty->kind == TY_NULLPTR)
+    error_tok(expr->tok, "array size must have integer type");
   tok = skip(tok, "]");
   ty = type_suffix(rest, tok, ty);
 
@@ -1363,12 +1374,20 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
   if (equal(tok, "{")) {
     // An initializer for a scalar variable can be surrounded by
     // braces. E.g. `int x = {3};`. Handle that case.
+    if (init->ty->kind == TY_NULLPTR && equal(tok->next, "}")) {
+      init->expr = new_cast(new_num(0, tok), ty_nullptr);
+      *rest = tok->next->next;
+      return;
+    }
     initializer2(&tok, tok->next, init);
     *rest = skip(tok, "}");
     return;
   }
 
   init->expr = assign(rest, tok);
+  add_type(init->expr);
+  if (init->ty->kind == TY_NULLPTR || init->expr->ty->kind == TY_NULLPTR)
+    init->expr = new_cast(init->expr, init->ty);
 }
 
 static Type *copy_struct_type(Type *ty) {
@@ -1807,6 +1826,9 @@ static Node *stmt(Token **rest, Token *tok) {
     Node *node = new_node(ND_SWITCH, tok);
     tok = skip(tok->next, "(");
     node->cond = expr(&tok, tok);
+    add_type(node->cond);
+    if (node->cond->ty->kind == TY_NULLPTR)
+      error_tok(node->cond->tok, "switch condition must have integer type");
     tok = skip(tok, ")");
 
     Node *sw = current_switch;
@@ -2129,7 +2151,11 @@ static int64_t eval2(Node *node, char ***label) {
   case ND_LOGOR:
     return eval(node->lhs) || eval(node->rhs);
   case ND_CAST: {
+    if (node->ty->kind == TY_BOOL && is_flonum(node->lhs->ty))
+      return eval_double(node->lhs) != 0;
     int64_t val = eval2(node->lhs, label);
+    if (node->ty->kind == TY_BOOL)
+      return val != 0;
     if (is_integer(node->ty)) {
       switch (node->ty->size) {
       case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
@@ -2218,8 +2244,83 @@ static bool is_const_expr(Node *node) {
   return false;
 }
 
+// This is deliberately narrower than is_const_expr: a folded pointer,
+// variable, or comma expression is not an integer null pointer constant.
+static bool is_integer_constant_expr(Node *node, bool unevaluated) {
+  if (!is_integer(node->ty))
+    return false;
+
+  switch (node->kind) {
+  case ND_NUM:
+    return true;
+  case ND_NEG:
+  case ND_NOT:
+  case ND_BITNOT:
+    return is_integer_constant_expr(node->lhs, unevaluated);
+  case ND_CAST:
+    return is_integer_constant_expr(node->lhs, unevaluated) ||
+           (node->lhs->kind == ND_NUM && is_flonum(node->lhs->ty));
+  case ND_COND: {
+    if (!is_integer_constant_expr(node->cond, unevaluated))
+      return false;
+    bool cond = !unevaluated && eval(node->cond);
+    return is_integer_constant_expr(node->then, unevaluated || !cond) &&
+           is_integer_constant_expr(node->els, unevaluated || cond);
+  }
+  case ND_LOGAND:
+  case ND_LOGOR: {
+    if (!is_integer_constant_expr(node->lhs, unevaluated))
+      return false;
+    bool skip = unevaluated || (node->kind == ND_LOGAND ?
+                               !eval(node->lhs) : eval(node->lhs));
+    return is_integer_constant_expr(node->rhs, skip);
+  }
+  case ND_ADD:
+  case ND_SUB:
+  case ND_MUL:
+  case ND_DIV:
+  case ND_MOD:
+  case ND_BITAND:
+  case ND_BITOR:
+  case ND_BITXOR:
+  case ND_SHL:
+  case ND_SHR:
+  case ND_EQ:
+  case ND_NE:
+  case ND_LT:
+  case ND_LE:
+    if (!is_integer_constant_expr(node->lhs, unevaluated) ||
+        !is_integer_constant_expr(node->rhs, unevaluated))
+      return false;
+    if (!unevaluated) {
+      if ((node->kind == ND_DIV || node->kind == ND_MOD) &&
+          (!eval(node->rhs) || (!node->ty->is_unsigned &&
+           eval(node->lhs) == INT64_MIN && eval(node->rhs) == -1)))
+        return false;
+      if ((node->kind == ND_SHL || node->kind == ND_SHR) &&
+          (eval(node->rhs) < 0 || eval(node->rhs) >= node->lhs->ty->size * 8))
+        return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+bool is_null_pointer_constant(Node *node) {
+  add_type(node);
+  if (node->kind == ND_NUM && node->ty->kind == TY_NULLPTR)
+    return true;
+  if (node->kind == ND_CAST && node->ty->kind == TY_PTR &&
+      node->ty->base->kind == TY_VOID)
+    return is_integer_constant_expr(node->lhs, false) && eval(node->lhs) == 0;
+  return is_integer_constant_expr(node, false) && eval(node) == 0;
+}
+
 int64_t const_expr(Token **rest, Token *tok) {
   Node *node = conditional(rest, tok);
+  add_type(node);
+  if (node->ty->kind == TY_NULLPTR)
+    error_tok(node->tok, "integer constant expression required");
   return eval(node);
 }
 
@@ -2585,6 +2686,9 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   add_type(lhs);
   add_type(rhs);
 
+  if (lhs->ty->kind == TY_NULLPTR || rhs->ty->kind == TY_NULLPTR)
+    error_tok(tok, "invalid nullptr_t operands");
+
   // num + num
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
     return new_binary(ND_ADD, lhs, rhs, tok);
@@ -2614,6 +2718,9 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
 static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   add_type(lhs);
   add_type(rhs);
+
+  if (lhs->ty->kind == TY_NULLPTR || rhs->ty->kind == TY_NULLPTR)
+    error_tok(tok, "invalid nullptr_t operands");
 
   // num - num
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
@@ -2721,8 +2828,13 @@ static Node *cast(Token **rest, Token *tok) {
 //       | "&&" ident
 //       | postfix
 static Node *unary(Token **rest, Token *tok) {
-  if (equal(tok, "+"))
-    return cast(rest, tok->next);
+  if (equal(tok, "+")) {
+    Node *node = cast(rest, tok->next);
+    add_type(node);
+    if (node->ty->kind == TY_NULLPTR)
+      error_tok(tok, "invalid nullptr_t operand");
+    return node;
+  }
 
   if (equal(tok, "-"))
     return new_unary(ND_NEG, cast(rest, tok->next), tok);
@@ -3773,6 +3885,13 @@ static Node *generic_selection(Token **rest, Token *tok) {
 static Node *primary(Token **rest, Token *tok) {
   Token *start = tok;
 
+  if (equal(tok, "nullptr")) {
+    Node *node = new_num(0, tok);
+    node->ty = ty_nullptr;
+    *rest = tok->next;
+    return node;
+  }
+
   if (equal(tok, "(") && equal(tok->next, "{")) {
     // This is a GNU statement expresssion.
     Node *node = new_node(ND_STMT_EXPR, tok);
@@ -3840,7 +3959,7 @@ static Node *primary(Token **rest, Token *tok) {
     Type *ty = typename(&tok, tok);
     *rest = skip(tok, ")");
 
-    if (is_integer(ty) || ty->kind == TY_PTR)
+    if (is_integer(ty) || ty->kind == TY_PTR || ty->kind == TY_NULLPTR)
       return new_num(0, start);
     if (is_flonum(ty))
       return new_num(1, start);

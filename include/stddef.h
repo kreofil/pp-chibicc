@@ -5,6 +5,7 @@
 
 typedef unsigned long size_t;
 typedef long ptrdiff_t;
+typedef typeof(nullptr) nullptr_t;
 typedef unsigned int wchar_t;
 typedef long max_align_t;
 

@@ -55,6 +55,64 @@ EOF
     check "$name"
 }
 
+# Every nullptr constraint violation must produce a diagnostic, not a crash.
+expect_nullptr_fail() {
+    name=$1
+    cat > $tmp/fail.c
+    $chibicc -Iinclude -c -o $tmp/fail.o $tmp/fail.c > /dev/null 2>$tmp/fail.err
+    [ $? -eq 1 ] && [ -s $tmp/fail.err ]
+    check "$name"
+}
+
+for expr in 'nullptr + 1' '1 + nullptr' 'nullptr - 1' '1 - nullptr' \
+    'p + nullptr' 'p - nullptr' 'nullptr * 2' 'nullptr / 2' 'nullptr % 2' \
+    'nullptr & 1' 'nullptr | 1' 'nullptr ^ 1' '+nullptr' '-nullptr' \
+    '~nullptr' 'nullptr << 1' '1 << nullptr' 'nullptr >> 1' '1 >> nullptr' \
+    'nullptr < p' 'p <= nullptr' 'nullptr > nullptr' 'nullptr >= nullptr' \
+    'nullptr == 1' '1 != nullptr' 'nullptr == i' 'nullptr != 0.0' \
+    '1 ? nullptr : 0' '1 ? 0 : nullptr' '1 ? nullptr : (void)0' \
+    '(int)nullptr' '(long)nullptr' '(double)nullptr' '(nullptr_t)1' \
+    '(nullptr_t)i' '(nullptr_t)p' '(nullptr_t)(int *)0' \
+    '(nullptr_t)(void *)(void *)0' '(nullptr_t)(0, 0)' \
+    '(nullptr_t)(_Bool)0.5' '(nullptr_t)(void *)nullptr' \
+    '(nullptr_t)(0 && i)' '(nullptr_t)(1 ? 0 : i)' \
+    '(nullptr_t)(1 / 0)' '(nullptr_t)(0 << -1)' \
+    '*nullptr' 'p[nullptr]' 'n++' '--n'; do
+    expect_nullptr_fail "nullptr rejects $expr" <<EOF
+#include <stddef.h>
+int main(void) { int i = 0; int *p = 0; nullptr_t n = nullptr; (void)($expr); }
+EOF
+done
+
+for decl in 'int x = nullptr;' 'double x = nullptr;' \
+    'nullptr_t x = 1;' 'int *p = 0; nullptr_t x = p;' \
+    'int i = 0; nullptr_t x = i;' 'int x[nullptr];' \
+    'enum { X = nullptr };'; do
+    expect_nullptr_fail "nullptr rejects global $decl" <<EOF
+#include <stddef.h>
+$decl
+EOF
+done
+
+for stmt in 'int i = nullptr;' 'int i = 0; i = nullptr;' \
+    'nullptr_t n = nullptr; n = 1;' 'nullptr_t n = nullptr; n += 0;' \
+    'switch (nullptr) { default: break; }' 'int a[nullptr];' \
+    'switch (0) { case nullptr: break; }' 'int nullptr;'; do
+    expect_nullptr_fail "nullptr rejects $stmt" <<EOF
+#include <stddef.h>
+int main(void) { $stmt }
+EOF
+done
+
+expect_nullptr_fail 'nullptr rejects integer function argument' <<'EOF'
+void f(int x);
+int main(void) { f(nullptr); }
+EOF
+
+expect_nullptr_fail 'nullptr rejects integer function result' <<'EOF'
+int f(void) { return nullptr; }
+EOF
+
 # -o
 rm -f $tmp/out
 ./chibicc -c -o $tmp/out $tmp/empty.c

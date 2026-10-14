@@ -294,6 +294,7 @@ struct Node {
 
 Node *new_cast(Node *expr, Type *ty);
 int64_t const_expr(Token **rest, Token *tok);
+bool is_null_pointer_constant(Node *node);
 Obj *parse(Token *tok);
 
 //
@@ -303,6 +304,7 @@ Obj *parse(Token *tok);
 typedef enum {
   TY_VOID,
   TY_BOOL,
+  TY_NULLPTR,
   TY_CHAR,
   TY_SHORT,
   TY_INT,
@@ -406,6 +408,7 @@ struct Member {
 
 extern Type *ty_void;
 extern Type *ty_bool;
+extern Type *ty_nullptr;
 
 extern Type *ty_char;
 extern Type *ty_short;

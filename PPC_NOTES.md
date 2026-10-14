@@ -1,10 +1,22 @@
-# PPC extension snapshot 22
+# PPC extension snapshot 23
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
 
 Implemented so far:
 
+- C23 `nullptr` and the distinct scalar type `nullptr_t`, declared by
+  `<stddef.h>` as `typeof(nullptr)`; this feature is available in the default
+  language mode without claiming support for all of C23
+- `nullptr_t` has the size, alignment, representation and calling convention
+  of a null `void *` on the x86-64 target; it can be stored, passed, returned,
+  selected with `_Generic`, and used in variadic calls
+- conversion from `nullptr_t` to object/function pointers, `_Bool` (false),
+  and `void`; conversion to `nullptr_t` from itself or a null pointer constant
+- equality with pointers, other `nullptr_t` values and integer null pointer
+  constants; conditional expressions with two `nullptr_t` operands or a
+  `nullptr_t` operand and a pointer; arithmetic, ordering and conversion to
+  numeric types other than `_Bool` are diagnosed
 - `struct Name { ... } case { ... };`
 - `struct Name { ... } enum { a, b, c };` as ADT-like sugar for bodyless
   specializations
@@ -335,5 +347,11 @@ Validation:
   `get_spec_ptr` lower/upper bounds and named-default `get_spec_ptr` upper
   bounds
 - manual out-of-range `get_spec_ptr` diagnostic check
+- `nullptr` runtime coverage in `test/nullptr.c` for its distinct type,
+  initialization, conversions, equality, conditional operands, side effects,
+  object/function pointers, and register/stack variadic arguments
+- `nullptr` constraint diagnostics in `test/driver.sh` and PPC pointer
+  initialization in `test/ppc.c`; rules follow WG14 N3096 sections 6.3.2.4,
+  6.5.4, 6.5.9, 6.5.15 and 7.21.2
 - `make test`
 - `make test-all`
