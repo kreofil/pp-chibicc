@@ -359,7 +359,7 @@ struct Type {
   bool is_ppc_generalization;
   bool is_ppc_enum_generalization;
   bool is_ppc_const_generalization;
-  bool is_ppc_zero_spec_disabled;
+  Member *ppc_default_spec;
   Member *ppc_specs;
   char *ppc_name;
   Obj *ppc_count_var;
@@ -390,6 +390,7 @@ struct Member {
 
   // Cached struct type for a PPC specialization member.
   Type *ppc_ty;
+  bool is_ppc_default_spec_member;
 
   // Hidden specialization-index field inserted at the beginning of
   // PPC generalizations and generated specialization types.

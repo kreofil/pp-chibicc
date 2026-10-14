@@ -12,14 +12,16 @@ Figure2 + { int number; struct Triangle trian; };
 struct WeekDay { int week_number; } case { void Monday; } const;
 
 struct NoVoidDay { int week_number; } case {
+  default void Unknown;
   void Monday;
   void Tuesday;
-} const = 0;
+} const;
 
 typedef struct InlineFigure {} case {
-  struct { int x, y; } rectangle, rhombus;
+  default struct { int x, y; } rectangle;
+  struct { int x, y; } rhombus;
   union { int number; double real; } scalar;
-} = 0 InlineFigure;
+} InlineFigure;
 InlineFigure + { struct { int a, b, c; } triangle; };
 
 struct Switch {} case { void on; };
@@ -141,10 +143,12 @@ int NoVoidDayCode<struct NoVoidDay *d>() { return 100 + d->week_number; }
 int NoVoidDayCode<struct NoVoidDay.Monday *d>() { return d->week_number + 1; }
 
 int NoVoidDayStrict<struct NoVoidDay *d>() = 0;
+int NoVoidDayStrict<struct NoVoidDay.Unknown *d>() { return d->week_number; }
 int NoVoidDayStrict<struct NoVoidDay.Monday *d>() { return d->week_number + 10; }
 int NoVoidDayStrict<struct NoVoidDay.Tuesday *d>() { return d->week_number + 20; }
 
 int NoVoidDayTag<struct NoVoidDay *d>() = 0;
+int NoVoidDayTag<struct NoVoidDay.Unknown *d>() { return 0; }
 int NoVoidDayTag<struct NoVoidDay.Monday *d>() { return 1; }
 int NoVoidDayTag<struct NoVoidDay.Tuesday *d>() { return 2; }
 
@@ -161,10 +165,10 @@ int InlineFigureCode<InlineFigure.triangle *t>() {
 }
 
 int InlineFigureTag<InlineFigure *f>() = 0;
-int InlineFigureTag<InlineFigure.rectangle *r>() { return 1; }
-int InlineFigureTag<InlineFigure.rhombus *r>() { return 2; }
-int InlineFigureTag<InlineFigure.scalar *s>() { return 3; }
-int InlineFigureTag<InlineFigure.triangle *t>() { return 4; }
+int InlineFigureTag<InlineFigure.rectangle *r>() { return 0; }
+int InlineFigureTag<InlineFigure.rhombus *r>() { return 1; }
+int InlineFigureTag<InlineFigure.scalar *s>() { return 2; }
+int InlineFigureTag<InlineFigure.triangle *t>() { return 3; }
 
 int FigureKind<struct Figure *f>() = 0;
 int FigureKind<struct Figure.void *f>() { return 10; }
@@ -180,6 +184,7 @@ int main() {
   ASSERT(16, ({ struct Figure.rectangle r; sizeof(r); }));
   ASSERT(8, ({ struct WeekDay.Monday monday; sizeof(monday); }));
   ASSERT(4, ({ struct Switch.on s; sizeof(s); }));
+  ASSERT(12, ({ InlineFigure f; sizeof(f); }));
   ASSERT(12, ({ InlineFigure.rectangle r; sizeof(r); }));
   ASSERT(12, ({ InlineFigure.rhombus r; sizeof(r); }));
   ASSERT(16, ({ InlineFigure.scalar s; sizeof(s); }));
@@ -190,6 +195,9 @@ int main() {
   ASSERT(8, ({ struct Figure.triangle t; t.color=7; t.triangle.a=1; t.color+t.triangle.a; }));
   ASSERT(7, ({ struct Figure.rectangle r; r.color=3; r.rectangle.x=4; r.color+r.rectangle.x; }));
   ASSERT(7, ({ InlineFigure.rectangle r={3, 4}; InlineFigureCode<&r>(); }));
+  ASSERT(7, ({ InlineFigure f={3, 4}; InlineFigureCode<&f>(); }));
+  ASSERT(7, ({ InlineFigure.rectangle r={3, 4}; InlineFigure f=r; InlineFigureCode<&f>(); }));
+  ASSERT(7, ({ InlineFigure f={3, 4}; InlineFigure.rectangle r=f; InlineFigureCode<&r>(); }));
   ASSERT(56, ({ InlineFigure.rhombus r={5, 6}; InlineFigureCode<&r>(); }));
   ASSERT(9, ({ InlineFigure.scalar s={.scalar={.number=9}}; InlineFigureCode<&s>(); }));
   ASSERT(24, ({ InlineFigure.triangle t={7, 8, 9}; InlineFigureCode<&t>(); }));
@@ -264,7 +272,7 @@ int main() {
   ASSERT(3, get_spec_size(struct Figure));
   ASSERT(3, get_spec_size(Figure2));
   ASSERT(2, get_spec_size(struct WeekDay));
-  ASSERT(2, get_spec_size(struct NoVoidDay));
+  ASSERT(3, get_spec_size(struct NoVoidDay));
   ASSERT(4, get_spec_size(InlineFigure));
   ASSERT(3, get_spec_size(struct Switch));
   ASSERT(5, get_spec_size(struct TokenKind));
@@ -278,14 +286,16 @@ int main() {
   ASSERT(10, FigureKind<get_spec_ptr(struct Figure, 0)>());
   ASSERT(11, FigureKind<get_spec_ptr(struct Figure, 1)>());
   ASSERT(12, FigureKind<get_spec_ptr(struct Figure, 2)>());
+  ASSERT(0, ({ struct NoVoidDay *d=get_spec_ptr(struct NoVoidDay, 0); *(int *)d; }));
   ASSERT(1, ({ struct NoVoidDay *d=get_spec_ptr(struct NoVoidDay, 1); *(int *)d; }));
   ASSERT(2, ({ struct NoVoidDay *d=get_spec_ptr(struct NoVoidDay, 2); *(int *)d; }));
+  ASSERT(0, NoVoidDayTag<get_spec_ptr(struct NoVoidDay, 0)>());
   ASSERT(1, NoVoidDayTag<get_spec_ptr(struct NoVoidDay, 1)>());
   ASSERT(2, NoVoidDayTag<get_spec_ptr(struct NoVoidDay, 2)>());
+  ASSERT(0, InlineFigureTag<get_spec_ptr(InlineFigure, 0)>());
   ASSERT(1, InlineFigureTag<get_spec_ptr(InlineFigure, 1)>());
   ASSERT(2, InlineFigureTag<get_spec_ptr(InlineFigure, 2)>());
   ASSERT(3, InlineFigureTag<get_spec_ptr(InlineFigure, 3)>());
-  ASSERT(4, InlineFigureTag<get_spec_ptr(InlineFigure, 4)>());
   ASSERT(112, ({
     struct Figure *a=get_spec_ptr(struct Figure, 1);
     struct Figure *b=get_spec_ptr(struct Figure, 2);
@@ -316,10 +326,11 @@ int main() {
   }));
   ASSERT(1, ({ struct Switch.on a; spec_index_cmp(&a, get_spec_ptr(struct Switch, 1)); }));
   ASSERT(-1, ({ struct Switch.on a; spec_index_cmp(&a, get_spec_ptr(struct Switch, 2)); }));
+  ASSERT(0, ({ struct NoVoidDay.Unknown a; spec_index_cmp(&a, get_spec_ptr(struct NoVoidDay, 0)); }));
   ASSERT(1, ({ struct NoVoidDay.Monday a; spec_index_cmp(&a, get_spec_ptr(struct NoVoidDay, 1)); }));
   ASSERT(-1, ({ struct NoVoidDay.Monday a; spec_index_cmp(&a, get_spec_ptr(struct NoVoidDay, 2)); }));
-  ASSERT(1, ({ InlineFigure.rectangle a; spec_index_cmp(&a, get_spec_ptr(InlineFigure, 1)); }));
-  ASSERT(-1, ({ InlineFigure.rectangle a; spec_index_cmp(&a, get_spec_ptr(InlineFigure, 2)); }));
+  ASSERT(0, ({ InlineFigure.rectangle a; spec_index_cmp(&a, get_spec_ptr(InlineFigure, 0)); }));
+  ASSERT(-1, ({ InlineFigure.rectangle a; spec_index_cmp(&a, get_spec_ptr(InlineFigure, 1)); }));
   ASSERT(2, *(int *)&global_rect);
   ASSERT(1, *(int *)&global_triangle);
   ASSERT(11, global_triangle.color);
@@ -562,6 +573,12 @@ int main() {
     n->number=12;
     n->number;
   }));
+  ASSERT(13, ({
+    InlineFigure *f=create_spec(InlineFigure);
+    f->rectangle.x=6;
+    f->rectangle.y=7;
+    InlineFigureCode<f>();
+  }));
   ASSERT(30, ({
     InlineFigure.triangle *t=create_spec(InlineFigure.triangle);
     t->triangle.a=9;
@@ -579,6 +596,7 @@ int main() {
   }));
   ASSERT(36, ({ struct NoVoidDay.Monday monday={35}; NoVoidDayCode<&monday>(); }));
   ASSERT(125, ({ struct NoVoidDay.Tuesday tuesday={25}; NoVoidDayCode<&tuesday>(); }));
+  ASSERT(35, ({ struct NoVoidDay.Unknown unknown={35}; NoVoidDayStrict<&unknown>(); }));
   ASSERT(45, ({ struct NoVoidDay.Monday monday={35}; NoVoidDayStrict<&monday>(); }));
   ASSERT(45, ({ struct NoVoidDay.Tuesday tuesday={25}; NoVoidDayStrict<&tuesday>(); }));
   ASSERT(1, ({

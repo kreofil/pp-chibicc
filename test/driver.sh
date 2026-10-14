@@ -300,38 +300,44 @@ struct ClosedTag {} case { void first; } const;
 struct ClosedTag + { void second; };
 int main() { return 0; }
 EOF
-expect_fail 'PPC rejects disabled zero generalization object' <<'EOF'
+expect_fail 'PPC rejects obsolete disabled zero syntax' <<'EOF'
 typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
-int main() {
-  ClosedEnum e;
-  return 0;
-}
-EOF
-expect_fail 'PPC rejects disabled zero specialization type' <<'EOF'
-typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
-int main() {
-  ClosedEnum.void e;
-  return 0;
-}
-EOF
-expect_fail 'PPC rejects disabled zero specialization handler' <<'EOF'
-typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
-int ClosedEnumCode<ClosedEnum *e>() { return e->n; }
-int ClosedEnumCode<ClosedEnum.void *e>() { return 0; }
 int main() { return 0; }
 EOF
-expect_fail 'PPC rejects create_spec for disabled zero specialization' <<'EOF'
-typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+expect_fail 'PPC rejects .void when default specialization is named' <<'EOF'
+typedef struct DefaultFigure {} case {
+  default struct { int x, y; } rect;
+  int number;
+} DefaultFigure;
 int main() {
-  ClosedEnum *e = create_spec(ClosedEnum);
+  DefaultFigure.void e;
   return 0;
 }
 EOF
-expect_fail 'PPC rejects init_spec for disabled zero specialization' <<'EOF'
-typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+expect_fail 'PPC rejects enum feature extension after default specialization' <<'EOF'
+typedef struct DefaultFigure {} case {
+  default void zero;
+  void one;
+} DefaultFigure;
+DefaultFigure + { two };
+int main() { return 0; }
+EOF
+expect_fail 'PPC rejects default specialization after ordinary case item' <<'EOF'
+typedef struct DefaultFigure {} case {
+  int number;
+  default int zero;
+} DefaultFigure;
+int main() { return 0; }
+EOF
+expect_fail 'PPC default generalization assignment remains strict for nonzero specialization' <<'EOF'
+typedef struct DefaultFigure {} case {
+  default struct { int x, y; } rect;
+  int number;
+} DefaultFigure;
 int main() {
-  char buf[sizeof(ClosedEnum.one)];
-  init_spec(ClosedEnum, buf);
+  DefaultFigure f;
+  DefaultFigure.number n;
+  f = n;
   return 0;
 }
 EOF
@@ -349,26 +355,14 @@ int main() {
   return *(int *)e;
 }
 EOF
-expect_run_fail 'PPC rejects disabled zero get_spec_ptr lower bound' <<'EOF'
-typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
+expect_run_fail 'PPC rejects default get_spec_ptr upper bound' <<'EOF'
+typedef struct DefaultEnum { int n; } case {
+  default void zero;
+  void one;
+} DefaultEnum;
 int main() {
-  ClosedEnum *e = get_spec_ptr(ClosedEnum, 0);
+  DefaultEnum *e = get_spec_ptr(DefaultEnum, 2);
   return *(int *)e;
-}
-EOF
-expect_run_fail 'PPC rejects disabled zero get_spec_ptr upper bound' <<'EOF'
-typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
-int main() {
-  ClosedEnum *e = get_spec_ptr(ClosedEnum, 2);
-  return *(int *)e;
-}
-EOF
-expect_run_fail 'PPC rejects disabled zero spec_index_cmp coordinate' <<'EOF'
-typedef struct ClosedEnum { int n; } case { void one; } = 0 ClosedEnum;
-int main() {
-  int tag = 0;
-  ClosedEnum *e = (ClosedEnum *)&tag;
-  return spec_index_cmp(e, e);
 }
 EOF
 expect_run_fail 'PPC rejects incomplete const handler table' <<'EOF'
@@ -376,7 +370,9 @@ typedef struct ClosedSwitch {} case { void on; void off; } const ClosedSwitch;
 int ClosedSwitchCode<ClosedSwitch *s>() = 0;
 int ClosedSwitchCode<ClosedSwitch.void *s>() { return 0; }
 int ClosedSwitchCode<ClosedSwitch.on *s>() { return 1; }
-int main() { return 0; }
+int main() {
+  return 0;
+}
 EOF
 expect_run_fail 'PPC rejects incomplete const multimethod table' <<'EOF'
 typedef struct ClosedBit {} case { void one; } const ClosedBit;

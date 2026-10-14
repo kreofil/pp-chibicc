@@ -140,15 +140,30 @@ static bool is_ppc_enum_value_assignment(Type *lhs, Type *rhs) {
   Type *base = ppc_family_base(lhs);
   if (!base || base != ppc_family_base(rhs))
     return false;
-  if (!base->is_ppc_enum_generalization || base->is_ppc_zero_spec_disabled)
+  if (!base->is_ppc_enum_generalization)
     return false;
 
   return is_ppc_zero_specialization(lhs, base) &&
          (rhs == base || rhs->ppc_base == base);
 }
 
+static bool is_ppc_named_zero_assignment(Type *lhs, Type *rhs) {
+  lhs = canonical_type(lhs);
+  rhs = canonical_type(rhs);
+
+  Type *base = ppc_family_base(lhs);
+  if (!base || base != ppc_family_base(rhs))
+    return false;
+  if (!base->ppc_default_spec || base->is_ppc_enum_generalization)
+    return false;
+
+  return is_ppc_zero_specialization(lhs, base) &&
+         is_ppc_zero_specialization(rhs, base);
+}
+
 bool is_assignable(Type *lhs, Type *rhs) {
-  return is_compatible(lhs, rhs) || is_ppc_enum_value_assignment(lhs, rhs);
+  return is_compatible(lhs, rhs) || is_ppc_enum_value_assignment(lhs, rhs) ||
+         is_ppc_named_zero_assignment(lhs, rhs);
 }
 
 Type *copy_type(Type *ty) {

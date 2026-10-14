@@ -1,4 +1,4 @@
-# PPC extension snapshot 21
+# PPC extension snapshot 22
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
@@ -9,8 +9,8 @@ Implemented so far:
 - `struct Name { ... } enum { a, b, c };` as ADT-like sugar for bodyless
   specializations
 - closed generalizations with `struct Name { ... } case { ... } const;`
-- zero-disabled generalizations with `struct Name { ... } case { ... } = 0;`
-  and `struct Name { ... } case { ... } const = 0;`
+- named default zero specializations with
+  `struct Name { ... } case { default Type name; ... };`
 - empty case lists, for example `struct Figure {} case {};`
 - decentralized extension with `struct Name + { ... };`
 - decentralized ADT-style extension with `struct Name + { a, b, c };` when the
@@ -26,6 +26,9 @@ Implemented so far:
   extension list, for example
   `case { struct { int x, y; } rectangle, rhombus; }` and
   `Name + { union { int i; double d; } scalar; };`
+- a `case` list may start with `default Type name;`; that named
+  specialization occupies tag/index 0 and replaces the synthetic `Base.void`
+  spelling for that generalization
 - field access through the specialization member, for example `t.triangle.a`
 - common-field access through the generated specialization type
 - a hidden first `int` field holding the runtime PPC specialization tag
@@ -130,25 +133,26 @@ Current implementation strategy:
   generalization. If it is applied to a `case` generalization, all existing
   specializations must be bodyless; otherwise the extension is rejected.
 - `Base.void` is a separate synthetic specialization type for PPC handler
-  parameters. It is not taken from the `case` list and always denotes tag 0,
-  i.e. the generalization object itself as a concrete dispatch-table coordinate.
+  parameters when a `case` generalization has no named default specialization.
+  It is not taken from the `case` list and denotes tag 0, i.e. the
+  generalization object itself as a concrete dispatch-table coordinate.
+- If a `case` generalization starts with `default Type name;`, the named
+  specialization is tag 0. The generalization object uses the default
+  specialization layout, so direct objects can be initialized with the default
+  payload, and `Base.name` is used for concrete tag-0 handlers.
 - Ordinary PPC aggregate assignment remains strict for non-enum generalizations.
+  For a named default specialization, `Base` and `Base.default_name` are treated
+  as the same concrete zero specialization for aggregate assignment.
   Enum-like generalizations add only the one-way polymorphic value assignment
   `Base = Base.some` and `Base.void = Base.some`; concrete-to-concrete
   cross-specialization assignment and assignment from zero to a concrete
   specialization remain rejected.
 - A `const` generalization has a closed specialization set. Later `+`
   extensions of such a generalization are rejected.
-- A generalization declared with `= 0` disables the source-level zero
-  specialization. Direct objects of that generalization type, arrays of such
-  objects, `Base.void`, `create_spec(Base)`, `init_spec(Base, ptr)`, and
-  ordinary function parameters or return values that would pass such objects by
-  value are rejected. Pointers to the generalization remain valid and can be
-  used for default PPC handlers.
 - The hidden tag field is the first struct member. The generalization uses
-  tag 0; concrete specializations receive tags 1..N at program startup. For
-  `= 0` generalizations, tag 0 remains a technical table coordinate but is not
-  a valid source-level specialization.
+  tag 0; concrete non-default specializations receive tags 1..N at program
+  startup. A named default specialization also uses tag 0 and does not need a
+  runtime tag cell.
 - Each generalization has a common runtime counter:
   `__ppc_<type>_count`.
 - Generalizations used with `get_spec_ptr` also have a common runtime
@@ -183,11 +187,6 @@ Current implementation strategy:
   the function has no concrete all-general default handler, the table
   constructor leaves cells empty and a later `.init_array.351` completeness
   checker aborts before `main` if any specialization tuple is still uncovered.
-- If any PPC parameter belongs to a `= 0` generalization, a
-  `.init_array.341` constructor overwrites all dispatch-table cells whose
-  coordinate is zero on that axis with a generated diagnostic handler. Dense
-  table sizes are not compressed; zero-coordinate slots remain present as
-  runtime error slots.
 - The diagnostic handler has the same generic PPC signature as the table entry.
   It prints the PPC function name and the actual runtime tag coordinates, for
   example `PPC dispatch error: uncovered handler for Missing<0, 1>()`, and then
@@ -195,9 +194,9 @@ Current implementation strategy:
 - `create_spec(struct Figure.rectangle)` lowers to an internal expression that
   allocates `sizeof(struct Figure.rectangle)` bytes with `calloc`, writes every
   reachable hidden tag field from the generated PPC type, and returns
-  `struct Figure.rectangle *`. Passing a generalization type or `Base.void`
-  creates a tag-0 object unless the generalization was declared with `= 0`, in
-  which case the compiler rejects the expression.
+  `struct Figure.rectangle *`. Passing a generalization type creates a tag-0
+  object. If the generalization has a named default specialization, the object
+  is allocated with the default specialization layout.
 - `create_spec(Shape.color.rect)` and recurrent forms such as
   `create_spec(Shape.color.color.rect)` use the same type-chain parser as
   variable declarations and initialize every tag in the allocated chain.
@@ -215,19 +214,15 @@ Current implementation strategy:
 - `init_spec(Shape.color.rect[2], ptr)` casts `ptr` to the corresponding
   element pointer type, initializes the tag chain in every fixed-size array
   element, and still accepts `void *` for arbitrary caller-provided memory.
-- `get_spec_size(struct Figure)` lowers to `__ppc_Figure_count + 1` for an
-  ordinary generalization and to `__ppc_Figure_count` for a `= 0`
-  generalization.
+- `get_spec_size(struct Figure)` lowers to `__ppc_Figure_count + 1`, so the
+  returned size always includes the zero coordinate.
 - `get_spec_ptr(struct Figure, i)` stores `i` in a local temporary, checks that
-  `0 <= i < get_spec_size(struct Figure)` for an ordinary generalization, or
-  `1 <= i <= get_spec_size(struct Figure)` for a `= 0` generalization, and
-  returns `(struct Figure *)&__ppc_Figure_spec_ptr_tags[i]`. The returned
-  pointer is a tag-only pseudo object and must not be used for field access.
+  `0 <= i < get_spec_size(struct Figure)`, and returns
+  `(struct Figure *)&__ppc_Figure_spec_ptr_tags[i]`. The returned pointer is a
+  tag-only pseudo object and must not be used for field access.
 - `spec_index_cmp(a, b)` stores both operands in temporaries, reads their
   hidden tag fields, and returns the common tag value if they match, otherwise
-  `-1`. Both operands must point into the same PPC generalization family. For a
-  `= 0` generalization, a zero tag in either operand is rejected at runtime
-  instead of being returned as a valid specialization index.
+  `-1`. Both operands must point into the same PPC generalization family.
 - Table finalizers in `.fini_array.201` call `free()` for allocated dispatch
   tables and reset the common table pointer to zero. They are safe if several
   translation units emitted the same finalizer pattern.
@@ -235,9 +230,8 @@ Current implementation strategy:
   `get_spec_ptr` and reset the common pointer to zero.
 - Handler constructors in `.init_array.301` write specialization handler
   pointers into the table by reading the runtime tag cell. A `Base.void`
-  handler contributes a literal zero coordinate. For a `= 0` generalization,
-  `Base.void` handlers are rejected and the later zero-slot constructor restores
-  the diagnostic handler for all zero-coordinate slots.
+  handler, or a named default-specialization handler, contributes a literal
+  zero coordinate.
 - PPC handler implementation symbols follow ordinary C linkage rules. A
   non-`static` handler definition such as `RunThread<ThreadData.Rect *r>()`
   emits an externally visible generated symbol, so constructors emitted from
@@ -269,8 +263,9 @@ Still limited:
   They do not yet produce or compare an entire specialization chain as a
   semantic unit.
 - mixed wildcard handlers such as `(specific, general)` are not expanded across
-  a matching subspace yet; use `Base.void` for the concrete zero coordinate, or
-  use the all-general handler as the default for the whole table
+  a matching subspace yet; use `Base.void` or the named default specialization
+  for the concrete zero coordinate, or use the all-general handler as the
+  default for the whole table
 - runtime symbols are still generated directly by the compiler prototype; the
   declaration/definition model should be made more explicit before treating
   this as a stable ABI
@@ -300,16 +295,17 @@ Validation:
   may use only `typedef struct Figure Figure;`; `container-out.c` can still
   declare and call `FigureOut<Figure *>` through stored pointers
 - manual uncovered abstract multimethod diagnostic check
-- `create_spec` coverage in `test/ppc.c` for a generalization, `Base.void`,
-  ordinary specializations, typedef-based specializations, bodyless
-  specializations, and recurrent specialization chains
-- `init_spec` coverage in `test/ppc.c` for a generalization, `Base.void`,
-  an ordinary specialization through a generalization pointer, and a bodyless
+- `create_spec` coverage in `test/ppc.c` for a generalization, a named default
+  specialization, `Base.void`, ordinary specializations, typedef-based
+  specializations, bodyless specializations, and recurrent specialization
+  chains
+- `init_spec` coverage in `test/ppc.c` for a generalization, `Base.void`, an
+  ordinary specialization through a generalization pointer, and a bodyless
   specialization
 - `init_spec` coverage for arbitrary memory passed as `void *`, including
   `Shape.color.rect` and recurrent `Shape.color.color.rect` chains
 - `get_spec_size` and `get_spec_ptr` coverage in `test/ppc.c` for ordinary,
-  typedef-based, enum-like, bodyless, and zero-disabled PPC generalizations,
+  typedef-based, enum-like, bodyless, and named-default PPC generalizations,
   including tag-only dispatch for one-parameter functions and multimethods
 - enum-ADT coverage in `test/ppc.c` and `test/driver.sh` for `enum { ... }`,
   feature-list extension, same-size alternatives, assignment into `Base` and
@@ -317,8 +313,8 @@ Validation:
   cross-concrete assignment
 - `spec_index_cmp` coverage in `test/ppc.c` for equal concrete
   specializations, different concrete specializations, tag-only pseudo
-  pointers, the zero coordinate, bodyless specializations, and zero-disabled
-  concrete indices
+  pointers, the zero coordinate, bodyless specializations, and named default
+  specializations
 - specialization-chain variable coverage in `test/ppc.c` for
   `Shape.color.rect`, recurrent `Shape.color.color.rect`, nested field access,
   local tag initialization, and global/static constructor tag initialization
@@ -331,14 +327,13 @@ Validation:
   `case` entries, `+` extensions, shared anonymous struct bodies for several
   specialization names, field access, dispatch, `create_spec`, `get_spec_size`,
   `get_spec_ptr`, and `spec_index_cmp`
-- zero-disabled specialization coverage in `test/ppc.c` and `test/driver.sh`
-  for `const = 0`, rejected `Base` objects, rejected `Base.void`, rejected
-  tag-0 `create_spec`/`init_spec`, default handlers for non-zero
-  specializations, strict handlers, and runtime rejection of a technical zero
-  dispatch coordinate
+- named-default specialization coverage in `test/ppc.c` and `test/driver.sh`
+  for tag-0 handlers by name, rejected `Base.void`, direct default-object
+  initialization, `create_spec(Base)`, dense `get_spec_ptr` indices, default
+  strict handlers, and obsolete `= 0` syntax rejection
 - special-function boundary coverage in `test/driver.sh` for ordinary
-  `get_spec_ptr` lower/upper bounds, zero-disabled `get_spec_ptr` lower/upper
-  bounds, and zero-disabled `spec_index_cmp` on a forged tag-0 pointer
+  `get_spec_ptr` lower/upper bounds and named-default `get_spec_ptr` upper
+  bounds
 - manual out-of-range `get_spec_ptr` diagnostic check
 - `make test`
 - `make test-all`
