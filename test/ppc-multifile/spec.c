@@ -9,4 +9,4 @@ int MFPointerValue<MFPointer.rect *r>() {
 }
 
 int MFEnumValue<MFEnum.MFMonday *x>() { return 10 + x->seed; }
-void MFEnumSetMonday(MFEnum *x) { *x = MFMonday; }
+void MFEnumSetMonday(MFEnum *x) { *x = MFEnum.MFMonday; }

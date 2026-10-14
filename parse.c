@@ -1578,8 +1578,8 @@ static Type *ppc_enum_family(Type *ty) {
   return base->is_ppc_enum_generalization ? base : NULL;
 }
 
-// Feature names are contextual: they do not create integer constants or
-// interfere with visible ordinary C names. Parentheses preserve this sugar.
+// Feature values use Generalization.feature, separately from ordinary C names.
+// The same spelling in a type context still denotes a specialization type.
 static Member *ppc_read_enum_feature(Token **rest, Token *tok, Type *ty) {
   Type *base = ppc_enum_family(ty);
   if (!base)
@@ -1593,14 +1593,28 @@ static Member *ppc_read_enum_feature(Token **rest, Token *tok, Type *ty) {
     }
     return NULL;
   }
-  if (tok->kind != TK_IDENT || find_var(tok))
-    return NULL;
-  Member *feature = find_ppc_spec(base, tok);
-  if (feature) {
-    *rest = tok->next;
-    return feature;
+  Type *qualifier = NULL;
+  if (equal(tok, "struct") && tok->next->kind == TK_IDENT) {
+    qualifier = find_tag(tok->next);
+    tok = tok->next->next;
+  } else if (tok->kind == TK_IDENT) {
+    VarScope *sc = find_var(tok);
+    qualifier = sc ? sc->type_def : find_tag(tok);
+    tok = tok->next;
   }
-  return NULL;
+  if (!qualifier || !equal(tok, "."))
+    return NULL;
+  while (qualifier->origin)
+    qualifier = qualifier->origin;
+  if (!qualifier->is_ppc_enum_generalization)
+    return NULL;
+  if (qualifier != base)
+    error_tok(tok, "PPC enum feature belongs to a different generalization");
+  Member *feature = find_ppc_spec(base, tok->next);
+  if (!feature)
+    error_tok(tok->next, "unknown PPC enum feature");
+  *rest = tok->next->next;
+  return feature;
 }
 
 static void ppc_check_enum_feature_target(Type *ty, Token *tok) {

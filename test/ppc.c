@@ -343,13 +343,17 @@ typedef struct FeatureState { long stamp; int data[3]; } enum {
   Monday, Tuesday
 } FeatureState;
 
-static FeatureDay feature_global = Monday;
-static FeatureDay feature_globals[4] = {Sunday, Thursday, Friday};
-static FeatureDay feature_matrix[2][2] = {{Monday, Tuesday}, {Friday, Sunday}};
+static FeatureDay feature_global = FeatureDay.Monday;
+static FeatureDay feature_globals[4] = {
+  FeatureDay.Sunday, FeatureDay.Thursday, FeatureDay.Friday
+};
+static FeatureDay feature_matrix[2][2] = {
+  {FeatureDay.Monday, FeatureDay.Tuesday}, {FeatureDay.Friday, FeatureDay.Sunday}
+};
 static struct { int before; FeatureDay day; int after; } feature_wrapper =
-  {17, Tuesday, 29};
-static union { FeatureDay day; long other; } feature_union = {.day=Friday};
-static FeatureDay *feature_compound = &(FeatureDay){Saturday};
+  {17, FeatureDay.Tuesday, 29};
+static union { FeatureDay day; long other; } feature_union = {.day=FeatureDay.Friday};
+static FeatureDay *feature_compound = &(FeatureDay){FeatureDay.Saturday};
 
 int FeatureDayCode<FeatureDay *d>() = 0;
 int FeatureDayCode<FeatureDay.void *d>() { return 0; }
@@ -367,9 +371,9 @@ static FeatureDay *feature_address(FeatureDay *d, int *count) {
 }
 
 static int feature_static_sequence(void) {
-  static FeatureDay d = Monday;
+  static FeatureDay d = FeatureDay.Monday;
   int old = FeatureDayCode<&d>();
-  d = Tuesday;
+  d = FeatureDay.Tuesday;
   return old;
 }
 
@@ -388,92 +392,115 @@ static void test_enum_feature_assignment(void) {
   ASSERT(5, FeatureDayCode<&feature_union.day>());
   ASSERT(6, FeatureDayCode<feature_compound>());
   feature_global.week_number = 88;
-  feature_global = Sunday;
+  feature_global = FeatureDay.Sunday;
   ASSERT(7, FeatureDayCode<&feature_global>());
   ASSERT(88, feature_global.week_number);
   ASSERT(1, feature_static_sequence());
   ASSERT(2, feature_static_sequence());
 
-  FeatureDay wd1 = Monday;
-  FeatureDay wd2[3] = {Sunday, Thursday, Friday};
+  FeatureDay wd1 = FeatureDay.Monday;
+  FeatureDay wd2[3] = {FeatureDay.Sunday, FeatureDay.Thursday, FeatureDay.Friday};
   ASSERT(1, FeatureDayCode<&wd1>());
   ASSERT(0, wd1.week_number);
   wd1.week_number = 42;
-  wd1 = Tuesday;
+  wd1 = FeatureDay.Tuesday;
   ASSERT(2, FeatureDayCode<&wd1>());
   ASSERT(42, wd1.week_number);
   wd2[2].week_number = 17;
-  wd2[2] = Monday;
+  wd2[2] = FeatureDay.Monday;
   ASSERT(1, FeatureDayCode<&wd2[2]>());
   ASSERT(17, wd2[2].week_number);
   ASSERT(7, FeatureDayCode<&wd2[0]>());
   ASSERT(4, FeatureDayCode<&wd2[1]>());
-  FeatureDay.void zero = Sunday;
+  FeatureDay.void zero = FeatureDay.Sunday;
   zero.week_number = 23;
-  zero = Friday;
+  zero = FeatureDay.Friday;
   ASSERT(5, FeatureDayCode<&zero>());
   ASSERT(23, zero.week_number);
-  FeatureDay braced = {Wednesday,};
-  FeatureDay parenthesized = ((Thursday));
-  FeatureDay compound = (FeatureDay){Friday};
+  FeatureDay braced = {FeatureDay.Wednesday,};
+  FeatureDay parenthesized = ((FeatureDay.Thursday));
+  FeatureDay compound = (FeatureDay){FeatureDay.Friday};
   ASSERT(3, FeatureDayCode<&braced>());
   ASSERT(4, FeatureDayCode<&parenthesized>());
   ASSERT(5, FeatureDayCode<&compound>());
-  wd1 = (Sunday);
+  wd1 = (FeatureDay.Sunday);
   ASSERT(7, FeatureDayCode<&wd1>());
   ASSERT(42, wd1.week_number);
-  FeatureDay designated[3] = {[2]=Tuesday};
+  FeatureDay designated[3] = {[2]=FeatureDay.Tuesday};
   ASSERT(0, FeatureDayCode<&designated[0]>());
   ASSERT(2, FeatureDayCode<&designated[2]>());
-  static FeatureDay local_static = Saturday;
-  static FeatureDay static_array[2] = {Friday, Sunday};
+  static FeatureDay local_static = FeatureDay.Saturday;
+  static FeatureDay static_array[2] = {FeatureDay.Friday, FeatureDay.Sunday};
   ASSERT(6, FeatureDayCode<&local_static>());
   ASSERT(5, FeatureDayCode<&static_array[0]>());
   ASSERT(7, FeatureDayCode<&static_array[1]>());
 
   int index = 0;
-  wd2[index++] = Wednesday;
+  wd2[index++] = FeatureDay.Wednesday;
   ASSERT(1, index);
   ASSERT(3, FeatureDayCode<&wd2[0]>());
   int calls = 0;
-  *feature_address(&wd1, &calls) = Monday;
+  *feature_address(&wd1, &calls) = FeatureDay.Monday;
   ASSERT(1, calls);
   ASSERT(1, FeatureDayCode<&wd1>());
   ASSERT(42, wd1.week_number);
-  FeatureDay copied = (wd1 = Tuesday);
+  FeatureDay copied = (wd1 = FeatureDay.Tuesday);
   ASSERT(2, FeatureDayCode<&copied>());
   ASSERT(42, copied.week_number);
-  wd2[0] = wd1 = Friday;
+  wd2[0] = wd1 = FeatureDay.Friday;
   ASSERT(5, FeatureDayCode<&wd2[0]>());
   ASSERT(42, wd2[0].week_number);
 
   FeatureState state = {.stamp=123456789, .data={7, 8, 9}};
   FeatureState.Monday monday = {};
-  state = Monday;
+  state = FeatureState.Monday;
   ASSERT(1, spec_index_cmp(&state, &monday) >= 0);
   ASSERT(123456789, state.stamp);
   ASSERT(7, state.data[0]);
   ASSERT(8, state.data[1]);
   ASSERT(9, state.data[2]);
-  state = Tuesday;
+  state = FeatureState.Tuesday;
   ASSERT(123456789, state.stamp);
   ASSERT(9, state.data[2]);
-  struct CaseKind converted = first;
+  struct CaseKind converted = CaseKind.first;
   converted.group = 67;
-  converted = second;
+  converted = CaseKind.second;
   struct CaseKind.second second_value = {};
   ASSERT(1, spec_index_cmp(&converted, &second_value) >= 0);
   ASSERT(67, converted.group);
 
-  // An existing C binding takes precedence over a contextual feature name.
+  typedef FeatureDay DayAlias;
+  DayAlias alias = DayAlias.Monday;
+  alias = struct FeatureDay.Tuesday;
+  ASSERT(2, FeatureDayCode<&alias>());
+  alias = FeatureDay.Wednesday;
+  ASSERT(3, FeatureDayCode<&alias>());
+  ASSERT(sizeof(FeatureDay), sizeof(FeatureDay.Monday));
+
+  // Feature qualification leaves ordinary variables and member access intact.
   {
-    FeatureDay Monday = Sunday;
+    FeatureDay Monday = FeatureDay.Sunday;
     Monday.week_number = 73;
     FeatureDay copy = Monday;
     ASSERT(7, FeatureDayCode<&copy>());
     ASSERT(73, copy.week_number);
     copy = Monday;
     ASSERT(73, copy.week_number);
+  }
+  {
+    enum { Monday = 61 };
+    FeatureDay d = FeatureDay.Monday;
+    d.week_number = Monday;
+    d = FeatureDay.Tuesday;
+    ASSERT(2, FeatureDayCode<&d>());
+    ASSERT(61, d.week_number);
+  }
+  {
+    struct { DayAlias Monday; } FeatureDay = {DayAlias.Friday};
+    DayAlias d = FeatureDay.Monday;
+    ASSERT(5, FeatureDayCode<&d>());
+    d = struct FeatureDay.Monday;
+    ASSERT(1, FeatureDayCode<&d>());
   }
 }
 

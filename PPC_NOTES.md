@@ -1,4 +1,4 @@
-# PPC extension snapshot 25
+# PPC extension snapshot 26
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
@@ -21,8 +21,9 @@ Implemented so far:
 - `struct Name { ... } enum { a, b, c };` as ADT-like sugar for bodyless
   specializations
 - enum feature initialization and assignment into a zero-typed receiver:
-  `WeekDay wd = Monday;`, `WeekDay days[3] = {Sunday, Thursday, Friday};`,
-  `wd = Tuesday;`, and `days[2] = Monday;`
+  `WeekDay wd = WeekDay.Monday;`,
+  `WeekDay days[3] = {WeekDay.Sunday, WeekDay.Thursday, WeekDay.Friday};`,
+  `wd = WeekDay.Tuesday;`, and `days[2] = WeekDay.Monday;`
 - `struct Name { ... } nullptr { Type *a, *b; OtherType *c; };` for
   pointer-only specialization lists, with optional `const` and pointer-only
   `Name + { Type *d; };` extensions
@@ -192,17 +193,21 @@ Current implementation strategy:
   chain that enlarges a common member cannot be copied into a smaller base.
 - An enum feature assigned directly to `Base` or `Base.void` changes only
   the runtime specialization tag and preserves all common data. The lvalue
-  is evaluated once, including in `days[i++] = Monday`. The assignment
+  is evaluated once, including in `days[i++] = WeekDay.Monday`. The assignment
   expression has the receiver's aggregate type and value, so chaining and
   ordinary copying of its result work as for other aggregate assignments.
   Concrete specialization receivers are rejected, even if the feature name
   matches their declared specialization.
-- Bare enum feature names are resolved against the receiver's enum family
-  in direct assignment/initialization contexts; they are not integer constants
-  in the ordinary C namespace. Different families can reuse the same feature
-  names. A visible ordinary C binding takes precedence and keeps its existing
-  meaning. Parenthesized features and single-feature braced initializers are
-  supported. This syntax does not apply to ordinary `case` or pointer lists.
+- Enum feature values require `Generalization.feature` in direct assignment
+  and initialization contexts. The qualifier can be a typedef (including an
+  alias), an unshadowed struct tag, or an explicit `struct Tag` spelling.
+  The qualifier must denote the receiver's enum family; even an identically
+  named feature of another family is rejected. Bare feature names are not
+  feature values and do not enter the ordinary C namespace. Ordinary variables
+  and member access retain their meaning. Parenthesized features and
+  single-feature braced initializers are supported. In type contexts,
+  `Generalization.feature` continues to denote the specialization type.
+  Feature assignment does not apply to ordinary `case` or pointer lists.
 - Initializing an enum object from a feature initializes its common fields to
   zero. Feature initializers work for automatic, global and local `static`
   objects, arrays, nested aggregate members and automatic compound literals. Global and

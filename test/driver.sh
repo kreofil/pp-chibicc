@@ -187,10 +187,11 @@ struct PointerBad {} nullptr {} const;
 struct PointerBad case { int *value; };
 EOF
 
-for stmt in 'Day.Monday d; d = Monday;' 'Day.Monday d; d = Tuesday;' \
-    'Day.Monday d = Monday;' 'Day.Monday d = {Monday};' \
-    'Day d; d = Unknown;' 'Day d; d = Wednesday;' \
-    'Day d; d += Monday;' 'int i = Monday;' \
+for stmt in 'Day.Monday d; d = Day.Monday;' 'Day.Monday d; d = Day.Tuesday;' \
+    'Day.Monday d = Day.Monday;' 'Day.Monday d = {Day.Monday};' \
+    'Day d; d = Day.Unknown;' 'Day d; d = OtherDay.Wednesday;' \
+    'Day d; d += Day.Monday;' 'int i = Day.Monday;' \
+    'Day d; d = Monday;' 'Day d = Monday;' 'Day d = {Monday};' \
     'int Monday = 1; Day d; d = Monday;'; do
     expect_fail "PPC enum feature rejects $stmt" <<EOF
 typedef struct Day { int week; } enum { Monday, Tuesday } Day;
@@ -199,29 +200,35 @@ int main(void) { $stmt }
 EOF
 done
 
+expect_fail 'PPC enum feature rejects foreign family with the same feature name' <<'EOF'
+typedef struct Day {} enum { Monday } Day;
+typedef struct OtherDay {} enum { Monday } OtherDay;
+int main(void) { Day d = OtherDay.Monday; }
+EOF
+
 expect_fail 'PPC enum feature rejects concrete global initialization' <<'EOF'
 typedef struct Day {} enum { Monday, Tuesday } Day;
-Day.Monday d = Tuesday;
+Day.Monday d = Day.Tuesday;
 EOF
 
 expect_fail 'PPC enum feature rejects ordinary case specialization names' <<'EOF'
 typedef struct Day {} case { void Monday; } Day;
-int main(void) { Day d; d = Monday; }
+int main(void) { Day d; d = Day.Monday; }
 EOF
 
 expect_fail 'PPC enum feature rejects pointer specialization names' <<'EOF'
 typedef struct Day {} nullptr { int *Monday; } Day;
-int main(void) { Day d; d = Monday; }
+int main(void) { Day d; d = Day.Monday; }
 EOF
 
 expect_fail 'PPC enum feature rejects thread-local initialization' <<'EOF'
 typedef struct Day {} enum { Monday } Day;
-_Thread_local Day d = Monday;
+_Thread_local Day d = Day.Monday;
 EOF
 
 expect_fail 'PPC enum feature rejects static thread-local initialization' <<'EOF'
 typedef struct Day {} enum { Monday } Day;
-int main(void) { static _Thread_local Day d = Monday; }
+int main(void) { static _Thread_local Day d = Day.Monday; }
 EOF
 
 # -o
