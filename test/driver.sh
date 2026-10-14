@@ -246,9 +246,53 @@ expect_ppc_assign_fail 'PPC rejects generalization assignment f=t' 'f = t;'
 expect_ppc_assign_fail 'PPC rejects specialization assignment t=f' 't = f;'
 expect_ppc_assign_fail 'PPC rejects specialization assignment r=f' 'r = f;'
 expect_ppc_assign_fail 'PPC rejects specialization initializer' 'Figure.t u = r;'
+expect_fail 'PPC case void generalization assignment remains strict' <<'EOF'
+struct CaseSwitch {} case { void on; };
+int main() {
+  struct CaseSwitch s;
+  struct CaseSwitch.on on;
+  s = on;
+  return 0;
+}
+EOF
+expect_fail 'PPC enum rejects specialization assignment from zero' <<'EOF'
+struct EnumSwitch {} enum { on, off };
+int main() {
+  struct EnumSwitch s;
+  struct EnumSwitch.on on;
+  on = s;
+  return 0;
+}
+EOF
+expect_fail 'PPC enum rejects different specialization assignment' <<'EOF'
+struct EnumSwitch {} enum { on, off };
+int main() {
+  struct EnumSwitch.on on;
+  struct EnumSwitch.off off;
+  off = on;
+  return 0;
+}
+EOF
+expect_fail 'PPC enum rejects typed specialization extension' <<'EOF'
+struct Payload { int x; };
+struct EnumSwitch {} enum { on };
+struct EnumSwitch + { struct Payload payload; };
+int main() { return 0; }
+EOF
+expect_fail 'PPC rejects enum feature extension after payload specialization' <<'EOF'
+struct Payload { int x; };
+struct MixedSwitch {} case { struct Payload payload; };
+struct MixedSwitch + { extra };
+int main() { return 0; }
+EOF
 expect_fail 'PPC rejects typedef const generalization extension' <<'EOF'
 typedef struct ClosedFigure {} case { int first; } const ClosedFigure;
 ClosedFigure + { int second; };
+int main() { return 0; }
+EOF
+expect_fail 'PPC rejects enum const generalization extension' <<'EOF'
+typedef struct ClosedEnum {} enum { first } const ClosedEnum;
+ClosedEnum + { second };
 int main() { return 0; }
 EOF
 expect_fail 'PPC rejects tagged const generalization extension' <<'EOF'

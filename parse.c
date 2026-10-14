@@ -1349,7 +1349,7 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
     Node *expr = assign(rest, tok);
     add_type(expr);
     if (expr->ty->kind == TY_STRUCT) {
-      if (!is_compatible(init->ty, expr->ty))
+      if (!is_assignable(init->ty, expr->ty))
         error_tok(expr->tok, "incompatible struct initializer");
       init->expr = expr;
       return;
@@ -2875,6 +2875,48 @@ static void ppc_spec_members(Token **rest, Token *tok, Type *ty) {
   ty->members = head.next;
 }
 
+static Member *ppc_enum_members(Token **rest, Token *tok) {
+  Member head = {};
+  Member *cur = &head;
+  int idx = 0;
+
+  while (!consume_end(rest, tok)) {
+    if (idx > 0)
+      tok = skip(tok, ",");
+
+    get_ident(tok);
+
+    Member *mem = calloc(1, sizeof(Member));
+    mem->tok = tok;
+    mem->ty = ty_void;
+    mem->name = tok;
+    mem->idx = idx++;
+    mem->align = ty_void->align;
+
+    cur = cur->next = mem;
+    tok = tok->next;
+  }
+
+  return head.next;
+}
+
+static bool ppc_specs_are_void(Member *specs) {
+  for (Member *mem = specs; mem; mem = mem->next)
+    if (mem->ty->kind != TY_VOID)
+      return false;
+  return true;
+}
+
+static void ppc_mark_enum_generalization(Type *base, Token *tok) {
+  if (!ppc_specs_are_void(base->ppc_specs))
+    error_tok(tok, "PPC enum generalization can only contain void specializations");
+  base->is_ppc_enum_generalization = true;
+}
+
+static bool is_ppc_enum_extension_list(Token *tok) {
+  return tok->kind == TK_IDENT && (equal(tok->next, ",") || equal(tok->next, "}"));
+}
+
 static bool tok_eq(Token *a, Token *b) {
   return a && b && a->len == b->len && !strncmp(a->loc, b->loc, a->len);
 }
@@ -3045,6 +3087,9 @@ static void append_ppc_specs(Type *base, Member *specs) {
   ensure_ppc_tag_member(base);
   ensure_ppc_count_var(base);
   remember_ppc_gen(base, specs ? specs->tok : NULL);
+
+  if (base->is_ppc_enum_generalization && !ppc_specs_are_void(specs))
+    error_tok(specs->tok, "PPC enum generalization can only contain void specializations");
 
   Member **tail = &base->ppc_specs;
   int idx = 1;
@@ -3248,9 +3293,15 @@ static Token *ppc_extend_generalization(Token *tok, Type *base) {
   tok = skip(tok, "+");
   tok = skip(tok, "{");
 
-  Type tmp = {};
-  ppc_spec_members(&tok, tok, &tmp);
-  append_ppc_specs(base, tmp.members);
+  if (base->is_ppc_enum_generalization || is_ppc_enum_extension_list(tok)) {
+    if (!base->is_ppc_enum_generalization)
+      ppc_mark_enum_generalization(base, tok);
+    append_ppc_specs(base, ppc_enum_members(&tok, tok));
+  } else {
+    Type tmp = {};
+    ppc_spec_members(&tok, tok, &tmp);
+    append_ppc_specs(base, tmp.members);
+  }
   return tok;
 }
 
@@ -3352,7 +3403,13 @@ static Type *struct_decl(Token **rest, Token *tok) {
     Type tmp = {};
     ppc_spec_members(&tok, tok, &tmp);
     append_ppc_specs(ty, tmp.members);
+  } else if (equal(tok, "enum")) {
+    tok = skip(tok->next, "{");
+    ppc_mark_enum_generalization(ty, tok);
+    append_ppc_specs(ty, ppc_enum_members(&tok, tok));
+  }
 
+  if (ty->is_ppc_generalization) {
     if (consume(&tok, tok, "const"))
       ty->is_ppc_const_generalization = true;
 

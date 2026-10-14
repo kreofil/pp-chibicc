@@ -25,6 +25,15 @@ InlineFigure + { struct { int a, b, c; } triangle; };
 struct Switch {} case { void on; };
 struct Switch + { void off; };
 
+struct TokenKind { int group; } enum { number, plus };
+struct TokenKind + { minus, eof };
+
+struct CaseKind { int group; } case { void first; };
+struct CaseKind + { second };
+
+typedef struct Light { int line; } enum { red, green } Light;
+Light + { blue };
+
 struct ConstPayload { int code; };
 typedef struct ConstKind { int line; } case {
   void none;
@@ -96,6 +105,19 @@ int FigurePairDefault<struct Figure.rectangle *a, struct Figure.rectangle *b>() 
 int SwitchCode<struct Switch *s>() = 0;
 int SwitchCode<struct Switch.on *s>() { return 1; }
 int SwitchCode<struct Switch.off *s>() { return 2; }
+
+int TokenKindCode<struct TokenKind *t>() = 0;
+int TokenKindCode<struct TokenKind.void *t>() { return 100; }
+int TokenKindCode<struct TokenKind.number *t>() { return 200; }
+int TokenKindCode<struct TokenKind.plus *t>() { return 300; }
+int TokenKindCode<struct TokenKind.minus *t>() { return 400; }
+int TokenKindCode<struct TokenKind.eof *t>() { return 500; }
+
+int LightCode<Light *l>() = 0;
+int LightCode<Light.void *l>() { return l->line; }
+int LightCode<Light.red *l>() { return 10 + l->line; }
+int LightCode<Light.green *l>() { return 20 + l->line; }
+int LightCode<Light.blue *l>() { return 30 + l->line; }
 
 int WeekDayCode<struct WeekDay *d>() = 0;
 int WeekDayCode<struct WeekDay.void *d>() { return d->week_number; }
@@ -235,12 +257,19 @@ int main() {
   ASSERT(1, ({ struct WeekDay.Monday monday = {35}; *(int *)&monday; }));
   ASSERT(1, ({ struct Switch.on s; *(int *)&s; }));
   ASSERT(2, ({ struct Switch.off s; *(int *)&s; }));
+  ASSERT(8, ({ struct TokenKind k; sizeof(k); }));
+  ASSERT(8, ({ struct TokenKind.plus p; sizeof(p); }));
+  ASSERT(8, ({ struct CaseKind.second s; sizeof(s); }));
+  ASSERT(8, ({ Light.green g; sizeof(g); }));
   ASSERT(3, get_spec_size(struct Figure));
   ASSERT(3, get_spec_size(Figure2));
   ASSERT(2, get_spec_size(struct WeekDay));
   ASSERT(2, get_spec_size(struct NoVoidDay));
   ASSERT(4, get_spec_size(InlineFigure));
   ASSERT(3, get_spec_size(struct Switch));
+  ASSERT(5, get_spec_size(struct TokenKind));
+  ASSERT(3, get_spec_size(struct CaseKind));
+  ASSERT(4, get_spec_size(Light));
   ASSERT(4, get_spec_size(Shape));
   ASSERT(2, get_spec_size(ShapeColor));
   ASSERT(0, ({ struct Figure *f=get_spec_ptr(struct Figure, 0); *(int *)f; }));
@@ -264,6 +293,10 @@ int main() {
   }));
   ASSERT(1, SwitchCode<get_spec_ptr(struct Switch, 1)>());
   ASSERT(2, SwitchCode<get_spec_ptr(struct Switch, 2)>());
+  ASSERT(200, TokenKindCode<get_spec_ptr(struct TokenKind, 1)>());
+  ASSERT(300, TokenKindCode<get_spec_ptr(struct TokenKind, 2)>());
+  ASSERT(400, TokenKindCode<get_spec_ptr(struct TokenKind, 3)>());
+  ASSERT(500, TokenKindCode<get_spec_ptr(struct TokenKind, 4)>());
   ASSERT(1, ({ struct Figure.triangle a; struct Figure.triangle b; spec_index_cmp(&a, &b); }));
   ASSERT(-1, ({ struct Figure.triangle a; struct Figure.rectangle b; spec_index_cmp(&a, &b); }));
   ASSERT(0, ({
@@ -559,6 +592,75 @@ int main() {
     struct Switch.off s;
     struct Switch *ps=(struct Switch *)&s;
     SwitchCode<ps>();
+  }));
+  ASSERT(307, ({
+    struct TokenKind k={.group=1};
+    struct TokenKind.plus plus={.group=7};
+    k=plus;
+    k.group+TokenKindCode<&k>();
+  }));
+  ASSERT(409, ({
+    struct TokenKind k;
+    struct TokenKind.minus minus={.group=9};
+    k=minus;
+    k.group+TokenKindCode<&k>();
+  }));
+  ASSERT(409, ({
+    struct TokenKind.void any;
+    struct TokenKind.minus minus={.group=9};
+    any=minus;
+    any.group+TokenKindCode<&any>();
+  }));
+  ASSERT(504, ({
+    struct TokenKind.eof eof={.group=4};
+    struct TokenKind.void any=eof;
+    any.group+TokenKindCode<&any>();
+  }));
+  ASSERT(103, ({
+    struct TokenKind zero={.group=3};
+    struct TokenKind.void any=zero;
+    any.group+TokenKindCode<&any>();
+  }));
+  ASSERT(104, ({
+    struct TokenKind.void any={.group=4};
+    struct TokenKind zero=any;
+    zero.group+TokenKindCode<&zero>();
+  }));
+  ASSERT(1510, ({
+    struct TokenKind zero={.group=0};
+    struct TokenKind.number number={.group=1};
+    struct TokenKind.plus plus={.group=2};
+    struct TokenKind.minus minus={.group=3};
+    struct TokenKind.eof eof={.group=4};
+    struct TokenKind days[5]={zero, number, plus, minus, eof};
+    days[0].group+TokenKindCode<&days[0]>()+
+      days[1].group+TokenKindCode<&days[1]>()+
+      days[2].group+TokenKindCode<&days[2]>()+
+      days[3].group+TokenKindCode<&days[3]>()+
+      days[4].group+TokenKindCode<&days[4]>();
+  }));
+  ASSERT(2, ({
+    struct CaseKind k;
+    struct CaseKind.second second={.group=11};
+    k=second;
+    *(int *)&k;
+  }));
+  ASSERT(11, ({
+    struct CaseKind k;
+    struct CaseKind.second second={.group=11};
+    k=second;
+    k.group;
+  }));
+  ASSERT(21, ({
+    Light.red red={.line=11};
+    Light light=red;
+    LightCode<&light>();
+  }));
+  ASSERT(32, ({
+    Light light;
+    Light.blue blue={.line=2};
+    light=blue;
+    LightCode<&light>();
   }));
 
   printf("OK\n");

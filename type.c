@@ -44,6 +44,48 @@ static bool is_aggregate(Type *ty) {
   return ty->kind == TY_STRUCT || ty->kind == TY_UNION;
 }
 
+static Type *canonical_type(Type *ty) {
+  while (ty->origin)
+    ty = ty->origin;
+  return ty;
+}
+
+static Type *ppc_family_base(Type *ty) {
+  ty = canonical_type(ty);
+
+  if (ty->kind != TY_STRUCT)
+    return NULL;
+  if (ty->ppc_base)
+    return canonical_type(ty->ppc_base);
+  if (ty->is_ppc_generalization)
+    return ty;
+  return NULL;
+}
+
+static Member *ppc_tag_member_type(Type *ty) {
+  ty = canonical_type(ty);
+
+  if (ty->kind != TY_STRUCT)
+    return NULL;
+
+  for (Member *mem = ty->members; mem; mem = mem->next)
+    if (mem->is_ppc_tag)
+      return mem;
+  return NULL;
+}
+
+static bool is_ppc_zero_specialization(Type *ty, Type *base) {
+  ty = canonical_type(ty);
+
+  if (ty == base)
+    return true;
+  if (ty->ppc_base != base)
+    return false;
+
+  Member *tag = ppc_tag_member_type(ty);
+  return tag && tag->ppc_index == 0;
+}
+
 bool is_compatible(Type *t1, Type *t2) {
   if (t1 == t2)
     return true;
@@ -89,6 +131,24 @@ bool is_compatible(Type *t1, Type *t2) {
            t1->array_len == t2->array_len;
   }
   return false;
+}
+
+static bool is_ppc_enum_value_assignment(Type *lhs, Type *rhs) {
+  lhs = canonical_type(lhs);
+  rhs = canonical_type(rhs);
+
+  Type *base = ppc_family_base(lhs);
+  if (!base || base != ppc_family_base(rhs))
+    return false;
+  if (!base->is_ppc_enum_generalization || base->is_ppc_zero_spec_disabled)
+    return false;
+
+  return is_ppc_zero_specialization(lhs, base) &&
+         (rhs == base || rhs->ppc_base == base);
+}
+
+bool is_assignable(Type *lhs, Type *rhs) {
+  return is_compatible(lhs, rhs) || is_ppc_enum_value_assignment(lhs, rhs);
 }
 
 Type *copy_type(Type *ty) {
@@ -219,7 +279,7 @@ void add_type(Node *node) {
     if (node->lhs->ty->kind == TY_ARRAY)
       error_tok(node->lhs->tok, "not an lvalue");
     if (is_aggregate(node->lhs->ty) || is_aggregate(node->rhs->ty)) {
-      if (!is_compatible(node->lhs->ty, node->rhs->ty))
+      if (!is_assignable(node->lhs->ty, node->rhs->ty))
         error_tok(node->rhs->tok, "incompatible aggregate assignment");
     } else {
       node->rhs = new_cast(node->rhs, node->lhs->ty);

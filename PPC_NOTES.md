@@ -1,4 +1,4 @@
-# PPC extension snapshot 20
+# PPC extension snapshot 21
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
@@ -6,11 +6,16 @@ This snapshot starts a Procedural-Parametric C experiment on top of
 Implemented so far:
 
 - `struct Name { ... } case { ... };`
+- `struct Name { ... } enum { a, b, c };` as ADT-like sugar for bodyless
+  specializations
 - closed generalizations with `struct Name { ... } case { ... } const;`
 - zero-disabled generalizations with `struct Name { ... } case { ... } = 0;`
   and `struct Name { ... } case { ... } const = 0;`
 - empty case lists, for example `struct Figure {} case {};`
 - decentralized extension with `struct Name + { ... };`
+- decentralized ADT-style extension with `struct Name + { a, b, c };` when the
+  generalization is already enum-like, or when an existing all-void `case`
+  generalization is first extended by a feature list
 - decentralized extension through a typedef name, for example `Figure2 + { ... };`
 - specialization types such as `struct Figure.triangle` and `Figure2.rect`
 - specialization chains for variables, for example
@@ -89,6 +94,9 @@ Implemented so far:
   pseudo pointer that can be passed as a PPC dispatch argument
 - `spec_index_cmp(pointer, pointer)` for comparing two PPC specialization
   indices from the same generalization family
+- ADT-like enum generalizations allow assignment from any specialization in the
+  same family to the zero specialization (`Base` or `Base.void`), because all
+  generated alternatives have the same object layout
 
 Current implementation strategy:
 
@@ -116,9 +124,19 @@ Current implementation strategy:
 - A `void` specialization such as `void Monday;` has no selected specialization
   member. Its generated struct contains only the hidden tag and the common
   members of the generalization, which allows enum-like evolutionary extension.
+- An `enum { ... }` PPC generalization stores the listed feature names as
+  `void` specializations and marks the generalization as enum-like. A feature
+  list extension (`Name + { feature };`) does the same for an already enum-like
+  generalization. If it is applied to a `case` generalization, all existing
+  specializations must be bodyless; otherwise the extension is rejected.
 - `Base.void` is a separate synthetic specialization type for PPC handler
   parameters. It is not taken from the `case` list and always denotes tag 0,
   i.e. the generalization object itself as a concrete dispatch-table coordinate.
+- Ordinary PPC aggregate assignment remains strict for non-enum generalizations.
+  Enum-like generalizations add only the one-way polymorphic value assignment
+  `Base = Base.some` and `Base.void = Base.some`; concrete-to-concrete
+  cross-specialization assignment and assignment from zero to a concrete
+  specialization remain rejected.
 - A `const` generalization has a closed specialization set. Later `+`
   extensions of such a generalization are rejected.
 - A generalization declared with `= 0` disables the source-level zero
@@ -293,6 +311,10 @@ Validation:
 - `get_spec_size` and `get_spec_ptr` coverage in `test/ppc.c` for ordinary,
   typedef-based, enum-like, bodyless, and zero-disabled PPC generalizations,
   including tag-only dispatch for one-parameter functions and multimethods
+- enum-ADT coverage in `test/ppc.c` and `test/driver.sh` for `enum { ... }`,
+  feature-list extension, same-size alternatives, assignment into `Base` and
+  `Base.void`, initializer assignment into `Base`, and rejection of reverse or
+  cross-concrete assignment
 - `spec_index_cmp` coverage in `test/ppc.c` for equal concrete
   specializations, different concrete specializations, tag-only pseudo
   pointers, the zero coordinate, bodyless specializations, and zero-disabled
