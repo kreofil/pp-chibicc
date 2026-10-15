@@ -1,0 +1,41 @@
+name: Check uploaded PPC VLA example
+
+on:
+  push:
+    branches:
+      - fix/ppc-vla-tags
+    paths:
+      - test/tmp-user-vla-repro.c
+      - .github/workflows/check-user-vla.yml
+
+jobs:
+  check-user-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ppc-vla-tags
+
+      - name: Build compiler and uploaded example
+        run: |
+          set -euxo pipefail
+          make chibicc
+          ./chibicc -Iinclude -Itest -c -o /tmp/user-vla.o test/tmp-user-vla-repro.c
+          cc -pthread -o /tmp/user-vla.exe /tmp/user-vla.o
+
+      - name: Run uploaded example twenty times
+        run: |
+          set -euxo pipefail
+          /tmp/user-vla.exe > /tmp/out.1
+          for i in $(seq 2 20); do
+            /tmp/user-vla.exe > /tmp/out.$i
+            diff -u /tmp/out.1 /tmp/out.$i
+          done
+
+      - name: Verify VLA zero-specialization dispatch
+        run: |
+          set -euxo pipefail
+          awk '/-- 1st step --/{flag=1;next}/-- 2nd step --/{flag=0}flag' /tmp/out.1 > /tmp/first-step.txt
+          test "$(grep -c 'Unknown Week Day' /tmp/first-step.txt)" -eq 10
+          ! grep -q 'It is ' /tmp/first-step.txt
+          cat /tmp/out.1
