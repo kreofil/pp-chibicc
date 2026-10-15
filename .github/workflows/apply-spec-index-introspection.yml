@@ -1,0 +1,236 @@
+name: Apply specialization index introspection
+
+on:
+  push:
+    branches:
+      - feature/spec-index-introspection
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/spec-index-introspection
+
+      - name: Apply implementation and tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('parse.c')
+          s = p.read_text()
+
+          old = '''static Node *ppc_get_spec_size_expr(Token *tok, Type *ty);\nstatic Node *ppc_get_spec_ptr_expr(Token *tok, Type *ty, Node *idx);\nstatic Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs);'''
+          new = '''static Node *ppc_get_spec_size_expr(Token *tok, Type *ty);\nstatic Node *ppc_get_spec_ptr_expr(Token *tok, Type *ty, Node *idx);\nstatic Type *ppc_subtype_index_type_arg(Token **rest, Token *tok);\nstatic Node *ppc_get_subtype_index_expr(Token *tok, Type *ty);\nstatic Node *ppc_get_spec_var_index_expr(Token *tok, Node *ptr);\nstatic Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs);'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          marker = '''static Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs) {'''
+          insert = r'''static Type *ppc_subtype_index_type_arg(Token **rest, Token *tok) {
+  Token *start = tok;
+  Type *ty = typename(&tok, tok);
+
+  int dots = 0;
+  for (Token *cur = start; cur != tok; cur = cur->next)
+    if (equal(cur, "."))
+      dots++;
+
+  if (dots > 1)
+    error_tok(start, "get_subtype_index accepts only a generalization or one direct specialization");
+
+  *rest = tok;
+  return ty;
+}
+
+static Node *ppc_get_subtype_index_expr(Token *tok, Type *ty) {
+  if (ty->kind != TY_STRUCT || (!ty->is_ppc_generalization && !ty->ppc_base))
+    error_tok(tok, "get_subtype_index expects a PPC generalization or direct specialization type");
+
+  Type *base;
+  if (ty->ppc_base)
+    base = ty->ppc_base;
+  else
+    base = ppc_generalization_arg(tok, ty, "get_subtype_index");
+
+  remember_ppc_gen(base, tok);
+
+  // The generalization itself and a named default specialization both
+  // occupy parameter index 0. Ordinary specializations receive their
+  // actual index at program startup through the shared runtime tag.
+  if (!ty->ppc_base)
+    return new_num(0, tok);
+
+  Member *tag = ppc_tag_member(ty);
+  if (!tag)
+    error_tok(tok, "PPC specialization has no specialization tag");
+  if (!tag->ppc_tag_var)
+    return new_num(tag->ppc_index, tok);
+  return new_var_node(tag->ppc_tag_var, tok);
+}
+
+static Node *ppc_get_spec_var_index_expr(Token *tok, Node *ptr) {
+  if (!current_fn)
+    error_tok(tok, "get_spec_var_index is not allowed outside a function");
+
+  add_type(ptr);
+  Type *base = ppc_param_base_ty(ptr->ty, tok);
+
+  // Save the operand so side effects in the pointer expression occur once.
+  Obj *saved = new_lvar("", pointer_to(base));
+  Node *assign_ptr =
+    new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(saved, tok),
+                                  new_cast(ptr, pointer_to(base)), tok),
+                       tok);
+  Node *ret = new_expr_stmt_node(ppc_tag_expr(saved, base, tok), tok);
+  assign_ptr->next = ret;
+
+  Node *node = new_node(ND_STMT_EXPR, tok);
+  node->body = assign_ptr;
+  return node;
+}
+
+'''
+          assert marker in s
+          s = s.replace(marker, insert + marker, 1)
+
+          old = '''  if (equal(tok, "spec_index_cmp")) {\n    tok = skip(tok->next, "(");\n    Node *lhs = assign(&tok, tok);'''
+          new = '''  if (equal(tok, "get_subtype_index")) {\n    tok = skip(tok->next, "(");\n    Type *ty = ppc_subtype_index_type_arg(&tok, tok);\n    *rest = skip(tok, ")");\n    return ppc_get_subtype_index_expr(start, ty);\n  }\n\n  if (equal(tok, "get_spec_var_index")) {\n    tok = skip(tok->next, "(");\n    Node *ptr = assign(&tok, tok);\n    *rest = skip(tok, ")");\n    return ppc_get_spec_var_index_expr(start, ptr);\n  }\n\n  if (equal(tok, "spec_index_cmp")) {\n    tok = skip(tok->next, "(");\n    Node *lhs = assign(&tok, tok);'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          test = r'''#include "test.h"
+
+typedef struct IndexFigure { int common; } case {
+  default int base;
+  int rect;
+  void marker;
+} IndexFigure;
+
+typedef struct IndexMode {} enum { Off, On } IndexMode;
+
+static int ptr_calls;
+
+static IndexFigure *once(IndexFigure *p) {
+  ptr_calls++;
+  return p;
+}
+
+int main() {
+  ASSERT(0, get_subtype_index(IndexFigure));
+  ASSERT(0, get_subtype_index(IndexFigure.base));
+
+  int rect_idx = get_subtype_index(IndexFigure.rect);
+  int marker_idx = get_subtype_index(IndexFigure.marker);
+  ASSERT(1, rect_idx > 0);
+  ASSERT(1, marker_idx > 0);
+  ASSERT(1, rect_idx != marker_idx);
+
+  IndexFigure general;
+  IndexFigure.base base;
+  IndexFigure.rect rect;
+  IndexFigure.marker marker;
+
+  ASSERT(0, get_spec_var_index(&general));
+  ASSERT(0, get_spec_var_index(&base));
+  ASSERT(rect_idx, get_spec_var_index(&rect));
+  ASSERT(marker_idx, get_spec_var_index(&marker));
+
+  IndexFigure *p = &rect;
+  ASSERT(rect_idx, get_spec_var_index(p));
+
+  ptr_calls = 0;
+  ASSERT(rect_idx, get_spec_var_index(once(p)));
+  ASSERT(1, ptr_calls);
+
+  int off_idx = get_subtype_index(IndexMode.Off);
+  int on_idx = get_subtype_index(IndexMode.On);
+  ASSERT(0, get_subtype_index(IndexMode));
+  ASSERT(1, off_idx > 0);
+  ASSERT(1, on_idx > 0);
+  ASSERT(1, off_idx != on_idx);
+
+  IndexMode mode = IndexMode.On;
+  ASSERT(on_idx, get_spec_var_index(&mode));
+  mode = IndexMode.Off;
+  ASSERT(off_idx, get_spec_var_index(&mode));
+
+  printf("OK\n");
+  return 0;
+}
+'''
+          Path('test/ppc-spec-index.c').write_text(test)
+
+          d = Path('test/driver.sh')
+          ds = d.read_text()
+          anchor = '\necho OK\n'
+          diag = r'''
+# PPC specialization-index introspection diagnostics
+expect_fail "get_subtype_index rejects ordinary C type" <<'EOF'
+typedef struct Plain { int x; } Plain;
+int main(void) { return get_subtype_index(Plain); }
+EOF
+
+expect_fail "get_subtype_index rejects nested specialization chain" <<'EOF'
+typedef struct Inner {} case { int leaf; } Inner;
+typedef struct Outer {} case { Inner inner; } Outer;
+int main(void) { return get_subtype_index(Outer.inner.leaf); }
+EOF
+
+expect_fail "get_spec_var_index requires PPC pointer" <<'EOF'
+int main(void) { int x = 0; return get_spec_var_index(&x); }
+EOF
+'''
+          assert anchor in ds
+          ds = ds.replace(anchor, '\n' + diag + anchor, 1)
+          d.write_text(ds)
+
+          doc = Path('docs/ppc-manual-ru.md')
+          text = doc.read_text()
+          anchor = '### 3.5. Сравнение на равенство двух альтернатив одного обобщения\n'
+          addition = r'''### 3.5. Получение параметрического индекса по типу специализации
+
+После запуска программы фактический параметрический индекс конкретной специализации можно получить по ее типу:
+
+    ИндексТипаСпециализации =
+        int get_subtype_index "(" ИмяОбобщения ["." ПризнакСпециализации] ")".
+
+Само обобщение имеет индекс 0. Если в `case` задана именованная специализация `default`, ее тип также соответствует индексу 0. Остальные специализации получают индексы при запуске программы, поэтому для них нельзя полагаться на номер, предполагаемый из порядка исходных описаний. Функция возвращает фактически назначенный runtime-индекс. Аргументом может быть только обобщение или одна его непосредственная специализация; цепочки из нескольких признаков этой функцией не принимаются.
+
+### 3.6. Получение параметрического индекса по специализированной переменной
+
+Индекс фактической специализации объекта можно получить по указателю на него:
+
+    ИндексПеременнойСпециализации =
+        int get_spec_var_index "(" УказательНаСпециализированнуюПеременную ")".
+
+Статический тип указателя может быть типом обобщения или одной из его специализаций. Возвращается индекс, записанный в служебном признаке фактического объекта. Выражение указателя вычисляется ровно один раз. Поэтому, например, сравнение
+
+    get_spec_var_index(p) == get_subtype_index(Figure.rect)
+
+проверяет, содержит ли объект, доступный через обобщенный указатель `p`, специализацию `Figure.rect`, не зная ее числового индекса заранее.
+
+### 3.7. Сравнение на равенство двух альтернатив одного обобщения
+'''
+          assert anchor in text
+          text = text.replace(anchor, addition, 1)
+          doc.write_text(text)
+          PY
+
+      - name: Run full test suite
+        run: make test-all
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add parse.c test/ppc-spec-index.c test/driver.sh docs/ppc-manual-ru.md
+          git commit -m "Add specialization index introspection helpers"
+          git push origin HEAD:feature/spec-index-introspection
