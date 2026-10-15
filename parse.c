@@ -179,6 +179,7 @@ static Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
 static Initializer *gvar_initializer(Token **rest, Token *tok, Obj *var);
 static Node *ppc_tag_value(Member *mem, Token *tok);
 static Node *ppc_tag_initializer(Obj *var, Token *tok);
+static Node *ppc_vla_tag_initializer(Obj *var, Token *tok);
 static void ppc_gvar_tag_initializer(Obj *var, Initializer *init, Token *tok);
 static bool ppc_initializer_has_enum_feature(Initializer *init);
 static Member *ppc_read_enum_feature(Token **rest, Token *tok, Type *ty);
@@ -985,6 +986,10 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
                               tok);
 
       cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);
+
+      Node *tag_init = ppc_vla_tag_initializer(var, tok);
+      if (tag_init)
+        cur = cur->next = tag_init;
       continue;
     }
 
@@ -1648,7 +1653,7 @@ static Node *ppc_enum_feature_assignment(Node *lhs, Member *feature, Token *tok)
 }
 
 static bool ppc_type_has_tag(Type *ty, bool runtime_only) {
-  if (ty->kind == TY_ARRAY)
+  if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
     return ppc_type_has_tag(ty->base, runtime_only);
 
   if (ty->kind != TY_STRUCT)
@@ -1714,6 +1719,57 @@ static Node *ppc_tag_initializer(Obj *var, Token *tok) {
 
   InitDesg var_desg = {NULL, 0, NULL, var};
   return ppc_tag_initializer2(var->ty, &var_desg, tok, NULL);
+}
+
+
+// Generate runtime initialization for PPC tags stored in a variable length
+// array. The regular tag initializer can unroll fixed-size arrays at compile
+// time; a VLA needs a runtime loop over the storage allocated for it.
+static Node *ppc_vla_tag_initializer(Obj *var, Token *tok) {
+  Type *ty = var->ty;
+  if (ty->kind != TY_VLA || !ppc_type_has_tag(ty, false))
+    return NULL;
+
+  // Flatten array dimensions until we reach the fixed-size object whose PPC
+  // tags must be initialized. Using the already-computed VLA byte size avoids
+  // evaluating the original VLA bound expression a second time.
+  Type *elem = ty;
+  while (elem->kind == TY_VLA || elem->kind == TY_ARRAY)
+    elem = elem->base;
+
+  if (elem->size <= 0)
+    error_tok(tok, "PPC VLA element type must have a fixed positive size");
+
+  Obj *i = new_lvar("", ty_ulong);
+  Obj *elem_ptr = new_lvar("", pointer_to(elem));
+
+  Node *init = new_expr_stmt_node(
+    new_binary(ND_ASSIGN, new_var_node(i, tok), new_ulong(0, tok), tok), tok);
+
+  Node *count = new_binary(ND_DIV, new_var_node(ty->vla_size, tok),
+                           new_ulong(elem->size, tok), tok);
+  Node *cond = new_binary(ND_LT, new_var_node(i, tok), count, tok);
+  Node *inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
+                         new_add(new_var_node(i, tok), new_ulong(1, tok), tok), tok);
+
+  Node *base_ptr = new_cast(new_var_node(var, tok), pointer_to(elem));
+  Node *addr = new_add(base_ptr, new_var_node(i, tok), tok);
+  Node *assign_elem = new_expr_stmt_node(
+    new_binary(ND_ASSIGN, new_var_node(elem_ptr, tok), addr, tok), tok);
+
+  InitDesg elem_desg = {NULL, 0, NULL, elem_ptr, true};
+  Node *assign_tags = new_expr_stmt_node(
+    ppc_tag_initializer2(elem, &elem_desg, tok, NULL), tok);
+  assign_elem->next = assign_tags;
+
+  Node *loop = new_node(ND_FOR, tok);
+  loop->init = init;
+  loop->cond = cond;
+  loop->inc = inc;
+  loop->then = new_block_node(assign_elem, tok);
+  loop->brk_label = new_unique_name();
+  loop->cont_label = new_unique_name();
+  return loop;
 }
 
 static bool ppc_initializer_has_enum_feature(Initializer *init) {
