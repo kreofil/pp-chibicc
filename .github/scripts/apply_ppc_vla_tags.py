@@ -69,8 +69,8 @@ static Node *ppc_vla_tag_initializer(Obj *var, Token *tok) {
 assert marker in s
 s = s.replace(marker, marker + addition, 1)
 
-old = """      Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),\n                              new_alloca(new_var_node(ty->vla_size, tok)), tok);\n      cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);\n      continue;\n"""
-new = """      Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),\n                              new_alloca(new_var_node(ty->vla_size, tok)), tok);\n      cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);\n\n      Node *tag_init = ppc_vla_tag_initializer(var, tok);\n      if (tag_init)\n        cur = cur->next = tag_init;\n      continue;\n"""
+old = """      Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),\n                              new_alloca(new_var_node(ty->vla_size, tok)),\n                              tok);\n\n      cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);\n      continue;\n"""
+new = """      Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),\n                              new_alloca(new_var_node(ty->vla_size, tok)),\n                              tok);\n\n      cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);\n\n      Node *tag_init = ppc_vla_tag_initializer(var, tok);\n      if (tag_init)\n        cur = cur->next = tag_init;\n      continue;\n"""
 assert old in s
 s = s.replace(old, new, 1)
 
