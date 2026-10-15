@@ -46,7 +46,7 @@ static Node *ppc_vla_tag_initializer(Obj *var, Token *tok) {
   Node *inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
                          new_add(new_var_node(i, tok), new_ulong(1, tok), tok), tok);
 
-  Node *base_ptr = new_cast(new_vla_ptr(var, tok), pointer_to(elem));
+  Node *base_ptr = new_cast(new_var_node(var, tok), pointer_to(elem));
   Node *addr = new_add(base_ptr, new_var_node(i, tok), tok);
   Node *assign_elem = new_expr_stmt_node(
     new_binary(ND_ASSIGN, new_var_node(elem_ptr, tok), addr, tok), tok);
