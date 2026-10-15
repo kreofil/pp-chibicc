@@ -229,6 +229,9 @@ static Node *ppc_create_spec_expr(Token *tok, Type *ty, Node *count);
 static Node *ppc_init_spec_expr(Token *tok, Type *ty, Node *ptr, Node *count);
 static Node *ppc_get_spec_size_expr(Token *tok, Type *ty);
 static Node *ppc_get_spec_ptr_expr(Token *tok, Type *ty, Node *idx);
+static Type *ppc_subtype_index_type_arg(Token **rest, Token *tok);
+static Node *ppc_get_subtype_index_expr(Token *tok, Type *ty);
+static Node *ppc_get_spec_var_index_expr(Token *tok, Node *ptr);
 static Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs);
 static Node *ppc_funcall_expr(Token **rest, Token *tok);
 static Token *parse_typedef(Token *tok, Type *basety);
@@ -4220,6 +4223,20 @@ static Node *primary(Token **rest, Token *tok) {
     return ppc_get_spec_ptr_expr(start, ty, idx);
   }
 
+  if (equal(tok, "get_subtype_index")) {
+    tok = skip(tok->next, "(");
+    Type *ty = ppc_subtype_index_type_arg(&tok, tok);
+    *rest = skip(tok, ")");
+    return ppc_get_subtype_index_expr(start, ty);
+  }
+
+  if (equal(tok, "get_spec_var_index")) {
+    tok = skip(tok->next, "(");
+    Node *ptr = assign(&tok, tok);
+    *rest = skip(tok, ")");
+    return ppc_get_spec_var_index_expr(start, ptr);
+  }
+
   if (equal(tok, "spec_index_cmp")) {
     tok = skip(tok->next, "(");
     Node *lhs = assign(&tok, tok);
@@ -4918,6 +4935,69 @@ static Node *ppc_get_spec_ptr_expr(Token *tok, Type *ty, Node *idx) {
 
   Node *node = new_node(ND_STMT_EXPR, tok);
   node->body = assign_idx;
+  return node;
+}
+
+static Type *ppc_subtype_index_type_arg(Token **rest, Token *tok) {
+  Token *start = tok;
+  Type *ty = typename(&tok, tok);
+
+  int dots = 0;
+  for (Token *cur = start; cur != tok; cur = cur->next)
+    if (equal(cur, "."))
+      dots++;
+
+  if (dots > 1)
+    error_tok(start, "get_subtype_index accepts only a generalization or one direct specialization");
+
+  *rest = tok;
+  return ty;
+}
+
+static Node *ppc_get_subtype_index_expr(Token *tok, Type *ty) {
+  if (ty->kind != TY_STRUCT || (!ty->is_ppc_generalization && !ty->ppc_base))
+    error_tok(tok, "get_subtype_index expects a PPC generalization or direct specialization type");
+
+  Type *base;
+  if (ty->ppc_base)
+    base = ty->ppc_base;
+  else
+    base = ppc_generalization_arg(tok, ty, "get_subtype_index");
+
+  remember_ppc_gen(base, tok);
+
+  // The generalization itself and a named default specialization both
+  // occupy parameter index 0. Ordinary specializations receive their
+  // actual index at program startup through the shared runtime tag.
+  if (!ty->ppc_base)
+    return new_num(0, tok);
+
+  Member *tag = ppc_tag_member(ty);
+  if (!tag)
+    error_tok(tok, "PPC specialization has no specialization tag");
+  if (!tag->ppc_tag_var)
+    return new_num(tag->ppc_index, tok);
+  return new_var_node(tag->ppc_tag_var, tok);
+}
+
+static Node *ppc_get_spec_var_index_expr(Token *tok, Node *ptr) {
+  if (!current_fn)
+    error_tok(tok, "get_spec_var_index is not allowed outside a function");
+
+  add_type(ptr);
+  Type *base = ppc_param_base_ty(ptr->ty, tok);
+
+  // Save the operand so side effects in the pointer expression occur once.
+  Obj *saved = new_lvar("", pointer_to(base));
+  Node *assign_ptr =
+    new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(saved, tok),
+                                  new_cast(ptr, pointer_to(base)), tok),
+                       tok);
+  Node *ret = new_expr_stmt_node(ppc_tag_expr(saved, base, tok), tok);
+  assign_ptr->next = ret;
+
+  Node *node = new_node(ND_STMT_EXPR, tok);
+  node->body = assign_ptr;
   return node;
 }
 

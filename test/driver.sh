@@ -708,4 +708,21 @@ echo 'int main() {}' | $chibicc -c -o $tmp/baz.o -xc -
 cc -Xlinker -z -Xlinker muldefs -Xlinker --gc-sections -o $tmp/foo $tmp/foo.o $tmp/bar.o $tmp/baz.o
 check -Xlinker
 
+
+# PPC specialization-index introspection diagnostics
+expect_fail "get_subtype_index rejects ordinary C type" <<'EOF'
+typedef struct Plain { int x; } Plain;
+int main(void) { return get_subtype_index(Plain); }
+EOF
+
+expect_fail "get_subtype_index rejects nested specialization chain" <<'EOF'
+typedef struct Inner {} case { int leaf; } Inner;
+typedef struct Outer {} case { Inner inner; } Outer;
+int main(void) { return get_subtype_index(Outer.inner.leaf); }
+EOF
+
+expect_fail "get_spec_var_index requires PPC pointer" <<'EOF'
+int main(void) { int x = 0; return get_spec_var_index(&x); }
+EOF
+
 echo OK
