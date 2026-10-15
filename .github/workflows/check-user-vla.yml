@@ -23,19 +23,21 @@ jobs:
           ./chibicc -Iinclude -Itest -c -o /tmp/user-vla.o test/tmp-user-vla-repro.c
           cc -pthread -o /tmp/user-vla.exe /tmp/user-vla.o
 
-      - name: Run uploaded example twenty times
+      - name: Run and verify uploaded example twenty times
         run: |
           set -euxo pipefail
-          /tmp/user-vla.exe > /tmp/out.1
-          for i in $(seq 2 20); do
-            /tmp/user-vla.exe > /tmp/out.$i
-            diff -u /tmp/out.1 /tmp/out.$i
-          done
+          for run in $(seq 1 20); do
+            /tmp/user-vla.exe > /tmp/out.$run
 
-      - name: Verify VLA zero-specialization dispatch
-        run: |
-          set -euxo pipefail
-          awk '/-- 1st step --/{flag=1;next}/-- 2nd step --/{flag=0}flag' /tmp/out.1 > /tmp/first-step.txt
-          test "$(grep -c 'Unknown Week Day' /tmp/first-step.txt)" -eq 10
-          ! grep -q 'It is ' /tmp/first-step.txt
+            awk '/-- 1st step --/{flag=1;next}/-- 2nd step --/{flag=0}flag' /tmp/out.$run > /tmp/first.$run
+            test "$(grep -c 'Unknown Week Day' /tmp/first.$run)" -eq 10
+            ! grep -q 'It is ' /tmp/first.$run
+            for i in $(seq 0 9); do
+              grep -Fx "$i. Unknown Week Day {$i}" /tmp/first.$run
+            done
+
+            awk '/-- 4th step --/{flag=1;next}flag' /tmp/out.$run > /tmp/fourth.$run
+            test "$(grep -c 'Unknown Week Day' /tmp/fourth.$run)" -eq 10
+            ! grep -q 'It is ' /tmp/fourth.$run
+          done
           cat /tmp/out.1
