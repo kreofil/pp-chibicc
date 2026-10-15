@@ -22,6 +22,23 @@ jobs:
       - name: Apply implementation and regression test
         run: python3 .github/scripts/apply_ppc_vla_tags.py
 
+      - name: Build compiler
+        run: make chibicc
+
+      - name: Diagnose minimal PPC VLA
+        run: |
+          set -euxo pipefail
+          cat > /tmp/ppc-vla-min.c <<'EOF'
+          typedef struct Day { int n; } enum { Monday, Sunday } const Day;
+          int main(void) {
+            int n = 4;
+            Day a[n];
+            a[0].n = 1;
+            return 0;
+          }
+          EOF
+          ./chibicc -Iinclude -c -o /tmp/ppc-vla-min.o /tmp/ppc-vla-min.c
+
       - name: Run focused PPC VLA test
         run: make test/ppc-vla.exe && test/ppc-vla.exe
 
