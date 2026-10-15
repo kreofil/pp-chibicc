@@ -748,19 +748,19 @@ int main() {
     *(int *)&s->color.fig.color.fig;
   }));
   ASSERT(6, ({
-    Shape.color.rect *a=create_spec(Shape.color.rect[2]);
+    Shape.color.rect *a=create_spec(Shape.color.rect, 2);
     *(int *)&a[0]+*(int *)&a[1];
   }));
   ASSERT(2, ({
-    Shape.color.rect *a=create_spec(Shape.color.rect[2]);
+    Shape.color.rect *a=create_spec(Shape.color.rect, 2);
     *(int *)&a[0].color.fig+*(int *)&a[1].color.fig;
   }));
   ASSERT(6, ({
-    Shape.color.color.rect *a=create_spec(Shape.color.color.rect[2]);
+    Shape.color.color.rect *a=create_spec(Shape.color.color.rect, 2);
     *(int *)&a[0].color.fig+*(int *)&a[1].color.fig;
   }));
   ASSERT(2, ({
-    Shape.color.color.rect *a=create_spec(Shape.color.color.rect[2]);
+    Shape.color.color.rect *a=create_spec(Shape.color.color.rect, 2);
     *(int *)&a[0].color.fig.color.fig+*(int *)&a[1].color.fig.color.fig;
   }));
   ASSERT(56, ({
@@ -808,22 +808,22 @@ int main() {
   }));
   ASSERT(6, ({
     union { Shape.color.rect s[2]; char buf[sizeof(Shape.color.rect[2])]; } u;
-    init_spec(Shape.color.rect[2], (void *)u.buf);
+    init_spec(Shape.color.rect, (void *)u.buf, 2);
     *(int *)&u.s[0]+*(int *)&u.s[1];
   }));
   ASSERT(2, ({
     union { Shape.color.rect s[2]; char buf[sizeof(Shape.color.rect[2])]; } u;
-    init_spec(Shape.color.rect[2], (void *)u.buf);
+    init_spec(Shape.color.rect, (void *)u.buf, 2);
     *(int *)&u.s[0].color.fig+*(int *)&u.s[1].color.fig;
   }));
   ASSERT(6, ({
     union { Shape.color.color.rect s[2]; char buf[sizeof(Shape.color.color.rect[2])]; } u;
-    init_spec(Shape.color.color.rect[2], (void *)u.buf);
+    init_spec(Shape.color.color.rect, (void *)u.buf, 2);
     *(int *)&u.s[0].color.fig+*(int *)&u.s[1].color.fig;
   }));
   ASSERT(2, ({
     union { Shape.color.color.rect s[2]; char buf[sizeof(Shape.color.color.rect[2])]; } u;
-    init_spec(Shape.color.color.rect[2], (void *)u.buf);
+    init_spec(Shape.color.color.rect, (void *)u.buf, 2);
     *(int *)&u.s[0].color.fig.color.fig+*(int *)&u.s[1].color.fig.color.fig;
   }));
   ASSERT(18, ({
