@@ -225,8 +225,8 @@ static Node *primary(Token **rest, Token *tok);
 static Node *new_expr_stmt_node(Node *expr, Token *tok);
 static Node *ppc_tag_expr(Obj *var, Type *base_ty, Token *tok);
 static Node *ppc_extent_expr(Type *base, Token *tok);
-static Node *ppc_create_spec_expr(Token *tok, Type *ty);
-static Node *ppc_init_spec_expr(Token *tok, Type *ty, Node *ptr);
+static Node *ppc_create_spec_expr(Token *tok, Type *ty, Node *count);
+static Node *ppc_init_spec_expr(Token *tok, Type *ty, Node *ptr, Node *count);
 static Node *ppc_get_spec_size_expr(Token *tok, Type *ty);
 static Node *ppc_get_spec_ptr_expr(Token *tok, Type *ty, Node *idx);
 static Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs);
@@ -4185,8 +4185,11 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "create_spec")) {
     tok = skip(tok->next, "(");
     Type *ty = typename(&tok, tok);
+    Node *count = NULL;
+    if (equal(tok, ","))
+      count = assign(&tok, tok->next);
     *rest = skip(tok, ")");
-    return ppc_create_spec_expr(start, ty);
+    return ppc_create_spec_expr(start, ty, count);
   }
 
   if (equal(tok, "init_spec")) {
@@ -4194,8 +4197,11 @@ static Node *primary(Token **rest, Token *tok) {
     Type *ty = typename(&tok, tok);
     tok = skip(tok, ",");
     Node *ptr = assign(&tok, tok);
+    Node *count = NULL;
+    if (equal(tok, ","))
+      count = assign(&tok, tok->next);
     *rest = skip(tok, ")");
-    return ppc_init_spec_expr(start, ty, ptr);
+    return ppc_init_spec_expr(start, ty, ptr, count);
   }
 
   if (equal(tok, "get_spec_size")) {
@@ -4656,25 +4662,109 @@ static Node *new_func_call_node(Obj *fn, Node *args, Token *tok) {
   return node;
 }
 
-static Type *ppc_array_element_ty(Token *tok, Type *ty, char *name) {
-  while (ty->kind == TY_ARRAY) {
-    if (ty->array_len < 0)
-      error_tok(tok, "%s expects a complete PPC type", name);
-    ty = ty->base;
-  }
-  return ty;
-}
-
 static Type *ppc_object_family_base_ty(Token *tok, Type *ty, char *name) {
-  ty = ppc_array_element_ty(tok, ty, name);
+  if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+    error_tok(tok, "%s does not accept an array type; pass the element count as a separate argument", name);
 
   if (ty->kind != TY_STRUCT || (!ty->is_ppc_generalization && !ty->ppc_base))
-    error_tok(tok, "%s expects a PPC generalization, specialization, or specialization array type", name);
+    error_tok(tok, "%s expects a PPC generalization or specialization type", name);
 
   return ty->ppc_base ? ty->ppc_base : ty;
 }
 
-static Node *ppc_create_spec_expr(Token *tok, Type *ty) {
+static Node *ppc_save_count(Token *tok, Node *count, Obj **count_var, char *name) {
+  if (!count)
+    count = new_num(1, tok);
+
+  add_type(count);
+  if (!is_integer(count->ty))
+    error_tok(count->tok, "%s count must have integer type", name);
+
+  *count_var = new_lvar("", ty_long);
+  return new_expr_stmt_node(
+    new_binary(ND_ASSIGN, new_var_node(*count_var, tok),
+               new_cast(count, ty_long), tok),
+    tok);
+}
+
+static Node *ppc_check_count(Token *tok, Obj *count_var, char *name) {
+  Node *cond = new_binary(ND_LT, new_var_node(count_var, tok),
+                          new_long(0, tok), tok);
+
+  char *fmt = format("PPC %s error: negative count %%ld\n", name);
+  Obj *fmt_var = new_string_literal(fmt, array_of(ty_char, strlen(fmt) + 1));
+
+  Node *args = new_num(2, tok);
+  args->next = new_cast(new_var_node(fmt_var, tok), pointer_to(ty_char));
+  args->next->next = new_var_node(count_var, tok);
+
+  Node *print = new_expr_stmt_node(new_func_call_node(get_dprintf_func(), args, tok), tok);
+  Node *abort = new_expr_stmt_node(new_func_call_node(get_abort_func(), NULL, tok), tok);
+  print->next = abort;
+
+  Node *if_node = new_node(ND_IF, tok);
+  if_node->cond = cond;
+  if_node->then = new_block_node(print, tok);
+  return if_node;
+}
+
+static Node *ppc_check_create_spec_overflow(Token *tok, Obj *count_var, Type *ty) {
+  Node *max_count = new_binary(ND_DIV, new_ulong(-1, tok),
+                               new_ulong(ty->size, tok), tok);
+  Node *actual_count = new_cast(new_var_node(count_var, tok), ty_ulong);
+  Node *cond = new_binary(ND_LT, max_count, actual_count, tok);
+
+  char *fmt = format("PPC create_spec error: count %%ld overflows allocation for element size %d\n",
+                     ty->size);
+  Obj *fmt_var = new_string_literal(fmt, array_of(ty_char, strlen(fmt) + 1));
+
+  Node *args = new_num(2, tok);
+  args->next = new_cast(new_var_node(fmt_var, tok), pointer_to(ty_char));
+  args->next->next = new_var_node(count_var, tok);
+
+  Node *print = new_expr_stmt_node(new_func_call_node(get_dprintf_func(), args, tok), tok);
+  Node *abort = new_expr_stmt_node(new_func_call_node(get_abort_func(), NULL, tok), tok);
+  print->next = abort;
+
+  Node *if_node = new_node(ND_IF, tok);
+  if_node->cond = cond;
+  if_node->then = new_block_node(print, tok);
+  return if_node;
+}
+
+static Node *ppc_init_spec_tags_loop(Token *tok, Type *ty, Obj *spec_ptr,
+                                     Obj *count_var) {
+  Obj *i = new_lvar("", ty_long);
+  Obj *elem_ptr = new_lvar("", pointer_to(ty));
+
+  Node *init = new_expr_stmt_node(
+    new_binary(ND_ASSIGN, new_var_node(i, tok), new_long(0, tok), tok), tok);
+  Node *cond = new_binary(ND_LT, new_var_node(i, tok),
+                          new_var_node(count_var, tok), tok);
+  Node *inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
+                         new_add(new_var_node(i, tok), new_long(1, tok), tok), tok);
+
+  Node *assign_elem = new_expr_stmt_node(
+    new_binary(ND_ASSIGN, new_var_node(elem_ptr, tok),
+               new_add(new_var_node(spec_ptr, tok), new_var_node(i, tok), tok), tok),
+    tok);
+
+  InitDesg elem_desg = {NULL, 0, NULL, elem_ptr, true};
+  Node *assign_tags =
+    new_expr_stmt_node(ppc_tag_initializer2(ty, &elem_desg, tok, NULL), tok);
+  assign_elem->next = assign_tags;
+
+  Node *loop = new_node(ND_FOR, tok);
+  loop->init = init;
+  loop->cond = cond;
+  loop->inc = inc;
+  loop->then = new_block_node(assign_elem, tok);
+  loop->brk_label = new_unique_name();
+  loop->cont_label = new_unique_name();
+  return loop;
+}
+
+static Node *ppc_create_spec_expr(Token *tok, Type *ty, Node *count) {
   if (!current_fn)
     error_tok(tok, "create_spec is not allowed outside a function");
 
@@ -4683,32 +4773,48 @@ static Node *ppc_create_spec_expr(Token *tok, Type *ty) {
   if (!ppc_type_has_tag(ty, false))
     error_tok(tok, "PPC type has no specialization tag");
 
-  Type *ptr_base = ty->kind == TY_ARRAY ? ppc_array_element_ty(tok, ty, "create_spec") : ty;
-  Obj *ptr = new_lvar("", pointer_to(ptr_base));
+  Obj *count_var;
+  Node *assign_count = ppc_save_count(tok, count, &count_var, "create_spec");
+  Node *check_count = ppc_check_count(tok, count_var, "create_spec");
+  Node *check_overflow = ppc_check_create_spec_overflow(tok, count_var, ty);
 
-  Node *arg1 = new_ulong(1, tok);
+  Obj *ptr = new_lvar("", pointer_to(ty));
+  Node *clear_ptr = new_expr_stmt_node(
+    new_binary(ND_ASSIGN, new_var_node(ptr, tok),
+               new_cast(new_num(0, tok), pointer_to(ty)), tok),
+    tok);
+
+  Node *arg1 = new_cast(new_var_node(count_var, tok), ty_ulong);
   Node *arg2 = new_ulong(ty->size, tok);
   arg1->next = arg2;
 
   Node *alloc = new_func_call_node(get_calloc_func(), arg1, tok);
-  Node *assign_ptr =
-    new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(ptr, tok),
-                                  new_cast(alloc, pointer_to(ptr_base)), tok),
-                       tok);
+  Node *assign_ptr = new_expr_stmt_node(
+    new_binary(ND_ASSIGN, new_var_node(ptr, tok),
+               new_cast(alloc, pointer_to(ty)), tok),
+    tok);
 
-  InitDesg ptr_desg = {NULL, 0, NULL, ptr, ty->kind != TY_ARRAY};
-  Node *assign_tags = new_expr_stmt_node(ppc_tag_initializer2(ty, &ptr_desg, tok, NULL), tok);
+  Node *alloc_if = new_node(ND_IF, tok);
+  alloc_if->cond = new_binary(ND_NE, new_var_node(count_var, tok),
+                              new_long(0, tok), tok);
+  alloc_if->then = new_block_node(assign_ptr, tok);
 
+  Node *assign_tags = ppc_init_spec_tags_loop(tok, ty, ptr, count_var);
   Node *ret = new_expr_stmt_node(new_var_node(ptr, tok), tok);
-  assign_ptr->next = assign_tags;
+
+  assign_count->next = check_count;
+  check_count->next = check_overflow;
+  check_overflow->next = clear_ptr;
+  clear_ptr->next = alloc_if;
+  alloc_if->next = assign_tags;
   assign_tags->next = ret;
 
   Node *node = new_node(ND_STMT_EXPR, tok);
-  node->body = assign_ptr;
+  node->body = assign_count;
   return node;
 }
 
-static Node *ppc_init_spec_expr(Token *tok, Type *ty, Node *ptr) {
+static Node *ppc_init_spec_expr(Token *tok, Type *ty, Node *ptr, Node *count) {
   if (!current_fn)
     error_tok(tok, "init_spec is not allowed outside a function");
 
@@ -4727,18 +4833,21 @@ static Node *ppc_init_spec_expr(Token *tok, Type *ty, Node *ptr) {
   if (!ppc_type_has_tag(ty, false))
     error_tok(tok, "PPC type has no specialization tag");
 
-  Type *ptr_base = ty->kind == TY_ARRAY ? ppc_array_element_ty(tok, ty, "init_spec") : ty;
-  Obj *spec_ptr = new_lvar("", pointer_to(ptr_base));
-  Node *assign_ptr =
-    new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(spec_ptr, tok),
-                                  new_cast(ptr, pointer_to(ptr_base)), tok),
-                       tok);
+  Obj *spec_ptr = new_lvar("", pointer_to(ty));
+  Node *assign_ptr = new_expr_stmt_node(
+    new_binary(ND_ASSIGN, new_var_node(spec_ptr, tok),
+               new_cast(ptr, pointer_to(ty)), tok),
+    tok);
 
-  InitDesg ptr_desg = {NULL, 0, NULL, spec_ptr, ty->kind != TY_ARRAY};
-  Node *assign_tags = new_expr_stmt_node(ppc_tag_initializer2(ty, &ptr_desg, tok, NULL), tok);
+  Obj *count_var;
+  Node *assign_count = ppc_save_count(tok, count, &count_var, "init_spec");
+  Node *check_count = ppc_check_count(tok, count_var, "init_spec");
+  Node *assign_tags = ppc_init_spec_tags_loop(tok, ty, spec_ptr, count_var);
   Node *zero = new_expr_stmt_node(new_num(0, tok), tok);
 
-  assign_ptr->next = assign_tags;
+  assign_ptr->next = assign_count;
+  assign_count->next = check_count;
+  check_count->next = assign_tags;
   assign_tags->next = zero;
 
   Node *node = new_node(ND_STMT_EXPR, tok);
