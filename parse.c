@@ -45,6 +45,7 @@ typedef struct {
   bool is_extern;
   bool is_inline;
   bool is_tls;
+  bool has_anonymous_record;
   int align;
 } VarAttr;
 
@@ -560,8 +561,12 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
 
       if (equal(tok, "struct")) {
         ty = struct_decl(&tok, tok->next);
+        if (attr && !ty->ppc_name)
+          attr->has_anonymous_record = true;
       } else if (equal(tok, "union")) {
         ty = union_decl(&tok, tok->next);
+        if (attr && !ty->ppc_name)
+          attr->has_anonymous_record = true;
       } else if (equal(tok, "enum")) {
         ty = enum_specifier(&tok, tok->next);
       } else if (equal(tok, "typeof")) {
@@ -3075,6 +3080,22 @@ static Node *unary(Token **rest, Token *tok) {
   return postfix(rest, tok);
 }
 
+static void check_duplicate_members(HashMap *names, Member *members) {
+  for (Member *mem = members; mem; mem = mem->next) {
+    if (mem->name) {
+      if (hashmap_get2(names, mem->name->loc, mem->name->len))
+        error_tok(mem->name, "duplicate member");
+      hashmap_put2(names, mem->name->loc, mem->name->len, mem);
+      continue;
+    }
+
+    // Members of an anonymous struct or union are also members of the
+    // containing record and therefore share its member-name namespace.
+    if (mem->ty->kind == TY_STRUCT || mem->ty->kind == TY_UNION)
+      check_duplicate_members(names, mem->ty->members);
+  }
+}
+
 // struct-members = (declspec declarator (","  declarator)* ";")*
 static void struct_members(Token **rest, Token *tok, Type *ty) {
   Member head = {};
@@ -3082,19 +3103,25 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
   int idx = 0;
 
   while (!equal(tok, "}")) {
+    Token *decl_start = tok;
     VarAttr attr = {};
     Type *basety = declspec(&tok, tok, &attr);
     bool first = true;
 
-    // Anonymous struct member
-    if ((basety->kind == TY_STRUCT || basety->kind == TY_UNION) &&
-        consume(&tok, tok, ";")) {
+    if (equal(tok, ";")) {
+      if (!attr.has_anonymous_record)
+        error_tok(tok, "declaration does not declare anything");
+
+      // A struct or union specifier without a tag and without a declarator
+      // declares an anonymous member. Its fields are visible in the
+      // containing struct or union.
       Member *mem = calloc(1, sizeof(Member));
       mem->ty = basety;
-      mem->tok = tok;
+      mem->tok = decl_start;
       mem->idx = idx++;
       mem->align = attr.align ? attr.align : mem->ty->align;
       cur = cur->next = mem;
+      tok = tok->next;
       continue;
     }
 
@@ -3130,6 +3157,9 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
 
   *rest = tok->next;
   ty->members = head.next;
+
+  HashMap names = {};
+  check_duplicate_members(&names, ty->members);
 }
 
 static void ppc_spec_members(Token **rest, Token *tok, Type *ty, bool pointers_only) {

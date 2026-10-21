@@ -725,4 +725,26 @@ expect_fail "get_spec_var_index requires PPC pointer" <<'EOF'
 int main(void) { int x = 0; return get_spec_var_index(&x); }
 EOF
 
+# Struct and union member declarations
+expect_fail "struct rejects typedef name without member declarator" <<'EOF'
+typedef struct Rectangle { int x, y; } Rectangle;
+struct Figure { Rectangle; };
+EOF
+
+expect_fail "struct rejects tagged record without member declarator" <<'EOF'
+struct Figure { struct Point { int x, y; }; };
+EOF
+
+expect_fail "struct rejects duplicate direct member" <<'EOF'
+struct Figure { int a; double a; };
+EOF
+
+expect_fail "struct rejects member duplicated by anonymous record" <<'EOF'
+struct Figure { struct { int a; }; int a; };
+EOF
+
+expect_fail "struct rejects duplicate members from anonymous records" <<'EOF'
+struct Figure { struct { int a; }; union { long a; }; };
+EOF
+
 echo OK

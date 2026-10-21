@@ -17,6 +17,9 @@ Implemented so far:
   constants; conditional expressions with two `nullptr_t` operands or a
   `nullptr_t` operand and a pointer; arithmetic, ordering and conversion to
   numeric types other than `_Bool` are diagnosed
+- ordinary C struct and union declarations reject declarator-less typedef or
+  tagged record types and duplicate visible member names, including names
+  promoted recursively from anonymous structs and unions
 - `struct Name { ... } case { ... };`
 - `struct Name { ... } enum { a, b, c };` as ADT-like sugar for bodyless
   specializations
