@@ -17,3 +17,10 @@ int MFPointerCopy(MFPointer *dst, MFPointer *src) {
 }
 
 int MFEnumValue<MFEnum *x>() { return 0; }
+
+int MFUnionValue<MFUnion *x>() { return -1000 + x->seed; }
+int MFUnionUse(MFUnion *x) { return MFUnionValue<x>(); }
+int MFUnionCopy(MFUnion *dst, MFUnion *src) {
+  *dst = *src;
+  return MFUnionUse(dst);
+}

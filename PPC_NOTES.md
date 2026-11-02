@@ -1,4 +1,4 @@
-# PPC extension snapshot 26
+# PPC extension snapshot 27
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
@@ -33,6 +33,19 @@ Implemented so far:
 - pointer-list zero specializations (`Base` and `Base.void`) reserve a
   `void *` payload, including for an initially empty `nullptr {}` list;
   the zero payload is accessible as `.void`
+- fixed-storage value generalizations with
+  `struct Name { ... } union sizeof(...) { ... };`; alternatives share a
+  common size and alignment but retain distinct specialization tags and types
+- union storage may be specified as `sizeof(Type)`,
+  `sizeof(integer constant expression)`, or
+  `sizeof(integer constant expression, alignment expression)`; the
+  one-expression form uses the target maximum alignment and rounds the
+  requested size upward
+- a closed `union { ... } const` generalization may omit `sizeof`; its payload
+  size and alignment are inferred from the largest initial alternative
+- extensible union generalizations require an explicit fixed capacity;
+  later `Name + { ... };` alternatives are accepted only when their size and
+  alignment fit that capacity
 - closed generalizations with `struct Name { ... } case { ... } const;`
 - named default zero specializations with
   `struct Name { ... } case { default Type name; ... };`
@@ -174,6 +187,19 @@ Current implementation strategy:
   `{7, &r}` or `{.color=7, .rect=&r}`. Omitted fields in an initializer are
   zero-initialized, so omitted elements of an initialized `Figure` array
   select tag 0 with a null `void *` payload.
+- A `union sizeof(...)` generalization lays out the hidden tag, common fields,
+  and one hidden fixed-capacity byte payload in `Base` and `Base.void`. A
+  concrete specialization replaces that hidden payload with its named object
+  plus hidden trailing padding. Consequently every direct alternative has the
+  same size, alignment, and array stride without using C union aliasing.
+- Union alternatives may be ordinary complete object types or `void`.
+  Functions, VLAs, flexible types, bit-fields, oversized alternatives, and
+  alternatives whose alignment exceeds the fixed storage alignment are
+  diagnosed. `default` is intentionally unavailable because `Base.void`
+  remains the zero specialization and the polymorphic value carrier.
+- Arrays may use either the generalization type, allowing values of different
+  alternatives in one array, or a concrete specialization type, restricting
+  every element to that specialization.
 - `Base.void` is a separate synthetic specialization type for PPC handler
   parameters when a `case` generalization has no named default specialization.
   It is not taken from the `case` list and denotes tag 0, i.e. the
@@ -185,15 +211,17 @@ Current implementation strategy:
 - Ordinary `case` aggregate assignment remains strict.
   For a named default specialization, `Base` and `Base.default_name` are treated
   as the same concrete zero specialization for aggregate assignment.
-  Enum and pointer-list generalizations add the polymorphic value assignment
+  Enum, pointer-list, and fixed-storage union generalizations add the
+  polymorphic value assignment
   `Base = Base.some` and `Base.void = Base.some`; concrete-to-concrete
   cross-specialization assignment and assignment from zero to a concrete
   specialization remain rejected.
-- Polymorphic value assignment copies the tag, common fields, and pointer
-  payload together; copying a zero-typed variable preserves its current
-  dynamic specialization. Pointer copies are shallow and retain the same
-  referenced object. The size and alignment must match, so a specialization
-  chain that enlarges a common member cannot be copied into a smaller base.
+- Polymorphic value assignment copies the tag, common fields, and complete
+  fixed payload together; copying a zero-typed variable preserves its current
+  dynamic specialization. Pointer-list copies remain shallow and retain the
+  same referenced object. The size and alignment must match, so a
+  specialization chain that enlarges a common member cannot be copied into a
+  smaller base.
 - An enum feature assigned directly to `Base` or `Base.void` changes only
   the runtime specialization tag and preserves all common data. The lvalue
   is evaluated once, including in `days[i++] = WeekDay.Monday`. The assignment
@@ -326,6 +354,9 @@ Current implementation strategy:
 
 Still limited:
 
+- packed fixed-storage union generalizations are not supported in this first
+  implementation; over-aligned common fields remain supported by ordinary
+  struct layout
 - enum feature initialization of thread-local storage is not supported;
   such initializers are diagnosed
 - multimethod dispatch is implemented as a dense flat table; sparse-table
@@ -419,6 +450,11 @@ Validation:
   layout, static initialization, zero aliases, polymorphic copying, arrays,
   multimethod dispatch, separate extensions, and rejected declarations or
   assignments
+- fixed-storage union coverage in `test/ppc.c`, `test/ppc-multifile`, and
+  `test/driver.sh` for inferred, type-sized, expression-sized and explicitly
+  aligned storage, mixed and concrete arrays, by-value copying, dispatch across
+  translation units, evolutionary extension, and invalid layout or assignment
+  diagnostics
 - the original pointer-list example in `examples/pointer-list/main.c`, built
   and compared against `expected.txt` by the driver tests
 - enum feature assignment coverage in `test/ppc.c`, `test/driver.sh` and

@@ -10,3 +10,7 @@ int MFPointerValue<MFPointer.trian *t>() {
 
 int MFEnumValue<MFEnum.MFThursday *x>() { return 20 + x->seed; }
 void MFEnumSetThursday(MFEnum *x) { *x = MFEnum.MFThursday; }
+
+int MFUnionValue<MFUnion.trian *t>() {
+  return t->seed + t->trian.a * 100 + t->trian.b * 10 + t->trian.c;
+}

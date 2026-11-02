@@ -449,6 +449,69 @@ int main() {
   return 0;
 }
 EOF
+
+expect_fail 'PPC union requires fixed storage when extensible' <<'EOF'
+typedef struct BadUnion {} union { int number; } BadUnion;
+EOF
+
+expect_fail 'PPC union rejects oversized initial specialization' <<'EOF'
+typedef struct BadUnion {} union sizeof(4, 4) { long number; } BadUnion;
+EOF
+
+expect_fail 'PPC union rejects oversized extension specialization' <<'EOF'
+typedef struct BadUnion {} union sizeof(4, 4) {} BadUnion;
+BadUnion + { long number; };
+EOF
+
+expect_fail 'PPC union rejects over-aligned specialization' <<'EOF'
+typedef struct OverAligned { _Alignas(32) char value; } OverAligned;
+typedef struct BadUnion {} union sizeof(64, 16) {
+  OverAligned value;
+} BadUnion;
+EOF
+
+expect_fail 'PPC union rejects default specialization' <<'EOF'
+typedef struct BadUnion {} union sizeof(8) {
+  default int number;
+} BadUnion;
+EOF
+
+expect_fail 'PPC union rejects cross-specialization assignment' <<'EOF'
+typedef struct BadUnion {} union sizeof(8) { int a; int b; } BadUnion;
+int main(void) {
+  BadUnion.a a;
+  BadUnion.b b;
+  a = b;
+}
+EOF
+
+expect_fail 'PPC union rejects assignment from base to concrete specialization' <<'EOF'
+typedef struct BadUnion {} union sizeof(8) { int number; } BadUnion;
+int main(void) {
+  BadUnion base;
+  BadUnion.number number;
+  number = base;
+}
+EOF
+
+expect_fail 'PPC union rejects const extension' <<'EOF'
+typedef struct BadUnion {} union { int number; } const BadUnion;
+BadUnion + { long other; };
+EOF
+
+expect_fail 'PPC union rejects zero storage size' <<'EOF'
+typedef struct BadUnion {} union sizeof(0) {} BadUnion;
+EOF
+
+expect_fail 'PPC union rejects non-power-of-two alignment' <<'EOF'
+typedef struct BadUnion {} union sizeof(8, 3) {} BadUnion;
+EOF
+
+expect_fail 'PPC union rejects packed generalization' <<'EOF'
+typedef struct __attribute__((packed)) BadUnion { char value; }
+  union sizeof(8) { int number; } BadUnion;
+EOF
+
 expect_fail 'PPC enum rejects typed specialization extension' <<'EOF'
 struct Payload { int x; };
 struct EnumSwitch {} enum { on };

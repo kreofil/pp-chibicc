@@ -4,6 +4,7 @@
 
 int MFForwardUse(MFBase *x);
 int MFPointerForwardUse(MFPointer *x);
+int MFUnionForwardUse(MFUnion *x);
 
 static MFEnum global_enum_features[2] = {MFEnum.MFMonday, MFEnum.MFThursday};
 
@@ -48,6 +49,19 @@ int main(void) {
   ASSERT(17, MFEnumValue<&e>());
   e = MFEnum.MFThursday;
   ASSERT(27, MFEnumValue<&e>());
+
+  MFUnion.rect ur = {5, {4, 7}};
+  MFUnion.trian ut = {6, {1, 2, 3}};
+  MFUnion uvalues[3] = {ur, ut};
+  ASSERT(sizeof(MFUnion), sizeof(MFUnion.rect));
+  ASSERT(sizeof(MFUnion), sizeof(MFUnion.trian));
+  ASSERT(3, get_spec_size(MFUnion));
+  ASSERT(52, MFUnionUse(&uvalues[0]));
+  ASSERT(129, MFUnionUse(&uvalues[1]));
+  ASSERT(-1000, MFUnionUse(&uvalues[2]));
+  ASSERT(52, MFUnionForwardUse(&uvalues[0]));
+  ASSERT(129, MFUnionCopy(&uvalues[2], &uvalues[1]));
+  ASSERT(129, MFUnionForwardUse(&uvalues[2]));
   printf("OK\n");
   return 0;
 }

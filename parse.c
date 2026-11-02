@@ -3261,9 +3261,59 @@ static bool ppc_specs_are_void(Member *specs) {
   return true;
 }
 
+typedef struct {
+  bool is_present;
+  int size;
+  int align;
+} PpcUnionStorage;
+
+static PpcUnionStorage ppc_union_storage_spec(Token **rest, Token *tok) {
+  PpcUnionStorage storage = {};
+  if (!consume(&tok, tok, "sizeof")) {
+    *rest = tok;
+    return storage;
+  }
+
+  storage.is_present = true;
+  tok = skip(tok, "(");
+
+  if (is_typename(tok)) {
+    Token *start = tok;
+    Type *ty = typename(&tok, tok);
+    if (ty->kind == TY_VOID || ty->kind == TY_FUNC || ty->kind == TY_VLA ||
+        ty->size <= 0)
+      error_tok(start, "PPC union storage requires a complete nonempty object type");
+    storage.size = ty->size;
+    storage.align = ty->align;
+  } else {
+    Token *size_tok = tok;
+    int64_t size = const_expr(&tok, tok);
+    // long double has the maximum natural alignment on the x86-64 target.
+    int64_t align = ty_ldouble->align;
+    if (consume(&tok, tok, ","))
+      align = const_expr(&tok, tok);
+
+    if (size <= 0 || size > INT32_MAX)
+      error_tok(size_tok, "PPC union storage size must be a positive int value");
+    if (align <= 0 || align > INT32_MAX || (align & (align - 1)))
+      error_tok(size_tok, "PPC union storage alignment must be a positive power of two");
+
+    int64_t rounded = (size + align - 1) & -align;
+    if (rounded > INT32_MAX)
+      error_tok(size_tok, "PPC union storage size is too large");
+    storage.size = rounded;
+    storage.align = align;
+  }
+
+  *rest = skip(tok, ")");
+  return storage;
+}
+
 static void ppc_mark_enum_generalization(Type *base, Token *tok) {
   if (base->is_ppc_pointer_generalization)
     error_tok(tok, "PPC nullptr generalization cannot use enum specializations");
+  if (base->is_ppc_union_generalization)
+    error_tok(tok, "PPC union generalization cannot use enum specializations");
   if (base->ppc_default_spec)
     error_tok(tok, "PPC enum generalization cannot have a default specialization");
   if (!ppc_specs_are_void(base->ppc_specs))
@@ -3280,7 +3330,8 @@ static bool tok_eq(Token *a, Token *b) {
 }
 
 static Member *next_user_member(Member *mem) {
-  while (mem && mem->is_ppc_tag)
+  while (mem && (mem->is_ppc_tag || mem->is_ppc_union_storage ||
+                 mem->is_ppc_union_padding))
     mem = mem->next;
   return mem;
 }
@@ -3398,6 +3449,81 @@ static Member *copy_member(Member *src) {
   return mem;
 }
 
+static Member **member_tail(Member **mem);
+
+static void ppc_check_union_payload(Type *base, Member *mem) {
+  if (mem->is_bitfield)
+    error_tok(mem->tok, "PPC union specialization cannot be a bitfield");
+  if (mem->ty->kind == TY_VOID)
+    return;
+  if (mem->ty->kind == TY_FUNC || mem->ty->kind == TY_VLA || mem->ty->size < 0 ||
+      mem->ty->is_flexible)
+    error_tok(mem->tok, "PPC union specialization requires a complete object type");
+  if (mem->ty->size > base->ppc_union_payload_size)
+    error_tok(mem->tok, "PPC union specialization exceeds fixed storage size");
+  if (mem->align > base->ppc_union_payload_align)
+    error_tok(mem->tok, "PPC union specialization exceeds fixed storage alignment");
+}
+
+static void ppc_check_union_specs(Type *base, Member *specs) {
+  if (!base->is_ppc_union_generalization)
+    return;
+  for (Member *mem = specs; mem; mem = mem->next)
+    ppc_check_union_payload(base, mem);
+}
+
+static void ppc_mark_union_generalization(Type *base, Token *tok,
+                                          PpcUnionStorage storage,
+                                          Member *specs) {
+  if (base->is_ppc_generalization || base->ppc_default_spec || base->ppc_specs)
+    error_tok(tok, "PPC union generalization already declared; use + to extend it");
+  if (base->is_packed)
+    error_tok(tok, "packed PPC union generalizations are not supported");
+
+  if (!storage.is_present) {
+    storage.align = 1;
+    for (Member *mem = specs; mem; mem = mem->next) {
+      if (mem->is_bitfield)
+        error_tok(mem->tok, "PPC union specialization cannot be a bitfield");
+      if (mem->ty->kind == TY_VOID)
+        continue;
+      if (mem->ty->kind == TY_FUNC || mem->ty->kind == TY_VLA ||
+          mem->ty->size < 0 || mem->ty->is_flexible)
+        error_tok(mem->tok, "PPC union specialization requires a complete object type");
+      storage.size = MAX(storage.size, mem->ty->size);
+      storage.align = MAX(storage.align, mem->align);
+    }
+    storage.size = align_to(storage.size, storage.align);
+  }
+
+  base->is_ppc_union_generalization = true;
+  base->ppc_union_payload_size = storage.size;
+  base->ppc_union_payload_align = storage.align;
+  ensure_ppc_tag_member(base);
+
+  Member *mem = calloc(1, sizeof(Member));
+  mem->tok = tok;
+  mem->ty = array_of(ty_uchar, storage.size);
+  mem->align = storage.align;
+  mem->is_ppc_union_storage = true;
+  *member_tail(&base->members) = mem;
+  renumber_members(base);
+
+  ppc_check_union_specs(base, specs);
+}
+
+static Member *ppc_union_padding_member(Type *base, int payload_size) {
+  int size = base->ppc_union_payload_size - payload_size;
+  if (!size)
+    return NULL;
+
+  Member *mem = calloc(1, sizeof(Member));
+  mem->ty = array_of(ty_uchar, size);
+  mem->align = 1;
+  mem->is_ppc_union_padding = true;
+  return mem;
+}
+
 static Member **member_tail(Member **mem) {
   while (*mem)
     mem = &(*mem)->next;
@@ -3431,7 +3557,7 @@ static Type *ppc_void_specialization_type(Type *base, Token *name) {
     return base->ppc_void_ty;
 
   Type *ty = struct_type();
-  if (base->is_ppc_pointer_generalization) {
+  if (base->is_ppc_pointer_generalization || base->is_ppc_union_generalization) {
     ty->is_packed = base->is_packed;
     ty->align = base->align;
   }
@@ -3465,6 +3591,8 @@ static void append_ppc_default_spec(Type *base, Member *spec) {
     error_tok(spec->tok, "PPC default specialization must be the first case item");
   if (base->is_ppc_enum_generalization)
     error_tok(spec->tok, "PPC enum generalization cannot have a default specialization");
+  if (base->is_ppc_union_generalization)
+    error_tok(spec->tok, "PPC union generalization cannot have a default specialization");
   if (get_struct_member(base, spec->name))
     error_tok(spec->name, "duplicate PPC default specialization name");
 
@@ -3499,6 +3627,7 @@ static void append_ppc_specs(Type *base, Member *specs) {
 
   if (base->is_ppc_enum_generalization && !ppc_specs_are_void(specs))
     error_tok(specs->tok, "PPC enum generalization can only contain void specializations");
+  ppc_check_union_specs(base, specs);
 
   Member **tail = &base->ppc_specs;
   int idx = ppc_next_spec_index(base);
@@ -3569,7 +3698,7 @@ static Type *ppc_direct_specialization_type(Type *base, Token *name) {
   bool is_default_spec = spec == base->ppc_default_spec;
 
   Type *ty = struct_type();
-  if (base->is_ppc_pointer_generalization) {
+  if (base->is_ppc_pointer_generalization || base->is_ppc_union_generalization) {
     ty->is_packed = base->is_packed;
     ty->align = base->align;
   }
@@ -3584,6 +3713,8 @@ static Type *ppc_direct_specialization_type(Type *base, Token *name) {
   for (Member *mem = base->members; mem; mem = mem->next) {
     if (mem->is_ppc_pointer_zero_member)
       continue;
+    if (mem->is_ppc_union_storage && spec->ty->kind != TY_VOID)
+      continue;
     if (mem->is_ppc_default_spec_member && !is_default_spec)
       continue;
 
@@ -3597,11 +3728,26 @@ static Type *ppc_direct_specialization_type(Type *base, Token *name) {
 
   if (spec->ty->kind != TY_VOID && !is_default_spec) {
     cur = cur->next = copy_member(spec);
+    if (base->is_ppc_union_generalization) {
+      cur->align = base->ppc_union_payload_align;
+      cur->is_ppc_union_payload = true;
+    }
     cur->idx = idx++;
+
+    if (base->is_ppc_union_generalization) {
+      Member *padding = ppc_union_padding_member(base, spec->ty->size);
+      if (padding) {
+        cur = cur->next = padding;
+        cur->idx = idx++;
+      }
+    }
   }
   ty->members = head.next;
 
   layout_struct_members(ty);
+  if (base->is_ppc_union_generalization &&
+      (ty->size != base->size || ty->align != base->align))
+    error_tok(name, "PPC union specialization does not preserve fixed layout");
   spec->ppc_ty = ty;
   return ty;
 }
@@ -3654,7 +3800,12 @@ static Type *try_ppc_nested_specialization_type(Type *outer, Token *name) {
   if (!matched_mem)
     return NULL;
 
+  Type *base = outer->ppc_base;
+  bool fixed_union = base->is_ppc_union_generalization;
+
   Type *ty = struct_type();
+  if (fixed_union)
+    ty->align = base->align;
   ty->ppc_base = outer->ppc_base;
   ty->ppc_spec_name = name;
   ty->ppc_name = ppc_named_coord(ppc_type_name(outer), name);
@@ -3663,15 +3814,36 @@ static Type *try_ppc_nested_specialization_type(Type *outer, Token *name) {
   Member *cur = &head;
   int idx = 0;
 
+  bool replace_union_payload = fixed_union && matched_mem->is_ppc_union_payload;
   for (Member *mem = outer->members; mem; mem = mem->next) {
+    if (replace_union_payload && mem->is_ppc_union_padding)
+      continue;
+
     cur = cur->next = copy_member(mem);
-    if (mem == matched_mem)
+    if (mem == matched_mem) {
       cur->ty = matched_ty;
+      if (replace_union_payload) {
+        if (matched_ty->size > base->ppc_union_payload_size ||
+            matched_ty->align > base->ppc_union_payload_align)
+          error_tok(name, "nested PPC union specialization exceeds fixed storage");
+        cur->align = base->ppc_union_payload_align;
+      }
+    }
     cur->idx = idx++;
+  }
+
+  if (replace_union_payload) {
+    Member *padding = ppc_union_padding_member(base, matched_ty->size);
+    if (padding) {
+      cur = cur->next = padding;
+      cur->idx = idx++;
+    }
   }
   ty->members = head.next;
 
   layout_struct_members(ty);
+  if (fixed_union && (ty->size != base->size || ty->align != base->align))
+    error_tok(name, "nested PPC union specialization does not preserve fixed layout");
   remember_ppc_nested_type(outer, name, ty);
   return ty;
 }
@@ -3743,6 +3915,12 @@ static Token *ppc_extend_generalization(Token *tok, Type *base) {
   if (base->is_ppc_pointer_generalization) {
     Type tmp = {};
     ppc_spec_members(&tok, tok, &tmp, true);
+    append_ppc_specs(base, tmp.members);
+  } else if (base->is_ppc_union_generalization) {
+    if (equal(tok, "default"))
+      error_tok(tok, "PPC union generalization cannot have a default specialization");
+    Type tmp = {};
+    ppc_spec_members(&tok, tok, &tmp, false);
     append_ppc_specs(base, tmp.members);
   } else if (base->is_ppc_enum_generalization || is_ppc_enum_extension_list(tok)) {
     if (!base->is_ppc_enum_generalization)
@@ -3869,6 +4047,19 @@ static Type *struct_decl(Token **rest, Token *tok) {
     ppc_mark_pointer_generalization(ty, start);
     Type tmp = {};
     ppc_spec_members(&tok, tok, &tmp, true);
+    append_ppc_specs(ty, tmp.members);
+  } else if (equal(tok, "union")) {
+    Token *start = tok;
+    PpcUnionStorage storage = ppc_union_storage_spec(&tok, tok->next);
+    tok = skip(tok, "{");
+    if (equal(tok, "default"))
+      error_tok(tok, "PPC union generalization cannot have a default specialization");
+
+    Type tmp = {};
+    ppc_spec_members(&tok, tok, &tmp, false);
+    if (!storage.is_present && !equal(tok, "const"))
+      error_tok(start, "extensible PPC union generalization requires sizeof storage");
+    ppc_mark_union_generalization(ty, start, storage, tmp.members);
     append_ppc_specs(ty, tmp.members);
   }
 

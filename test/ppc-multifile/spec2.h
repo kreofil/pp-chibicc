@@ -19,4 +19,7 @@ int MFPointerValue<MFPointer.trian *t>();
 MFEnum + { MFThursday };
 int MFEnumValue<MFEnum.MFThursday *x>();
 
+MFUnion + { MFTri trian; };
+int MFUnionValue<MFUnion.trian *t>();
+
 #endif

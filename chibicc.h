@@ -356,12 +356,15 @@ struct Type {
   bool is_packed;
 
   // Procedural-parametric C extension. A PPC generalization is a
-  // struct with an additional `case`, `enum` or `nullptr`
+  // struct with an additional `case`, `enum`, `nullptr` or `union`
   // specialization list.
   bool is_ppc_generalization;
   bool is_ppc_enum_generalization;
   bool is_ppc_pointer_generalization;
+  bool is_ppc_union_generalization;
   bool is_ppc_const_generalization;
+  int ppc_union_payload_size;
+  int ppc_union_payload_align;
   Member *ppc_default_spec;
   Member *ppc_specs;
   char *ppc_name;
@@ -395,6 +398,9 @@ struct Member {
   Type *ppc_ty;
   bool is_ppc_default_spec_member;
   bool is_ppc_pointer_zero_member;
+  bool is_ppc_union_storage;
+  bool is_ppc_union_payload;
+  bool is_ppc_union_padding;
 
   // Hidden specialization-index field inserted at the beginning of
   // PPC generalizations and generated specialization types.

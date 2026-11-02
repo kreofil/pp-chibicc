@@ -142,7 +142,8 @@ static bool is_ppc_uniform_value_assignment(Type *lhs, Type *rhs) {
   Type *base = ppc_family_base(lhs);
   if (!base || base != ppc_family_base(rhs))
     return false;
-  if (!base->is_ppc_enum_generalization && !base->is_ppc_pointer_generalization)
+  if (!base->is_ppc_enum_generalization && !base->is_ppc_pointer_generalization &&
+      !base->is_ppc_union_generalization)
     return false;
 
   return lhs->size == rhs->size && lhs->align == rhs->align &&

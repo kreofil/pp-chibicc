@@ -336,6 +336,138 @@ static void test_pointer_generalizations(void) {
   ASSERT('b', aligned_base.c);
 }
 
+struct UnionRect { int x, y; };
+struct UnionTri { int a, b, c; };
+
+typedef struct UnionFigure { int color; } union sizeof(3 * sizeof(long) + 1) {
+  struct UnionRect rect;
+  struct UnionTri trian;
+} UnionFigure;
+UnionFigure + { long number; void empty; };
+
+typedef struct AutoUnion {} union {
+  char byte;
+  long double wide;
+} const AutoUnion;
+
+typedef struct TypeSizedUnion {} union sizeof(long double) {
+  int number;
+  double real;
+} TypeSizedUnion;
+
+typedef struct ExplicitUnion {} union sizeof(17, 8) {
+  long number;
+} ExplicitUnion;
+
+typedef struct UnionInner {} case { int number; long wide; } UnionInner;
+typedef struct NestedUnion {} union sizeof(32) {
+  UnionInner inner;
+} NestedUnion;
+
+typedef struct UnionCommon {} enum { active } UnionCommon;
+typedef struct CommonNestedUnion { UnionCommon state; } union sizeof(16) {
+  int number;
+} CommonNestedUnion;
+
+int UnionFigureCode<UnionFigure *u>() = 0;
+int UnionFigureCode<UnionFigure.void *u>() { return u->color; }
+int UnionFigureCode<UnionFigure.rect *r>() {
+  return 100 + r->color + r->rect.x + r->rect.y;
+}
+int UnionFigureCode<UnionFigure.trian *t>() {
+  return 200 + t->color + t->trian.a + t->trian.b + t->trian.c;
+}
+int UnionFigureCode<UnionFigure.number *n>() {
+  return 300 + n->color + n->number;
+}
+int UnionFigureCode<UnionFigure.empty *e>() { return 400 + e->color; }
+
+static UnionFigure.rect global_union_rect = {2, {6, 7}};
+
+static void test_union_generalizations(void) {
+  ASSERT(48, sizeof(UnionFigure));
+  ASSERT(16, _Alignof(UnionFigure));
+  ASSERT(sizeof(UnionFigure), sizeof(UnionFigure.void));
+  ASSERT(sizeof(UnionFigure), sizeof(UnionFigure.rect));
+  ASSERT(sizeof(UnionFigure), sizeof(UnionFigure.trian));
+  ASSERT(sizeof(UnionFigure), sizeof(UnionFigure.number));
+  ASSERT(sizeof(UnionFigure), sizeof(UnionFigure.empty));
+  ASSERT(_Alignof(UnionFigure), _Alignof(UnionFigure.rect));
+  ASSERT(_Alignof(UnionFigure), _Alignof(UnionFigure.trian));
+  ASSERT(5, get_spec_size(UnionFigure));
+
+  UnionFigure.rect rect = {3, {4, 5}};
+  UnionFigure.trian trian = {.color=7, .trian={1, 2, 3}};
+  UnionFigure.number number = {9, 11};
+  UnionFigure.empty empty = {13};
+  ASSERT(112, UnionFigureCode<&rect>());
+  ASSERT(213, UnionFigureCode<&trian>());
+  ASSERT(320, UnionFigureCode<&number>());
+  ASSERT(413, UnionFigureCode<&empty>());
+  ASSERT(115, UnionFigureCode<&global_union_rect>());
+
+  UnionFigure values[5] = {rect, trian, number, empty};
+  ASSERT(112, UnionFigureCode<&values[0]>());
+  ASSERT(213, UnionFigureCode<&values[1]>());
+  ASSERT(320, UnionFigureCode<&values[2]>());
+  ASSERT(413, UnionFigureCode<&values[3]>());
+  ASSERT(0, UnionFigureCode<&values[4]>());
+
+  UnionFigure.rect rects[2] = {
+    {1, {2, 3}},
+    {.color=4, .rect={5, 6}},
+  };
+  ASSERT(106, UnionFigureCode<&rects[0]>());
+  ASSERT(115, UnionFigureCode<&rects[1]>());
+
+  UnionFigure base = rect;
+  ASSERT(112, UnionFigureCode<&base>());
+  base = trian;
+  ASSERT(213, UnionFigureCode<&base>());
+  UnionFigure.void zero = number;
+  ASSERT(320, UnionFigureCode<&zero>());
+  base = zero;
+  ASSERT(320, UnionFigureCode<&base>());
+  UnionFigure.rect rect_copy = rect;
+  ASSERT(112, UnionFigureCode<&rect_copy>());
+
+  struct { long before; UnionFigure value; long after; } guard = {17, {}, 29};
+  guard.value = trian;
+  ASSERT(17, guard.before);
+  ASSERT(29, guard.after);
+  ASSERT(213, UnionFigureCode<&guard.value>());
+
+  UnionFigure *allocated = create_spec(UnionFigure);
+  ASSERT(0, UnionFigureCode<allocated>());
+  *allocated = rect;
+  ASSERT(112, UnionFigureCode<allocated>());
+  init_spec(UnionFigure.trian, allocated);
+  allocated->color = 8;
+  ((UnionFigure.trian *)allocated)->trian = (struct UnionTri){4, 5, 6};
+  ASSERT(223, UnionFigureCode<allocated>());
+
+  ASSERT(32, sizeof(AutoUnion));
+  ASSERT(sizeof(AutoUnion), sizeof(AutoUnion.byte));
+  ASSERT(sizeof(AutoUnion), sizeof(AutoUnion.wide));
+  ASSERT(_Alignof(long double), _Alignof(AutoUnion));
+  ASSERT(sizeof(TypeSizedUnion), sizeof(TypeSizedUnion.number));
+  ASSERT(sizeof(TypeSizedUnion), sizeof(TypeSizedUnion.real));
+  ASSERT(_Alignof(long double), _Alignof(TypeSizedUnion));
+  ASSERT(32, sizeof(ExplicitUnion));
+  ASSERT(sizeof(ExplicitUnion), sizeof(ExplicitUnion.number));
+  ASSERT(8, _Alignof(ExplicitUnion));
+
+  NestedUnion.inner.number nested = {.inner={.number=17}};
+  ASSERT(sizeof(NestedUnion), sizeof(NestedUnion.inner.number));
+  ASSERT(sizeof(NestedUnion), sizeof(NestedUnion.inner.wide));
+  ASSERT(17, nested.inner.number);
+
+  CommonNestedUnion.number.active common_nested;
+  common_nested.number = 23;
+  ASSERT(sizeof(CommonNestedUnion), sizeof(CommonNestedUnion.number.active));
+  ASSERT(23, common_nested.number);
+}
+
 typedef struct FeatureDay { int week_number; } enum {
   Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday
 } const FeatureDay;
@@ -507,6 +639,7 @@ static void test_enum_feature_assignment(void) {
 int main() {
   test_enum_feature_assignment();
   test_pointer_generalizations();
+  test_union_generalizations();
   ASSERT(1, ({
     struct Figure *p = nullptr;
     struct Figure.rectangle *r = nullptr;

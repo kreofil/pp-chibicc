@@ -10,3 +10,7 @@ int MFPointerValue<MFPointer.rect *r>() {
 
 int MFEnumValue<MFEnum.MFMonday *x>() { return 10 + x->seed; }
 void MFEnumSetMonday(MFEnum *x) { *x = MFEnum.MFMonday; }
+
+int MFUnionValue<MFUnion.rect *r>() {
+  return r->seed + r->rect.x * 10 + r->rect.y;
+}

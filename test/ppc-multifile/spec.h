@@ -18,4 +18,7 @@ int MFPointerValue<MFPointer.rect *r>();
 MFEnum + { MFMonday };
 int MFEnumValue<MFEnum.MFMonday *x>();
 
+MFUnion + { MFRect rect; };
+int MFUnionValue<MFUnion.rect *r>();
+
 #endif
