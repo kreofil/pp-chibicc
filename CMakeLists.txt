@@ -67,6 +67,7 @@ function(add_ppc_test_binaries suite compiler compiler_dependency output_dir out
 
   foreach(test_source IN LISTS test_sources)
     get_filename_component(test_name "${test_source}" NAME_WE)
+    file(RELATIVE_PATH test_source_relative "${CMAKE_SOURCE_DIR}" "${test_source}")
     set(test_object "${output_dir}/${test_name}.o")
     set(test_executable "${output_dir}/${test_name}.exe")
 
@@ -76,7 +77,7 @@ function(add_ppc_test_binaries suite compiler compiler_dependency output_dir out
       COMMAND "${compiler}"
               "-I${CMAKE_SOURCE_DIR}/include"
               "-I${CMAKE_SOURCE_DIR}/test"
-              -c -o "${test_object}" "${test_source}"
+              -c -o "${test_object}" "${test_source_relative}"
       DEPENDS ${compiler_dependency} "${test_source}"
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
       COMMENT "Compiling ${suite} test ${test_name}"
@@ -101,7 +102,8 @@ function(add_ppc_test_binaries suite compiler compiler_dependency output_dir out
 
   foreach(source_name IN LISTS multifile_sources)
     get_filename_component(object_name "${source_name}" NAME_WE)
-    set(source_path "${CMAKE_SOURCE_DIR}/test/ppc-multifile/${source_name}")
+    set(source_relative "test/ppc-multifile/${source_name}")
+    set(source_path "${CMAKE_SOURCE_DIR}/${source_relative}")
     set(object_path "${multifile_dir}/${object_name}.o")
 
     add_custom_command(
@@ -111,7 +113,7 @@ function(add_ppc_test_binaries suite compiler compiler_dependency output_dir out
               "-I${CMAKE_SOURCE_DIR}/include"
               "-I${CMAKE_SOURCE_DIR}/test"
               "-I${CMAKE_SOURCE_DIR}/test/ppc-multifile"
-              -c -o "${object_path}" "${source_path}"
+              -c -o "${object_path}" "${source_relative}"
       DEPENDS ${compiler_dependency} "${source_path}"
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
       COMMENT "Compiling ${suite} multifile test ${source_name}"
@@ -174,7 +176,7 @@ foreach(source_file IN LISTS PPCHIBICC_SOURCES)
     OUTPUT "${stage2_object}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${PPCHIBICC_STAGE2_DIR}/obj"
     COMMAND "$<TARGET_FILE:ppchibicc_stage1>"
-            -c -o "${stage2_object}" "${CMAKE_SOURCE_DIR}/${source_file}"
+            -c -o "${stage2_object}" "${source_file}"
     DEPENDS ppchibicc_stage1
             "${CMAKE_SOURCE_DIR}/${source_file}"
             "${CMAKE_SOURCE_DIR}/src/chibicc.h"
