@@ -381,8 +381,9 @@ Still limited:
 
 Validation:
 
-- `make test/ppc.exe`
-- `./test/ppc.exe`
+- out-of-source CMake build with `mkdir build && cd build && cmake ..`
+- `make test`
+- `make test-all`
 - assembly inspection for `.fini_array.201`
 - manual two-translation-unit PPC dispatch check
 - manual two-translation-unit multimethod dispatch check
@@ -461,5 +462,3 @@ Validation:
   `test/ppc-multifile` for preserved common fields, zero aliases, array lvalues
   with side effects, reused names, initialization and constructor ordering,
   runtime tag registration across translation units, and rejected receivers
-- `make test`
-- `make test-all`

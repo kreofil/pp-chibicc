@@ -35,7 +35,7 @@ static StringArray input_paths;
 static StringArray tmpfiles;
 
 static void usage(int status) {
-  fprintf(stderr, "chibicc [ -o <path> ] <file>\n");
+  fprintf(stderr, "ppchibicc [ -o <path> ] <file>\n");
   exit(status);
 }
 
@@ -51,9 +51,16 @@ static bool take_arg(char *arg) {
 }
 
 static void add_default_include_paths(char *argv0) {
-  // We expect that chibicc-specific include files are installed
-  // to ./include relative to argv[0].
-  strarray_push(&include_paths, format("%s/include", dirname(strdup(argv0))));
+  char path[4096];
+  ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+  if (0 < len && len < sizeof(path) - 1) {
+    path[len] = '\0';
+    argv0 = path;
+  }
+
+  // We expect that ppchibicc-specific include files are installed to
+  // ../include relative to the compiler executable.
+  strarray_push(&include_paths, format("%s/../include", dirname(strdup(argv0))));
 
   // Add standard include paths.
   strarray_push(&include_paths, "/usr/local/include");

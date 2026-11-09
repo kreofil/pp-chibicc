@@ -1,5 +1,5 @@
 make="make -j$(nproc)"
-chibicc=`pwd`/chibicc
+chibicc=`pwd`/bin/ppchibicc
 
 dir=$(basename -s .git $repo)
 
