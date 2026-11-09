@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 project(evo-demo)    # Название проекта
 
-# SET(CMAKE_C_COMPILER "/home/al/@ToDo/pp-chibicc/chibicc-ppc/chibicc")
+# SET(CMAKE_C_COMPILER "/path/to/pp-chibicc/bin/ppchibicc")
 # SET(CMAKE_C_COMPILER ppclang)
 SET(CMAKE_C_COMPILER "ppchibicc")
 

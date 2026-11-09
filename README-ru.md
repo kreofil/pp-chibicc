@@ -11,34 +11,45 @@ ppchibicc - это попытка реализовать компилятор я
 
 Текущая версия компилятора разрабатывается для работы в ОС Linux.
 
-## Варианты настройки компилятора после его сборки
+## Сборка компилятора
 
-Это не единственный вариант. Но чтобы не трогать всю систему, можно поступить следующим образом.
+Проект использует внешнюю сборку CMake. Исходные файлы остаются в `src`,
+промежуточные результаты размещаются в `build`, а готовый пользовательский
+компилятор копируется в `bin/ppchibicc`.
 
-1. Прописать путь к домашнему каталогу `~/bin` в переменной окружения PATH.
-2. Создать в каталоге `~/bin` оберточный скрипт с именем компилятора. Например, `ppchibicc`:
-
-```
-#!/bin/sh
-exec /path/to/chibicc-ppc/chibicc -I/path/to/chibicc-ppc/include "$@"
-```
-
-3. Сделать скрипт исполняемым:
-
-```
-chmod +x ~/bin/ppchibicc
+```sh
+git clone https://github.com/kreofil/pp-chibicc.git
+cd pp-chibicc
+mkdir build
+cd build
+cmake ..
+make -j
 ```
 
-После этого можно вызывать программы на C. Например:
+После успешной сборки компилятор доступен как:
 
+```sh
+../bin/ppchibicc main.c -o main
 ```
+
+Компилятор самостоятельно находит заголовочные файлы проекта в соседнем
+каталоге `include`. Для постоянного вызова можно добавить каталог `bin` в
+`PATH`:
+
+```sh
+export PATH="/path/to/pp-chibicc/bin:$PATH"
+```
+
+После этого компилятор можно вызывать непосредственно:
+
+```sh
 ppchibicc main.c -o main
 ```
 
-Для CMake тогда можно указывать:
+Для другого CMake-проекта можно указать:
 
-```
-SET(CMAKE_C_COMPILER ppchibicc)
+```cmake
+set(CMAKE_C_COMPILER ppchibicc)
 ```
 
 Если Вы хотите использовать другое расширение для файлов, например, `ppc`, то вызов компилятора нужно делат с указанием опции `-xc`. Например:
@@ -47,7 +58,7 @@ SET(CMAKE_C_COMPILER ppchibicc)
 ppchibicc -xc main.c -o main
 ```
 
-В Cmake дополнительно нужно указать:
+В CMake дополнительно нужно указать:
 
 ```
 set_source_files_properties(
@@ -57,10 +68,16 @@ set_source_files_properties(
 )
 ```
 
-## Проверка после клонирования
+## Проверка и очистка
 
+```sh
+cd build
+make test       # основные тесты stage1
+make test-all   # stage1, stage2 и примеры
+make clean      # удалить build-результаты, сохранив ../bin/ppchibicc
+make distclean  # удалить также build и bin/ppchibicc
 ```
-git clone https://github.com/kreofil/pp-chibicc.git
-cd pp-chibicc
-make test-all
-```
+
+Корневой Makefile оставлен как короткая оболочка для тех же команд, поэтому
+из корня репозитория также можно выполнить `make`, `make test` или
+`make test-all`.

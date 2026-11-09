@@ -1,5 +1,5 @@
 #!/bin/bash
-chibicc=$1
+chibicc=$(realpath "$1")
 
 tmp=`mktemp -d /tmp/chibicc-test-XXXXXX`
 trap 'rm -rf $tmp' INT TERM HUP EXIT
@@ -233,13 +233,20 @@ EOF
 
 # -o
 rm -f $tmp/out
-./chibicc -c -o $tmp/out $tmp/empty.c
+$chibicc -c -o $tmp/out $tmp/empty.c
 [ -f $tmp/out ]
 check -o
 
 # --help
-$chibicc --help 2>&1 | grep -q chibicc
+$chibicc --help 2>&1 | grep -q ppchibicc
 check --help
+
+# Compiler lookup through PATH must retain the built-in include directory.
+echo '#include <stddef.h>' > $tmp/path-include.c
+echo 'nullptr_t value = nullptr;' >> $tmp/path-include.c
+(cd $tmp; PATH=$(dirname "$chibicc"):$PATH ppchibicc -c -o path-include.o path-include.c)
+[ -f $tmp/path-include.o ]
+check 'ppchibicc lookup through PATH'
 
 # -S
 echo 'int main() {}' | $chibicc -S -o- -xc - | grep -q 'main:'
@@ -248,11 +255,11 @@ check -S
 # Default output file
 rm -f $tmp/out.o $tmp/out.s
 echo 'int main() {}' > $tmp/out.c
-(cd $tmp; $OLDPWD/$chibicc -c out.c)
+(cd $tmp; $chibicc -c out.c)
 [ -f $tmp/out.o ]
 check 'default output file'
 
-(cd $tmp; $OLDPWD/$chibicc -c -S out.c)
+(cd $tmp; $chibicc -c -S out.c)
 [ -f $tmp/out.s ]
 check 'default output file'
 
@@ -260,14 +267,14 @@ check 'default output file'
 rm -f $tmp/foo.o $tmp/bar.o
 echo 'int x;' > $tmp/foo.c
 echo 'int y;' > $tmp/bar.c
-(cd $tmp; $OLDPWD/$chibicc -c $tmp/foo.c $tmp/bar.c)
+(cd $tmp; $chibicc -c $tmp/foo.c $tmp/bar.c)
 [ -f $tmp/foo.o ] && [ -f $tmp/bar.o ]
 check 'multiple input files'
 
 rm -f $tmp/foo.s $tmp/bar.s
 echo 'int x;' > $tmp/foo.c
 echo 'int y;' > $tmp/bar.c
-(cd $tmp; $OLDPWD/$chibicc -c -S $tmp/foo.c $tmp/bar.c)
+(cd $tmp; $chibicc -c -S $tmp/foo.c $tmp/bar.c)
 [ -f $tmp/foo.s ] && [ -f $tmp/bar.s ]
 check 'multiple input files'
 
@@ -288,7 +295,7 @@ check linker
 # a.out
 rm -f $tmp/a.out
 echo 'int main() {}' > $tmp/foo.c
-(cd $tmp; $OLDPWD/$chibicc foo.c)
+(cd $tmp; $chibicc foo.c)
 [ -f $tmp/a.out ]
 check a.out
 
@@ -711,7 +718,7 @@ check -MT
 # -MD
 echo '#include "out2.h"' > $tmp/md2.c
 echo '#include "out3.h"' > $tmp/md3.c
-(cd $tmp; $OLDPWD/$chibicc -c -MD -I. md2.c md3.c)
+(cd $tmp; $chibicc -c -MD -I. md2.c md3.c)
 grep -q -z '^md2.o:.* md2\.c .* ./out2\.h' $tmp/md2.d
 check -MD
 grep -q -z '^md3.o:.* md3\.c .* ./out3\.h' $tmp/md3.d

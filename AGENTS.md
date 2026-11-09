@@ -12,9 +12,15 @@ This repository is an experimental PPC/4P extension of chibicc.
 
 ## Validation
 
-Run:
+Configure an out-of-source build first:
 
 ```sh
+mkdir -p build
+cd build
+cmake ..
 make test      # быстрый основной тест
-make test-all  # полный тест со stage2
+make test-all  # полный тест со stage2 и примерами
 ```
+
+`make clean` preserves `../bin/ppchibicc`; `make distclean` removes the build
+directory and the public compiler binary.

@@ -11,34 +11,45 @@ The documentation describes the syntax and semantics of the C language extension
 
 The current version of the compiler is being developed for the Linux operating system.
 
-## Options for configuring the compiler after building it
+## Building the compiler
 
-This is not the only approach, but to avoid modifying the entire system, you can do the following:
+The project uses an out-of-source CMake build. Compiler sources stay in `src`,
+intermediate results are written to `build`, and the successful user-facing
+compiler is copied to `bin/ppchibicc`.
 
-1. Add the `~/bin` directory to your PATH environment variable.
-2. Create a wrapper script in the `~/bin` directory named after the compiler—for example, `ppchibicc`:
-
-```
-#!/bin/sh
-exec /path/to/chibicc-ppc/chibicc -I/path/to/chibicc-ppc/include "$@"
-```
-
-3. Make the script executable:
-
-```
-chmod +x ~/bin/ppchibicc
+```sh
+git clone https://github.com/kreofil/pp-chibicc.git
+cd pp-chibicc
+mkdir build
+cd build
+cmake ..
+make -j
 ```
 
-You can then invoke C programs using this command. For example:
+After a successful build, invoke the compiler as:
 
+```sh
+../bin/ppchibicc main.c -o main
 ```
+
+The compiler automatically finds the project headers in the adjacent
+`include` directory. To invoke it permanently by name, add the project `bin`
+directory to `PATH`:
+
+```sh
+export PATH="/path/to/pp-chibicc/bin:$PATH"
+```
+
+You can then compile a program directly:
+
+```sh
 ppchibicc main.c -o main
 ```
 
-For CMake, you can then specify:
+Another CMake project can select it with:
 
-```
-SET(CMAKE_C_COMPILER ppchibicc)
+```cmake
+set(CMAKE_C_COMPILER ppchibicc)
 ```
 
 If you wish to use a different file extension—for example, `ppc`—you must invoke the compiler with the `-xc` option. For instance:
@@ -57,10 +68,15 @@ LANGUAGE C
 )
 ```
 
-## Verification after cloning
+## Verification and cleanup
 
+```sh
+cd build
+make test       # main stage1 tests
+make test-all   # stage1, stage2, and examples
+make clean      # remove build products but keep ../bin/ppchibicc
+make distclean  # also remove build and bin/ppchibicc
 ```
-git clone https://github.com/kreofil/pp-chibicc.git
-cd pp-chibicc
-make test-all
-```
+
+The top-level Makefile remains as a short wrapper for the same commands, so
+`make`, `make test`, and `make test-all` also work from the repository root.
