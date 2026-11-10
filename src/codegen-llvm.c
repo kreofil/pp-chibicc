@@ -77,9 +77,11 @@ static void llvm_check_scalar(Type *ty, Token *tok) {
     llvm_unsupported(tok, "atomic types");
   if (ty->is_volatile)
     llvm_unsupported(tok, "volatile types");
-  if (is_integer(ty) || llvm_pointer(ty) || ty->kind == TY_VOID)
+  if (ty->kind == TY_LDOUBLE)
+    llvm_unsupported(tok, "long double");
+  if (is_integer(ty) || is_flonum(ty) || llvm_pointer(ty) || ty->kind == TY_VOID)
     return;
-  llvm_unsupported(tok, "this value type (aggregate, floating point or VLA)");
+  llvm_unsupported(tok, "this value type (aggregate or VLA)");
 }
 
 static void llvm_check_object(Type *ty, Token *tok) {
@@ -109,7 +111,47 @@ static char *llvm_type(Type *ty) {
     return "ptr";
   if (ty->kind == TY_VOID)
     return "void";
+  if (ty->kind == TY_FLOAT)
+    return "float";
+  if (ty->kind == TY_DOUBLE)
+    return "double";
   return format("i%d", ty->size * 8);
+}
+
+static char *llvm_zero(Type *ty) {
+  return llvm_pointer(ty) ? "null" : is_flonum(ty) ? "0.0" : "0";
+}
+
+// LLVM spells a float hexadecimal constant using the bits of its exact
+// double representation. Round to the source type before encoding the bits.
+static char *llvm_float_constant(Node *node) {
+  union { double value; uint64_t bits; } repr;
+  repr.value = node->ty->kind == TY_FLOAT ? (float)node->fval : (double)node->fval;
+  return format("0x%016lX", (unsigned long)repr.bits);
+}
+
+static bool llvm_has_float(Type *ty) {
+  if (is_flonum(ty))
+    return true;
+  if (ty->kind == TY_ARRAY)
+    return llvm_has_float(ty->base);
+  if (llvm_aggregate(ty))
+    for (Member *mem = ty->members; mem; mem = mem->next)
+      if (llvm_has_float(mem->ty))
+        return true;
+  return false;
+}
+
+static void llvm_check_abi_type(Type *ty, Token *tok) {
+  if (!llvm_aggregate(ty)) {
+    llvm_check_scalar(ty, tok);
+    return;
+  }
+  llvm_check_object(ty, tok);
+  if (ty->size < 0)
+    llvm_unsupported(tok, "incomplete aggregate ABI types");
+  if (llvm_has_float(ty))
+    llvm_unsupported(tok, "passing or returning aggregates with floating-point fields by value");
 }
 
 static char *llvm_storage_type(Type *ty) {
@@ -228,7 +270,8 @@ static char *llvm_parameters(Type *ty, bool names, bool attributes) {
       list = llvm_list_append(list, format("%s %s%s", llvm_type(param),
         attributes ? llvm_abi_attr(param) : "",
         names ? format("%%a%d", index) : ""));
-      gp = MIN(6, gp + 1);
+      if (!is_flonum(param))
+        gp = MIN(6, gp + 1);
     }
   }
   if (ty->is_variadic)
@@ -397,8 +440,9 @@ static char *llvm_bool(char *value, Type *ty) {
   if (ty->kind == TY_VOID)
     llvm_unsupported(NULL, "void condition");
   char *result = llvm_reg();
-  llvm_print("  %s = icmp ne %s %s, %s", result, llvm_type(ty), value,
-             llvm_pointer(ty) ? "null" : "0");
+  llvm_print("  %s = %s %s %s, %s", result,
+             is_flonum(ty) ? "fcmp une" : "icmp ne", llvm_type(ty), value,
+             llvm_zero(ty));
   return result;
 }
 
@@ -421,7 +465,11 @@ static char *llvm_cast(char *value, Type *from, Type *to, Token *tok) {
   }
   if (llvm_pointer(from) && llvm_pointer(to))
     return value;
-  if (!llvm_pointer(from) && !llvm_pointer(to) && from->size == to->size)
+  if ((is_flonum(from) && llvm_pointer(to)) ||
+      (llvm_pointer(from) && is_flonum(to)))
+    llvm_unsupported(tok, "conversion between pointers and floating-point types");
+  if (is_flonum(from) == is_flonum(to) &&
+      !llvm_pointer(from) && !llvm_pointer(to) && from->size == to->size)
     return value;
 
   // inttoptr itself zero-extends narrow inputs. Match the native backend's
@@ -433,7 +481,13 @@ static char *llvm_cast(char *value, Type *from, Type *to, Token *tok) {
 
   char *result = llvm_reg();
   char *op;
-  if (llvm_pointer(from))
+  if (is_flonum(from) && is_flonum(to))
+    op = from->size < to->size ? "fpext" : "fptrunc";
+  else if (is_flonum(from))
+    op = to->is_unsigned ? "fptoui" : "fptosi";
+  else if (is_flonum(to))
+    op = from->is_unsigned || from->kind == TY_BOOL ? "uitofp" : "sitofp";
+  else if (llvm_pointer(from))
     op = "ptrtoint";
   else if (llvm_pointer(to))
     op = "inttoptr";
@@ -536,19 +590,9 @@ static char *llvm_conditional(Node *node) {
 static void llvm_check_signature(Type *ty, Token *tok, bool definition) {
   if (ty->is_variadic && (definition || !ty->params))
     llvm_unsupported(tok, "variadic definitions or unprototyped functions");
-  if (llvm_aggregate(ty->return_ty))
-    llvm_check_object(ty->return_ty, tok);
-  else
-    llvm_check_scalar(ty->return_ty, tok);
-  if (llvm_aggregate(ty->return_ty) && ty->return_ty->size < 0)
-    llvm_unsupported(tok, "incomplete aggregate ABI types");
+  llvm_check_abi_type(ty->return_ty, tok);
   for (Type *param = ty->params; param; param = param->next) {
-    if (llvm_aggregate(param))
-      llvm_check_object(param, tok);
-    else
-      llvm_check_scalar(param, tok);
-    if (llvm_aggregate(param) && param->size < 0)
-      llvm_unsupported(tok, "incomplete aggregate ABI types");
+    llvm_check_abi_type(param, tok);
     if (param->kind == TY_VOID || param->kind == TY_ARRAY || param->kind == TY_FUNC)
       llvm_unsupported(tok, "this parameter type");
   }
@@ -599,12 +643,15 @@ static char *llvm_call(Node *node) {
     } else {
       if (!param && is_integer(target) && target->size < ty_int->size)
         target = ty_int;
+      if (!param && target->kind == TY_FLOAT)
+        target = ty_double;
       if (target->kind == TY_VOID)
         llvm_unsupported(arg->tok, "void arguments");
       char *value = llvm_cast(llvm_expr(arg), arg->ty, target, arg->tok);
       args = llvm_list_append(args, format("%s %s%s", llvm_type(target),
         param ? llvm_abi_attr(target) : "", value));
-      gp = MIN(6, gp + 1);
+      if (!is_flonum(target))
+        gp = MIN(6, gp + 1);
     }
     if (param)
       param = param->next;
@@ -657,7 +704,20 @@ static char *llvm_binary(Node *node) {
   char *op = NULL;
   bool comparison = false;
   bool unsig = llvm_pointer(ty) || ty->is_unsigned;
-  switch (node->kind) {
+  if (is_flonum(ty)) {
+    switch (node->kind) {
+    case ND_ADD: op = "fadd"; break;
+    case ND_SUB: op = "fsub"; break;
+    case ND_MUL: op = "fmul"; break;
+    case ND_DIV: op = "fdiv"; break;
+    case ND_EQ: op = "fcmp oeq"; comparison = true; break;
+    case ND_NE: op = "fcmp une"; comparison = true; break;
+    case ND_LT: op = "fcmp olt"; comparison = true; break;
+    case ND_LE: op = "fcmp ole"; comparison = true; break;
+    default:
+      llvm_unsupported(node->tok, "this floating-point operator");
+    }
+  } else switch (node->kind) {
   case ND_ADD: op = "add"; break;
   case ND_SUB: op = "sub"; break;
   case ND_MUL: op = "mul"; break;
@@ -696,6 +756,8 @@ static char *llvm_expr(Node *node) {
     llvm_check_scalar(node->ty, node->tok);
     if (node->ty->kind == TY_NULLPTR)
       return "null";
+    if (is_flonum(node->ty))
+      return llvm_float_constant(node);
     if (!is_integer(node->ty))
       llvm_unsupported(node->tok, "noninteger literal");
     return format("%ld", (long)node->val);
@@ -730,7 +792,9 @@ static char *llvm_expr(Node *node) {
     llvm_check_scalar(node->ty, node->tok);
     char *value = llvm_expr(node->lhs);
     char *result = llvm_reg();
-    if (node->kind == ND_NEG)
+    if (node->kind == ND_NEG && is_flonum(node->ty))
+      llvm_print("  %s = fneg %s %s", result, llvm_type(node->ty), value);
+    else if (node->kind == ND_NEG)
       llvm_print("  %s = sub %s 0, %s", result, llvm_type(node->ty), value);
     else
       llvm_print("  %s = xor %s %s, -1", result, llvm_type(node->ty), value);
@@ -846,7 +910,7 @@ static void llvm_stmt(Node *node) {
       llvm_print("  ret void");
     else
       llvm_print("  ret %s %s", llvm_type(ty), node->lhs ? value :
-                 (llvm_pointer(ty) ? "null" : "0"));
+                 llvm_zero(ty));
     llvm_terminated = true;
     return;
   }
@@ -1052,7 +1116,8 @@ static void llvm_function(Obj *fn) {
       if (param)
         llvm_print("  store %s %%a%d, ptr %s, align 1", llvm_type(ty),
                    index, llvm_addr_var(param));
-      gp = MIN(6, gp + 1);
+      if (!is_flonum(ty))
+        gp = MIN(6, gp + 1);
     }
     // Generated abort handlers can omit their unused ordinary parameters.
     if (param)
@@ -1067,7 +1132,7 @@ static void llvm_function(Obj *fn) {
     else if (llvm_aggregate(ret))
       llvm_print("  ret %s zeroinitializer", llvm_return_type(ret));
     else
-      llvm_print("  ret %s %s", llvm_type(ret), llvm_pointer(ret) ? "null" : "0");
+      llvm_print("  ret %s %s", llvm_type(ret), llvm_zero(ret));
   }
   llvm_print("}");
 }

@@ -17,11 +17,23 @@ The parser records explicit hidden result parameters, also for generated PPC
 abort handlers returning large records. Local union initialization from a union
 value or function result is supported; static union expression initializers
 are diagnosed. Ordinary C and PPC ABI interoperability is covered by tests.
-External variadic calls accept integer/pointer arguments, including generated
-runtime diagnostics; variadic definitions and floating-point arguments still
-produce diagnostics. Tests cover case/enum dispatch, startup completeness,
+Scalar float/double arithmetic, comparisons, conversions, direct/indirect
+calls and memory fields are supported, including PPC scalar arguments/results.
+IEEE NaN conditions and signed zero are preserved without fast-math flags.
+Floating-point constants use exact LLVM hexadecimal encodings. Scalar SSE
+arguments do not consume the GP register budget used for integer record ABI.
+External variadic calls accept integer/pointer and float/double arguments,
+including float-to-double default promotion. Variadic definitions, long double
+and aggregates containing floating-point fields passed/returned by value are
+still diagnosed; floating-point record ABI classification is a separate step.
+Floating-point semantic and ABI tests use the system C compiler as an
+independent reference, including edge cases with existing native-backend
+limitations (NaN conditions and unsigned 64-bit conversions).
+Tests cover case/enum dispatch, startup completeness,
 runtime errors, separate compilation and mixed native/LLVM objects, with
-LLVM 19 and 21. See `docs/llvm-backend-ru.md` for examples and limitations.
+LLVM 19 and 21. The ppc-floating example exercises double payloads, ordinary
+double arguments/results and printf output. See `docs/llvm-backend-ru.md`
+for examples and limitations.
 While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage

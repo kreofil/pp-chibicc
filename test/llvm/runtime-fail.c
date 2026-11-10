@@ -2,6 +2,10 @@
 typedef struct Family {} case { int item; } Family;
 int dispatch<Family *f>(int extra) = 0;
 int main(void) { Family.item f = 1; return dispatch<&f>(7); }
+#elif defined(FAIL_UNCOVERED_FLOAT)
+typedef struct Family {} case { double item; } Family;
+double dispatch<Family *f>(double extra) = 0;
+int main(void) { Family.item f = 1.5; return (int)dispatch<&f>(2.5); }
 #elif defined(FAIL_UNCOVERED_RECORD)
 typedef struct Result { long a, b, c; } Result;
 typedef struct Argument { long a, b; } Argument;

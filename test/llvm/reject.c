@@ -1,5 +1,5 @@
-#if defined(REJECT_FLOAT)
-int main(void) { double x = 1.5; return (int)x; }
+#if defined(REJECT_LONG_DOUBLE)
+int main(void) { long double x = 1.5L; return (int)x; }
 #elif defined(REJECT_AGGREGATE_FLOAT)
 struct S { double x; };
 struct S make(struct S s) { return s; }
@@ -13,9 +13,17 @@ int main(void) { struct S { unsigned int x : 3; } s = {3}; return s.x; }
 #elif defined(REJECT_VARIADIC)
 int pick(int x, ...) { return x; }
 int main(void) { return pick(1, 2); }
-#elif defined(REJECT_VARARG_FLOAT)
+#elif defined(REJECT_AGGREGATE_FLOAT_NESTED)
+struct S { struct { float x[2]; } nested; };
+int take(struct S s) { return (int)s.nested.x[0]; }
+int main(void) { struct S s = {{{3, 4}}}; return take(s); }
+#elif defined(REJECT_AGGREGATE_FLOAT_UNION)
+union U { long x; double y; };
+union U make(void) { union U u = {3}; return u; }
+int main(void) { return (int)make().x; }
+#elif defined(REJECT_VARARG_LONG_DOUBLE)
 int printf(const char *format, ...);
-int main(void) { return printf("%.1f", 1.0); }
+int main(void) { return printf("%.1Lf", 1.0L); }
 #elif defined(REJECT_NO_PROTOTYPE)
 int external();
 int main(void) { return external(3); }

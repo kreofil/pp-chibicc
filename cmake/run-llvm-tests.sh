@@ -49,7 +49,8 @@ check_execution() {
 }
 
 for source in "$source_dir"/test/llvm/valid/*.c \
-    "$source_dir"/examples/llvm/ppc-figures.c "$source_dir"/examples/llvm/ppc-by-value.c; do
+    "$source_dir"/examples/llvm/ppc-figures.c "$source_dir"/examples/llvm/ppc-by-value.c \
+    "$source_dir"/examples/llvm/ppc-floating.c; do
   name=$(basename "$source" .c)
   prefix=$result_dir/$name
   expected_status=0
@@ -58,7 +59,7 @@ for source in "$source_dir"/test/llvm/valid/*.c \
   fi
   echo "testing LLVM $name (x86, LLVM O0, LLVM O2)"
 
-  # One fixture links against a separately host-compiled translation unit.
+  # ABI fixtures link against a separately host-compiled translation unit.
   # The helper calls emitted functions as well as being called by them.
   set --
   if [ "$name" = abi ]; then
@@ -73,11 +74,16 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$host_cc" -std=c11 -O2 -c "$source_dir/test/llvm/support/record-abi-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
+  elif [ "$name" = floating-abi ]; then
+    "$host_cc" -std=c11 -O2 -c "$source_dir/test/llvm/support/floating-abi-host.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
   fi
 
-  # For the SysV record ABI, use the system compiler as an independent
-  # reference, including register-pressure and packed-record cases.
-  if [ "$name" = record-abi ]; then
+  # Use the system compiler as an independent reference for ABI boundaries
+  # and IEEE floating-point edge cases. The native backend has existing
+  # limitations here (notably NaN conditions and unsigned 64-bit conversions).
+  if [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ]; then
     "$host_cc" -std=c11 -O2 -c "$source" -o "$prefix.x86.o"
   else
     "$compiler" -c "$source" -o "$prefix.x86.o"
@@ -141,7 +147,7 @@ done
 # Abort diagnostics exercise runtime-generated variadic dprintf calls and
 # distinguish an uncovered open family from a failed closed-family startup.
 ulimit -c 0
-for feature in UNCOVERED UNCOVERED_RECORD INCOMPLETE; do
+for feature in UNCOVERED UNCOVERED_FLOAT UNCOVERED_RECORD INCOMPLETE; do
   echo "testing LLVM PPC runtime diagnostic $feature"
   prefix=$result_dir/runtime-$feature
   "$compiler" -c -DFAIL_$feature "$source_dir/test/llvm/runtime-fail.c" -o "$prefix.x86.o"
@@ -152,6 +158,7 @@ for feature in UNCOVERED UNCOVERED_RECORD INCOMPLETE; do
   "$llvm_llc" -O=2 -filetype=obj -relocation-model=pic "$prefix.O2.ll" -o "$prefix.O2.o"
   case $feature in
     UNCOVERED) message='PPC dispatch error: uncovered handler for dispatch<' ;;
+    UNCOVERED_FLOAT) message='PPC dispatch error: uncovered handler for dispatch<1>()' ;;
     UNCOVERED_RECORD) message='PPC dispatch error: uncovered handler for dispatch<1>()' ;;
     INCOMPLETE) message='PPC completeness error: missing handler for dispatch table slot' ;;
   esac
@@ -169,7 +176,7 @@ done
 
 # Unsupported source constructs must produce a compiler diagnostic instead
 # of invalid IR or a silently different executable.
-for feature in FLOAT AGGREGATE_FLOAT VARARG_AGGREGATE BITFIELD VARIADIC VARARG_FLOAT NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
+for feature in LONG_DOUBLE AGGREGATE_FLOAT AGGREGATE_FLOAT_NESTED AGGREGATE_FLOAT_UNION VARARG_AGGREGATE BITFIELD VARIADIC VARARG_LONG_DOUBLE NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
   echo "testing LLVM diagnostic $feature"
   if "$compiler" -S -emit-llvm -DREJECT_$feature \
       "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \
@@ -216,7 +223,7 @@ expect_driver_error assembler-input -S -emit-llvm "$driver_dir/input.s"
 
 printf 'preserve existing output\n' >"$driver_dir/preserved.ll"
 cp "$driver_dir/preserved.ll" "$driver_dir/preserved.expected"
-expect_driver_error unsupported-output -S -emit-llvm -DREJECT_FLOAT \
+expect_driver_error unsupported-output -S -emit-llvm -DREJECT_LONG_DOUBLE \
   "$source_dir/test/llvm/reject.c" -o "$driver_dir/preserved.ll"
 cmp "$driver_dir/preserved.expected" "$driver_dir/preserved.ll" ||
   fail "an emission failure overwrote an existing output file"
