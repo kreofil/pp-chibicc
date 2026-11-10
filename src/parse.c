@@ -495,6 +495,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   Type *ty = ty_int;
   int counter = 0;
   bool is_atomic = false;
+  bool is_volatile = false;
 
   while (is_typename(tok)) {
     // Handle storage class specifiers.
@@ -522,8 +523,13 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       continue;
     }
 
+    if (consume(&tok, tok, "volatile")) {
+      is_volatile = true;
+      continue;
+    }
+
     // These keywords are recognized but ignored.
-    if (consume(&tok, tok, "const") || consume(&tok, tok, "volatile") ||
+    if (consume(&tok, tok, "const") ||
         consume(&tok, tok, "auto") || consume(&tok, tok, "register") ||
         consume(&tok, tok, "restrict") || consume(&tok, tok, "__restrict") ||
         consume(&tok, tok, "__restrict__") || consume(&tok, tok, "_Noreturn"))
@@ -674,6 +680,10 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     ty = copy_type(ty);
     ty->is_atomic = true;
   }
+  if (is_volatile) {
+    ty = copy_type(ty);
+    ty->is_volatile = true;
+  }
 
   *rest = tok;
   return ty;
@@ -710,7 +720,12 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     if (ty2->kind == TY_ARRAY) {
       // "array of T" is converted to "pointer to T" only in the parameter
       // context. For example, *argv[] is converted to **argv by this.
-      ty2 = pointer_to(ty2->base);
+      Type *base = ty2->base;
+      if (ty2->is_volatile) {
+        base = copy_type(base);
+        base->is_volatile = true;
+      }
+      ty2 = pointer_to(base);
       ty2->name = name;
     } else if (ty2->kind == TY_FUNC) {
       // Likewise, a function is converted to a pointer to a function
@@ -773,8 +788,11 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
   while (consume(&tok, tok, "*")) {
     ty = pointer_to(ty);
     while (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
-           equal(tok, "__restrict") || equal(tok, "__restrict__"))
+           equal(tok, "__restrict") || equal(tok, "__restrict__")) {
+      if (equal(tok, "volatile"))
+        ty->is_volatile = true;
       tok = tok->next;
+    }
   }
   *rest = tok;
   return ty;

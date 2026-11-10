@@ -360,6 +360,12 @@ void add_type(Node *node) {
     if (node->lhs->ty->kind == TY_NULLPTR ||
         (node->rhs && node->rhs->ty->kind == TY_NULLPTR))
       error_tok(node->tok, "invalid nullptr_t operands");
+    // These operators apply integer promotions independently, rather than
+    // the usual arithmetic conversions between their two operands.
+    if (is_integer(node->lhs->ty) && node->lhs->ty->size < ty_int->size)
+      node->lhs = new_cast(node->lhs, ty_int);
+    if (node->rhs && is_integer(node->rhs->ty) && node->rhs->ty->size < ty_int->size)
+      node->rhs = new_cast(node->rhs, ty_int);
     node->ty = node->lhs->ty;
     return;
   case ND_VAR:

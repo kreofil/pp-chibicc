@@ -3,6 +3,18 @@
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
 
+The experimental `-S -emit-llvm` backend emits LLVM IR for a limited C subset
+on Linux x86-64, alongside the original assembly backend. It does not yet
+lower PPC objects or the PPC runtime; existing PPC semantics and ABI remain
+unchanged. See `docs/llvm-backend-ru.md` for the supported subset and tests.
+While adding it, the shared type pass was corrected to apply C integer
+promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
+and the result type follows the promoted left operand. Regression coverage
+is included in `test/usualconv.c` and the LLVM differential tests.
+The frontend also retains `volatile` qualifiers so the LLVM MVP can diagnose
+unsupported volatile accesses rather than silently optimize them. This does
+not add volatile lowering to the native backend.
+
 Implemented so far:
 
 - C23 `nullptr` and the distinct scalar type `nullptr_t`, declared by

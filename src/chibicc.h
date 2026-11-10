@@ -327,6 +327,7 @@ struct Type {
   int align;          // alignment
   bool is_unsigned;   // unsigned or signed
   bool is_atomic;     // true if _Atomic
+  bool is_volatile;   // retained so unsupported backends can diagnose access
   Type *origin;       // for type compatibility check
 
   // Pointer-to or array-of type. We intentionally use the same member
@@ -451,6 +452,7 @@ void add_type(Node *node);
 //
 
 void codegen(Obj *prog, FILE *out);
+void codegen_llvm(Obj *prog, FILE *out);
 int align_to(int n, int align);
 
 //

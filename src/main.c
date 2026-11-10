@@ -16,6 +16,7 @@ static bool opt_MD;
 static bool opt_MMD;
 static bool opt_MP;
 static bool opt_S;
+static bool opt_emit_llvm;
 static bool opt_c;
 static bool opt_cc1;
 static bool opt_hash_hash_hash;
@@ -36,6 +37,7 @@ static StringArray tmpfiles;
 
 static void usage(int status) {
   fprintf(stderr, "ppchibicc [ -o <path> ] <file>\n");
+  fprintf(stderr, "  -S -emit-llvm  emit experimental LLVM IR (.ll) for a subset of C\n");
   exit(status);
 }
 
@@ -154,6 +156,11 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-S")) {
       opt_S = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "-emit-llvm")) {
+      opt_emit_llvm = true;
       continue;
     }
 
@@ -348,6 +355,9 @@ static void parse_args(int argc, char **argv) {
 
   if (input_paths.len == 0)
     error("no input files");
+
+  if (opt_emit_llvm && (!opt_S || opt_c || opt_E || opt_M))
+    error("-emit-llvm requires -S and cannot be combined with -c, -E or -M");
 
   // -E implies that the input is the C macro language.
   if (opt_E)
@@ -564,11 +574,14 @@ static void cc1(void) {
   size_t buflen;
   FILE *output_buf = open_memstream(&buf, &buflen);
 
-  // Traverse the AST to emit assembly.
-  codegen(prog, output_buf);
+  // Both backends consume the same parsed and typed program.
+  if (opt_emit_llvm)
+    codegen_llvm(prog, output_buf);
+  else
+    codegen(prog, output_buf);
   fclose(output_buf);
 
-  // Write the asembly text to a file.
+  // Write the generated text only after successful code generation.
   FILE *out = open_file(output_file);
   fwrite(buf, buflen, 1, out);
   fclose(out);
@@ -723,6 +736,11 @@ int main(int argc, char **argv) {
   for (int i = 0; i < input_paths.len; i++) {
     char *input = input_paths.data[i];
 
+    if (opt_emit_llvm &&
+        (!strncmp(input, "-l", 2) || !strncmp(input, "-Wl,", 4) ||
+         get_file_type(input) != FILE_C))
+      error("-emit-llvm requires C source inputs: %s", input);
+
     if (!strncmp(input, "-l", 2)) {
       strarray_push(&ld_args, input);
       continue;
@@ -742,7 +760,7 @@ int main(int argc, char **argv) {
     if (opt_o)
       output = opt_o;
     else if (opt_S)
-      output = replace_extn(input, ".s");
+      output = replace_extn(input, opt_emit_llvm ? ".ll" : ".s");
     else
       output = replace_extn(input, ".o");
 

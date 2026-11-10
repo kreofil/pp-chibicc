@@ -1,7 +1,7 @@
 BUILD_DIR ?= build
 CMAKE ?= cmake
 
-.PHONY: all configure build test test-stage2 test-examples test-all clean distclean rebuild
+.PHONY: all configure build test test-stage2 test-examples test-llvm test-all clean distclean rebuild
 
 all: build
 
@@ -19,6 +19,9 @@ test-stage2: configure
 
 test-examples: configure
 	$(CMAKE) --build $(BUILD_DIR) --target test-examples
+
+test-llvm: configure
+	$(CMAKE) --build $(BUILD_DIR) --target test-llvm
 
 test-all: configure
 	$(CMAKE) --build $(BUILD_DIR) --target test-all

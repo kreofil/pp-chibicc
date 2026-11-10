@@ -13,6 +13,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 set(PPCHIBICC_SOURCES
   src/codegen.c
+  src/codegen-llvm.c
   src/hashmap.c
   src/main.c
   src/parse.c
@@ -232,6 +233,45 @@ add_custom_target(test-examples
 
 add_custom_target(test-all)
 add_dependencies(test-all check-stage1 test-stage2 test-examples)
+
+# Emitting textual IR needs no LLVM library. The external tools are optional
+# and used only by the explicitly requested LLVM test targets.
+set(PPCHIBICC_LLVM_VERSION "19" CACHE STRING
+    "Preferred LLVM major version for the optional LLVM tests")
+find_program(PPCHIBICC_LLVM_AS
+  NAMES llvm-as-${PPCHIBICC_LLVM_VERSION} llvm-as)
+find_program(PPCHIBICC_LLVM_OPT
+  NAMES opt-${PPCHIBICC_LLVM_VERSION} opt)
+find_program(PPCHIBICC_LLVM_LLC
+  NAMES llc-${PPCHIBICC_LLVM_VERSION} llc)
+
+function(add_llvm_test_target target compiler dependency output_name)
+  if(PPCHIBICC_LLVM_AS AND PPCHIBICC_LLVM_OPT AND PPCHIBICC_LLVM_LLC)
+    add_custom_target(${target}
+      COMMAND "${CMAKE_SOURCE_DIR}/cmake/run-llvm-tests.sh"
+              "${CMAKE_SOURCE_DIR}" "${compiler}" "${CMAKE_C_COMPILER}"
+              "${PPCHIBICC_LLVM_AS}" "${PPCHIBICC_LLVM_OPT}"
+              "${PPCHIBICC_LLVM_LLC}" "${CMAKE_BINARY_DIR}/${output_name}"
+      DEPENDS ${dependency}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "Checking LLVM IR, execution and scalar ABI (${target})"
+      USES_TERMINAL
+      VERBATIM
+    )
+  else()
+    add_custom_target(${target}
+      COMMAND "${CMAKE_COMMAND}" -E echo
+              "LLVM tests require matching llvm-as, opt and llc (LLVM 19 or newer). Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC when configuring."
+      COMMAND "${CMAKE_COMMAND}" -E false
+      VERBATIM
+    )
+  endif()
+endfunction()
+
+add_llvm_test_target(test-llvm "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-test)
+add_llvm_test_target(test-llvm-stage2 "${PPCHIBICC_STAGE2_COMPILER}"
+  ppchibicc_stage2 llvm-test-stage2)
 
 add_custom_target(distclean
   COMMAND "${CMAKE_COMMAND}"

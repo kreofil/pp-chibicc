@@ -1,0 +1,146 @@
+#!/bin/sh
+set -eu
+
+source_dir=$(realpath "$1")
+compiler=$(realpath "$2")
+host_cc=$3
+llvm_as=$4
+llvm_opt=$5
+llvm_llc=$6
+mkdir -p "$7"
+result_dir=$(realpath "$7")
+
+fail() {
+  echo "LLVM test failure: $*" >&2
+  exit 1
+}
+
+# Avoid accidentally assembling with one LLVM release and optimizing with
+# another. The compiler itself does not need any of these tools installed.
+llvm_major() {
+  "$1" --version | sed -n 's/.*LLVM version \([0-9][0-9]*\)\..*/\1/p' | head -n 1
+}
+as_major=$(llvm_major "$llvm_as")
+opt_major=$(llvm_major "$llvm_opt")
+llc_major=$(llvm_major "$llvm_llc")
+[ -n "$as_major" ] || fail "cannot determine llvm-as version"
+[ "$as_major" = "$opt_major" ] && [ "$as_major" = "$llc_major" ] ||
+  fail "llvm-as, opt and llc must have the same major version"
+[ "$as_major" -ge 19 ] || fail "LLVM 19 or newer is required"
+echo "LLVM tests: LLVM $as_major; artifacts in $result_dir"
+
+cd "$source_dir"
+
+check_execution() {
+  executable=$1
+  output_prefix=$2
+  expected_output=$3
+  expected_status=$4
+  if "$executable" >"$output_prefix.stdout" 2>"$output_prefix.stderr"; then
+    actual_status=0
+  else
+    actual_status=$?
+  fi
+  [ "$actual_status" -eq "$expected_status" ] ||
+    fail "$executable exited with $actual_status; expected $expected_status"
+  diff -u "$expected_output" "$output_prefix.stdout" ||
+    fail "unexpected output from $executable"
+  [ ! -s "$output_prefix.stderr" ] || fail "unexpected stderr from $executable"
+}
+
+for source in "$source_dir"/test/llvm/valid/*.c; do
+  name=$(basename "$source" .c)
+  prefix=$result_dir/$name
+  expected_status=0
+  if [ -f "$source_dir/test/llvm/valid/$name.status" ]; then
+    expected_status=$(cat "$source_dir/test/llvm/valid/$name.status")
+  fi
+  echo "testing LLVM $name (x86, LLVM O0, LLVM O2)"
+
+  # One fixture links against a separately host-compiled translation unit.
+  # The helper calls emitted functions as well as being called by them.
+  set --
+  if [ "$name" = abi ]; then
+    "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/abi-host.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
+  fi
+
+  "$compiler" -c "$source" -o "$prefix.x86.o"
+  "$host_cc" "$prefix.x86.o" "$@" -o "$prefix.x86.exe"
+  check_execution "$prefix.x86.exe" "$prefix.x86" \
+    "$source_dir/test/llvm/valid/$name.expected" "$expected_status"
+
+  "$compiler" -S -emit-llvm "$source" -o "$prefix.ll"
+  "$llvm_as" "$prefix.ll" -o "$prefix.bc"
+  "$llvm_opt" -passes=verify -disable-output "$prefix.bc"
+  "$llvm_llc" -O=0 -filetype=obj -relocation-model=pic "$prefix.bc" \
+    -o "$prefix.O0.o"
+  "$host_cc" "$prefix.O0.o" "$@" -o "$prefix.O0.exe"
+  check_execution "$prefix.O0.exe" "$prefix.O0" \
+    "$prefix.x86.stdout" "$expected_status"
+
+  "$llvm_opt" -S -passes='default<O2>' -verify-each "$prefix.bc" \
+    -o "$prefix.O2.ll"
+  "$llvm_llc" -O=2 -filetype=obj -relocation-model=pic "$prefix.O2.ll" \
+    -o "$prefix.O2.o"
+  "$host_cc" "$prefix.O2.o" "$@" -o "$prefix.O2.exe"
+  check_execution "$prefix.O2.exe" "$prefix.O2" \
+    "$prefix.x86.stdout" "$expected_status"
+done
+
+# Unsupported source constructs must produce a compiler diagnostic instead
+# of invalid IR or a silently different executable.
+for feature in FLOAT STRUCT PPC VARIADIC NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
+  echo "testing LLVM diagnostic $feature"
+  if "$compiler" -S -emit-llvm -DREJECT_$feature \
+      "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \
+      >"$result_dir/reject-$feature.stdout" 2>"$result_dir/reject-$feature.stderr"; then
+    fail "$feature was accepted by the initial LLVM backend"
+  fi
+  grep -q 'LLVM backend:' "$result_dir/reject-$feature.stderr" ||
+    fail "$feature failed without an LLVM backend diagnostic"
+done
+
+# Driver behavior is checked separately from IR semantics.
+driver_dir=$result_dir/driver
+mkdir -p "$driver_dir"
+cp "$source_dir/test/llvm/valid/functions.c" "$driver_dir/input.c"
+(
+  cd "$driver_dir"
+  "$compiler" -S -emit-llvm input.c
+)
+[ -s "$driver_dir/input.ll" ] || fail "default output extension is not .ll"
+"$llvm_as" "$driver_dir/input.ll" -o "$driver_dir/input.bc"
+"$compiler" -S -emit-llvm "$driver_dir/input.c" -o - >"$driver_dir/stdout.ll"
+"$llvm_as" "$driver_dir/stdout.ll" -o "$driver_dir/stdout.bc"
+cp "$driver_dir/input.c" "$driver_dir/input.ppc"
+"$compiler" -S -emit-llvm -xc "$driver_dir/input.ppc" -o "$driver_dir/explicit.ll"
+"$llvm_as" "$driver_dir/explicit.ll" -o "$driver_dir/explicit.bc"
+
+expect_driver_error() {
+  label=$1
+  shift
+  if "$compiler" "$@" >"$driver_dir/error.stdout" 2>"$driver_dir/error.stderr"; then
+    fail "driver accepted $label"
+  fi
+  [ -s "$driver_dir/error.stderr" ] || fail "no diagnostic for $label"
+}
+expect_driver_error missing-S -emit-llvm "$driver_dir/input.c"
+expect_driver_error object-mode -S -c -emit-llvm "$driver_dir/input.c"
+expect_driver_error preprocessing -S -E -emit-llvm "$driver_dir/input.c"
+expect_driver_error dependencies -S -M -emit-llvm "$driver_dir/input.c"
+expect_driver_error multiple-inputs -S -emit-llvm "$driver_dir/input.c" \
+  "$source_dir/test/llvm/valid/integers.c" -o "$driver_dir/multiple.ll"
+expect_driver_error object-input -S -emit-llvm "$result_dir/functions.x86.o"
+"$compiler" -S "$driver_dir/input.c" -o "$driver_dir/input.s"
+expect_driver_error assembler-input -S -emit-llvm "$driver_dir/input.s"
+
+printf 'preserve existing output\n' >"$driver_dir/preserved.ll"
+cp "$driver_dir/preserved.ll" "$driver_dir/preserved.expected"
+expect_driver_error unsupported-output -S -emit-llvm -DREJECT_FLOAT \
+  "$source_dir/test/llvm/reject.c" -o "$driver_dir/preserved.ll"
+cmp "$driver_dir/preserved.expected" "$driver_dir/preserved.ll" ||
+  fail "an emission failure overwrote an existing output file"
+
+echo "LLVM tests passed"
