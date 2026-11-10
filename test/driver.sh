@@ -817,4 +817,9 @@ expect_fail "struct rejects duplicate members from anonymous records" <<'EOF'
 struct Figure { struct { int a; }; union { long a; }; };
 EOF
 
+expect_fail "union rejects nonconstant static value initializer" <<'EOF'
+union Value { int number; } source = {3};
+union Value copy = source;
+EOF
+
 echo OK

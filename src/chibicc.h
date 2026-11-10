@@ -151,6 +151,7 @@ struct Obj {
   // Function
   bool is_inline;
   Obj *params;
+  Obj *ret_param; // Hidden result-buffer parameter created for large records
   Node *body;
   Obj *locals;
   Obj *va_area;

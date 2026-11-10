@@ -1,13 +1,13 @@
 #if defined(REJECT_FLOAT)
 int main(void) { double x = 1.5; return (int)x; }
-#elif defined(REJECT_AGGREGATE_ARGUMENT)
+#elif defined(REJECT_AGGREGATE_FLOAT)
+struct S { double x; };
+struct S make(struct S s) { return s; }
+int main(void) { struct S s = {3}; return (int)make(s).x; }
+#elif defined(REJECT_VARARG_AGGREGATE)
 struct S { int x; };
-int take(struct S s) { return s.x; }
-int main(void) { struct S s = {3}; return take(s); }
-#elif defined(REJECT_AGGREGATE_RESULT)
-struct S { int x; };
-struct S make(void) { struct S s = {3}; return s; }
-int main(void) { return make().x; }
+int take(int n, ...);
+int main(void) { struct S s = {3}; return take(1, s); }
 #elif defined(REJECT_BITFIELD)
 int main(void) { struct S { unsigned int x : 3; } s = {3}; return s.x; }
 #elif defined(REJECT_VARIADIC)

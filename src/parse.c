@@ -1421,6 +1421,16 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
   }
 
   if (init->ty->kind == TY_UNION) {
+    if (!equal(tok, "{")) {
+      Node *expr = assign(rest, tok);
+      add_type(expr);
+      if (expr->ty->kind == TY_UNION) {
+        if (!is_assignable(init->ty, expr->ty))
+          error_tok(expr->tok, "incompatible union initializer");
+        init->expr = expr;
+        return;
+      }
+    }
     union_initializer(rest, tok, init);
     return;
   }
@@ -1530,7 +1540,7 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
     return node;
   }
 
-  if (ty->kind == TY_UNION) {
+  if (ty->kind == TY_UNION && !init->expr) {
     Member *mem = init->mem ? init->mem : ty->members;
     InitDesg desg2 = {desg, 0, mem};
     return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
@@ -1892,6 +1902,8 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
   }
 
   if (ty->kind == TY_UNION) {
+    if (init->expr)
+      error_tok(init->expr->tok, "union expression initializer is not supported for static storage");
     if (!init->mem)
       return cur;
     return write_gvar_data(cur, init->children[init->mem->idx],
@@ -4884,7 +4896,7 @@ static Token *finish_function(Token *tok, Obj *fn, Type *ty) {
   // as the hidden first parameter.
   Type *rty = ty->return_ty;
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
-    new_lvar("", pointer_to(rty));
+    fn->ret_param = new_lvar("", pointer_to(rty));
 
   fn->params = locals;
 
@@ -5382,6 +5394,9 @@ static Obj *ppc_default_handler(PpcFunc *ppc_fn, Token *tok) {
   Obj **params = calloc(ppc_fn->ppc_param_count, sizeof(Obj *));
   for (int i = ppc_fn->ppc_param_count - 1; i >= 0; i--)
     params[i] = new_generated_lvar(&locals, pointer_to(ppc_fn->base_tys[i]));
+  Type *rty = ppc_fn->return_ty;
+  if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
+    fn->ret_param = new_generated_lvar(&locals, pointer_to(rty));
   fn->params = locals;
   fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
 

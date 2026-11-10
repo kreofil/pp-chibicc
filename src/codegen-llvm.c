@@ -17,6 +17,20 @@ struct LlvmRef {
   bool emitted;
 };
 
+typedef struct LlvmArgSlot LlvmArgSlot;
+struct LlvmArgSlot {
+  LlvmArgSlot *next;
+  Node *arg;
+  char *addr;
+};
+
+typedef struct {
+  bool memory;
+  int count;
+  int bits[2];
+  int offsets[2];
+} LlvmAbi;
+
 static FILE *llvm_out;
 static Obj *llvm_prog;
 static Obj *llvm_fn;
@@ -28,6 +42,9 @@ static char *llvm_block;
 static bool llvm_terminated;
 static bool llvm_memset;
 static bool llvm_memmove;
+static LlvmArgSlot *llvm_arg_slots;
+static int llvm_arg_slot_id;
+static LlvmAbi llvm_return_abi;
 
 static char *llvm_expr(Node *node);
 static void llvm_stmt(Node *node);
@@ -113,6 +130,112 @@ static char *llvm_abi_attr(Type *ty) {
   return "";
 }
 
+// The supported records contain only INTEGER-class fields. Classify actual
+// fields, not padding: an aligned record may have a wholly empty eightbyte.
+// Unaligned fields and records larger than two eightbytes use memory.
+static bool llvm_abi_fields(Type *ty, int offset, int *ends) {
+  if (!ty->size)
+    return true;
+  if (offset % MAX(1, ty->align))
+    return false;
+  if (llvm_aggregate(ty)) {
+    for (Member *mem = ty->members; mem; mem = mem->next)
+      if (!llvm_abi_fields(mem->ty, offset + mem->offset, ends))
+        return false;
+  } else if (ty->kind == TY_ARRAY) {
+    for (int i = 0; i < ty->array_len; i++)
+      if (!llvm_abi_fields(ty->base, offset + i * ty->base->size, ends))
+        return false;
+  } else {
+    for (int i = offset; i < offset + ty->size; i++) {
+      if (i < 0 || i >= 16)
+        return false;
+      ends[i / 8] = MAX(ends[i / 8], i % 8 + 1);
+    }
+  }
+  return true;
+}
+
+static void llvm_record_abi(Type *ty, LlvmAbi *abi) {
+  memset(abi, 0, sizeof(*abi));
+  int ends[2] = {};
+  if (ty->size > 16 || !llvm_abi_fields(ty, 0, ends)) {
+    abi->memory = true;
+    return;
+  }
+  for (int i = 0; i < 2; i++)
+    if (ends[i]) {
+      abi->offsets[abi->count] = i * 8;
+      abi->bits[abi->count++] = ends[i] * 8;
+    }
+}
+
+static void llvm_parameter_abi(Type *ty, int *gp, LlvmAbi *abi) {
+  llvm_record_abi(ty, abi);
+  if (!abi->memory && abi->count > 6 - *gp)
+    abi->memory = true;
+  if (!abi->memory)
+    *gp += abi->count;
+}
+
+static char *llvm_return_type(Type *ty) {
+  if (!llvm_aggregate(ty))
+    return llvm_type(ty);
+  LlvmAbi abi;
+  llvm_record_abi(ty, &abi);
+  if (abi.memory || !abi.count)
+    return "void";
+  if (abi.count == 1)
+    return format("i%d", abi.bits[0]);
+  return format("{ i%d, i%d }", abi.bits[0], abi.bits[1]);
+}
+
+static char *llvm_list_append(char *list, char *item) {
+  return format("%s%s%s", list, *list ? ", " : "", item);
+}
+
+// Produce the same lowering for declarations, definitions and variadic call
+// prototypes. byval must not consume a GP register; a hidden sret pointer does.
+static char *llvm_parameters(Type *ty, bool names, bool attributes) {
+  char *list = "";
+  int gp = 0;
+  if (llvm_aggregate(ty->return_ty)) {
+    LlvmAbi abi;
+    llvm_record_abi(ty->return_ty, &abi);
+    if (abi.memory) {
+      list = format("ptr%s%s", attributes ?
+                    format(" sret(%s) align %d", llvm_storage_type(ty->return_ty),
+                           MAX(1, ty->return_ty->align)) : "",
+                    names ? " %sret" : "");
+      gp = 1;
+    }
+  }
+  int index = 0;
+  for (Type *param = ty->params; param; param = param->next, index++) {
+    if (llvm_aggregate(param)) {
+      LlvmAbi abi;
+      llvm_parameter_abi(param, &gp, &abi);
+      if (abi.memory) {
+        list = llvm_list_append(list, format("ptr%s%s", attributes ?
+          format(" byval(%s) align %d", llvm_storage_type(param), MAX(8, param->align)) : "",
+          names ? format(" %%a%d", index) : ""));
+      } else {
+        for (int i = 0; i < abi.count; i++)
+          list = llvm_list_append(list, format("i%d%s", abi.bits[i],
+            names ? format(" %%a%d_%d", index, i) : ""));
+      }
+    } else {
+      list = llvm_list_append(list, format("%s %s%s", llvm_type(param),
+        attributes ? llvm_abi_attr(param) : "",
+        names ? format("%%a%d", index) : ""));
+      gp = MIN(6, gp + 1);
+    }
+  }
+  if (ty->is_variadic)
+    list = llvm_list_append(list, "...");
+  return list;
+}
+
 static char *llvm_global_name(char *name) {
   char *buf = calloc(1, strlen(name) * 3 + 4);
   char *p = buf;
@@ -196,6 +319,77 @@ static char *llvm_addr_var(Obj *obj) {
     if (local->obj == obj)
       return local->addr;
   error("LLVM backend: local variable has no allocation");
+}
+
+static char *llvm_offset(char *addr, int offset) {
+  if (!offset)
+    return addr;
+  char *result = llvm_reg();
+  llvm_print("  %s = getelementptr i8, ptr %s, i64 %d", result, addr, offset);
+  return result;
+}
+
+static void llvm_copy(char *dest, char *source, Type *ty) {
+  llvm_memmove = true;
+  llvm_print("  call void @llvm.memmove.p0.p0.i64(ptr %s, ptr %s, i64 %d, i1 false)",
+             dest, source, ty->size);
+}
+
+static char *llvm_load_piece(char *addr, LlvmAbi *abi, int index) {
+  addr = llvm_offset(addr, abi->offsets[index]);
+  char *value = llvm_reg();
+  llvm_print("  %s = load i%d, ptr %s, align 1", value, abi->bits[index], addr);
+  return value;
+}
+
+static void llvm_store_piece(char *addr, LlvmAbi *abi, int index, char *value) {
+  addr = llvm_offset(addr, abi->offsets[index]);
+  llvm_print("  store i%d %s, ptr %s, align 1", abi->bits[index], value, addr);
+}
+
+// Snapshot aggregate arguments into reusable entry-block slots. An alloca at
+// a call inside a loop would otherwise grow the stack on every iteration.
+static void llvm_argument_slots(Node *node) {
+  if (!node)
+    return;
+  if (node->kind == ND_FUNCALL) {
+    for (Node *arg = node->args; arg; arg = arg->next) {
+      if (!llvm_aggregate(arg->ty))
+        continue;
+      bool found = false;
+      for (LlvmArgSlot *slot = llvm_arg_slots; slot; slot = slot->next)
+        if (slot->arg == arg)
+          found = true;
+      if (found)
+        continue;
+      llvm_check_object(arg->ty, arg->tok);
+      LlvmArgSlot *slot = calloc(1, sizeof(LlvmArgSlot));
+      slot->arg = arg;
+      slot->addr = format("%%arg%d", ++llvm_arg_slot_id);
+      slot->next = llvm_arg_slots;
+      llvm_arg_slots = slot;
+      llvm_print("  %s = alloca %s, align %d", slot->addr,
+                 llvm_storage_type(arg->ty), MAX(8, arg->ty->align));
+    }
+  }
+  llvm_argument_slots(node->lhs);
+  llvm_argument_slots(node->rhs);
+  llvm_argument_slots(node->cond);
+  llvm_argument_slots(node->then);
+  llvm_argument_slots(node->els);
+  llvm_argument_slots(node->init);
+  llvm_argument_slots(node->inc);
+  for (Node *child = node->body; child; child = child->next)
+    llvm_argument_slots(child);
+  for (Node *arg = node->args; arg; arg = arg->next)
+    llvm_argument_slots(arg);
+}
+
+static char *llvm_argument_slot(Node *arg) {
+  for (LlvmArgSlot *slot = llvm_arg_slots; slot; slot = slot->next)
+    if (slot->arg == arg)
+      return slot->addr;
+  error("LLVM backend: aggregate argument has no allocation");
 }
 
 static char *llvm_bool(char *value, Type *ty) {
@@ -342,9 +536,19 @@ static char *llvm_conditional(Node *node) {
 static void llvm_check_signature(Type *ty, Token *tok, bool definition) {
   if (ty->is_variadic && (definition || !ty->params))
     llvm_unsupported(tok, "variadic definitions or unprototyped functions");
-  llvm_check_scalar(ty->return_ty, tok);
+  if (llvm_aggregate(ty->return_ty))
+    llvm_check_object(ty->return_ty, tok);
+  else
+    llvm_check_scalar(ty->return_ty, tok);
+  if (llvm_aggregate(ty->return_ty) && ty->return_ty->size < 0)
+    llvm_unsupported(tok, "incomplete aggregate ABI types");
   for (Type *param = ty->params; param; param = param->next) {
-    llvm_check_scalar(param, tok);
+    if (llvm_aggregate(param))
+      llvm_check_object(param, tok);
+    else
+      llvm_check_scalar(param, tok);
+    if (llvm_aggregate(param) && param->size < 0)
+      llvm_unsupported(tok, "incomplete aggregate ABI types");
     if (param->kind == TY_VOID || param->kind == TY_ARRAY || param->kind == TY_FUNC)
       llvm_unsupported(tok, "this parameter type");
   }
@@ -356,32 +560,76 @@ static char *llvm_call(Node *node) {
     llvm_unsupported(node->tok, "alloca");
   char *callee = llvm_expr(node->lhs);
   char *args = "";
+  Type *ret = node->func_ty->return_ty;
+  LlvmAbi ret_abi = {};
+  char *ret_addr = NULL;
+  int gp = 0;
+  if (llvm_aggregate(ret)) {
+    llvm_record_abi(ret, &ret_abi);
+    ret_addr = llvm_addr_var(node->ret_buffer);
+    if (ret_abi.memory) {
+      args = format("ptr sret(%s) align %d %s", llvm_storage_type(ret),
+                    MAX(1, ret->align), ret_addr);
+      gp = 1;
+    }
+  }
   Type *param = node->func_ty->params;
   for (Node *arg = node->args; arg; arg = arg->next) {
     if (!param && !node->func_ty->is_variadic)
       llvm_unsupported(node->tok, "arguments without a fixed prototype");
     Type *target = param ? param : arg->ty;
-    if (!param && is_integer(target) && target->size < ty_int->size)
-      target = ty_int;
-    char *value = llvm_cast(llvm_expr(arg), arg->ty, target, arg->tok);
-    args = format("%s%s%s %s%s", args, arg == node->args ? "" : ", ",
-                  llvm_type(target), param ? llvm_abi_attr(target) : "", value);
+    if (llvm_aggregate(target)) {
+      if (!param)
+        llvm_unsupported(arg->tok, "aggregate variadic arguments");
+      if (!llvm_aggregate(arg->ty) || !is_assignable(target, arg->ty))
+        error_tok(arg->tok, "LLVM backend: incompatible aggregate argument");
+      LlvmAbi abi;
+      llvm_parameter_abi(target, &gp, &abi);
+      char *source = llvm_expr(arg);
+      char *slot = llvm_argument_slot(arg);
+      llvm_copy(slot, source, target);
+      if (abi.memory) {
+        args = llvm_list_append(args, format("ptr byval(%s) align %d %s",
+          llvm_storage_type(target), MAX(8, target->align), slot));
+      } else {
+        for (int i = 0; i < abi.count; i++)
+          args = llvm_list_append(args, format("i%d %s", abi.bits[i],
+            llvm_load_piece(slot, &abi, i)));
+      }
+    } else {
+      if (!param && is_integer(target) && target->size < ty_int->size)
+        target = ty_int;
+      if (target->kind == TY_VOID)
+        llvm_unsupported(arg->tok, "void arguments");
+      char *value = llvm_cast(llvm_expr(arg), arg->ty, target, arg->tok);
+      args = llvm_list_append(args, format("%s %s%s", llvm_type(target),
+        param ? llvm_abi_attr(target) : "", value));
+      gp = MIN(6, gp + 1);
+    }
     if (param)
       param = param->next;
   }
   if (param)
     llvm_unsupported(node->tok, "a call with missing arguments");
-  Type *ret = node->func_ty->return_ty;
-  char *result = ret->kind == TY_VOID ? NULL : llvm_reg();
+  char *ret_type = llvm_return_type(ret);
+  char *result = !strcmp(ret_type, "void") ? NULL : llvm_reg();
   char *prototype = "";
-  if (node->func_ty->is_variadic) {
-    for (Type *ty = node->func_ty->params; ty; ty = ty->next)
-      prototype = format("%s%s%s", prototype,
-                         ty == node->func_ty->params ? "" : ", ", llvm_type(ty));
-    prototype = format(" (%s, ...)", prototype);
-  }
+  if (node->func_ty->is_variadic)
+    prototype = format(" (%s)", llvm_parameters(node->func_ty, false, false));
   llvm_print("  %scall %s%s%s %s(%s)", result ? format("%s = ", result) : "",
-             llvm_abi_attr(ret), llvm_type(ret), prototype, callee, args);
+             llvm_aggregate(ret) ? "" : llvm_abi_attr(ret), ret_type, prototype, callee, args);
+  if (ret_addr) {
+    if (!ret_abi.memory)
+      for (int i = 0; i < ret_abi.count; i++) {
+        char *piece = result;
+        if (ret_abi.count > 1) {
+          piece = llvm_reg();
+          llvm_print("  %s = extractvalue %s %s, %d", piece, ret_type, result, i);
+        }
+        llvm_store_piece(ret_addr, &ret_abi, i, piece);
+      }
+    return ret_addr;
+  }
   return result ? result : "0";
 }
 
@@ -464,9 +712,7 @@ static char *llvm_expr(Node *node) {
     if (llvm_aggregate(node->ty)) {
       llvm_check_object(node->ty, node->tok);
       char *source = llvm_expr(node->rhs);
-      llvm_memmove = true;
-      llvm_print("  call void @llvm.memmove.p0.p0.i64(ptr %s, ptr %s, i64 %d, i1 false)",
-                 addr, source, node->ty->size);
+      llvm_copy(addr, source, node->ty);
       return addr;
     }
     llvm_check_scalar(node->ty, node->tok);
@@ -563,6 +809,36 @@ static void llvm_stmt(Node *node) {
     return;
   case ND_RETURN: {
     Type *ty = llvm_fn->ty->return_ty;
+    if (llvm_aggregate(ty)) {
+      if (!node->lhs || !llvm_aggregate(node->lhs->ty) ||
+          !is_assignable(ty, node->lhs->ty))
+        error_tok(node->tok, "LLVM backend: incompatible aggregate return value");
+      char *source = llvm_expr(node->lhs);
+      if (llvm_return_abi.memory) {
+        llvm_copy("%sret", source, ty);
+        llvm_print("  ret void");
+      } else if (!llvm_return_abi.count) {
+        llvm_print("  ret void");
+      } else {
+        char *result = NULL;
+        char *ret_type = llvm_return_type(ty);
+        for (int i = 0; i < llvm_return_abi.count; i++) {
+          char *piece = llvm_load_piece(source, &llvm_return_abi, i);
+          if (llvm_return_abi.count == 1) {
+            result = piece;
+          } else {
+            char *inserted = llvm_reg();
+            llvm_print("  %s = insertvalue %s %s, i%d %s, %d", inserted,
+                       ret_type, result ? result : "poison",
+                       llvm_return_abi.bits[i], piece, i);
+            result = inserted;
+          }
+        }
+        llvm_print("  ret %s %s", ret_type, result);
+      }
+      llvm_terminated = true;
+      return;
+    }
     char *value = "0";
     if (node->lhs)
       value = llvm_cast(llvm_expr(node->lhs), node->lhs->ty, ty, node->tok);
@@ -723,23 +999,19 @@ static void llvm_function(Obj *fn) {
       ref->emitted = true;
   llvm_fn = fn;
   llvm_locals = NULL;
+  llvm_arg_slots = NULL;
+  llvm_arg_slot_id = 0;
+  memset(&llvm_return_abi, 0, sizeof(llvm_return_abi));
+  if (llvm_aggregate(fn->ty->return_ty))
+    llvm_record_abi(fn->ty->return_ty, &llvm_return_abi);
   llvm_reg_id = 0;
   llvm_block_id = 0;
   llvm_block = "entry";
   llvm_terminated = false;
 
-  fprintf(llvm_out, "\ndefine %s%s%s %s(", fn->is_static ? "internal " : "",
-          llvm_abi_attr(fn->ty->return_ty), llvm_type(fn->ty->return_ty),
-          llvm_global_name(fn->name));
-  int index = 0;
-  // Generated error handlers may leave unused ordinary parameters out of
-  // fn->params. Their IR definition still needs the full declared prototype.
-  for (Type *param = fn->ty->params; param; param = param->next) {
-    fprintf(llvm_out, "%s%s %s%%a%d", index ? ", " : "", llvm_type(param),
-            llvm_abi_attr(param), index);
-    index++;
-  }
-  llvm_print(") {");
+  llvm_print("\ndefine %s%s%s %s(%s) {", fn->is_static ? "internal " : "",
+             llvm_abi_attr(fn->ty->return_ty), llvm_return_type(fn->ty->return_ty),
+             llvm_global_name(fn->name), llvm_parameters(fn->ty, true, true));
   llvm_print("\"entry\":");
   int local_id = 0;
   for (Obj *obj = fn->locals; obj; obj = obj->next) {
@@ -754,15 +1026,46 @@ static void llvm_function(Obj *fn) {
     llvm_print("  %s = alloca %s, align %d", local->addr,
                llvm_storage_type(obj->ty), MAX(1, obj->align));
   }
-  index = 0;
-  for (Obj *param = fn->params; param; param = param->next)
-    llvm_print("  store %s %%a%d, ptr %s, align 1", llvm_type(param->ty),
-               index++, llvm_addr_var(param));
+  llvm_argument_slots(fn->body);
+  Obj *param = fn->params;
+  if (fn->ret_param) {
+    if (!llvm_return_abi.memory || param != fn->ret_param)
+      error("LLVM backend: inconsistent hidden return parameter");
+    llvm_print("  store ptr %%sret, ptr %s, align 1", llvm_addr_var(param));
+    param = param->next;
+  }
+  int gp = llvm_return_abi.memory ? 1 : 0;
+  int index = 0;
+  for (Type *ty = fn->ty->params; ty; ty = ty->next, index++) {
+    if (llvm_aggregate(ty)) {
+      LlvmAbi abi;
+      llvm_parameter_abi(ty, &gp, &abi);
+      if (param) {
+        char *addr = llvm_addr_var(param);
+        if (abi.memory)
+          llvm_copy(addr, format("%%a%d", index), ty);
+        else
+          for (int i = 0; i < abi.count; i++)
+            llvm_store_piece(addr, &abi, i, format("%%a%d_%d", index, i));
+      }
+    } else {
+      if (param)
+        llvm_print("  store %s %%a%d, ptr %s, align 1", llvm_type(ty),
+                   index, llvm_addr_var(param));
+      gp = MIN(6, gp + 1);
+    }
+    // Generated abort handlers can omit their unused ordinary parameters.
+    if (param)
+      param = param->next;
+  }
   llvm_stmt(fn->body);
   if (!llvm_terminated) {
     Type *ret = fn->ty->return_ty;
-    if (ret->kind == TY_VOID)
+    if (ret->kind == TY_VOID || (llvm_aggregate(ret) &&
+        (llvm_return_abi.memory || !llvm_return_abi.count)))
       llvm_print("  ret void");
+    else if (llvm_aggregate(ret))
+      llvm_print("  ret %s zeroinitializer", llvm_return_type(ret));
     else
       llvm_print("  ret %s %s", llvm_type(ret), llvm_pointer(ret) ? "null" : "0");
   }
@@ -840,16 +1143,9 @@ void codegen_llvm(Obj *prog, FILE *out) {
       continue;
     }
     llvm_check_signature(obj->ty, obj->tok, false);
-    fprintf(llvm_out, "declare %s%s %s(", llvm_abi_attr(obj->ty->return_ty),
-            llvm_type(obj->ty->return_ty), llvm_global_name(obj->name));
-    int index = 0;
-    for (Type *param = obj->ty->params; param; param = param->next) {
-      fprintf(llvm_out, "%s%s %s", index++ ? ", " : "", llvm_type(param),
-              llvm_abi_attr(param));
-    }
-    if (obj->ty->is_variadic)
-      fprintf(llvm_out, ", ...");
-    llvm_print(")");
+    llvm_print("declare %s%s %s(%s)", llvm_abi_attr(obj->ty->return_ty),
+               llvm_return_type(obj->ty->return_ty), llvm_global_name(obj->name),
+               llvm_parameters(obj->ty, false, true));
   }
   if (llvm_memset)
     llvm_print("declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)");

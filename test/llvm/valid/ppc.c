@@ -27,6 +27,11 @@ int choose<Choice.second *c>(void) { return c->value + 20; }
 Shape.rectangle global_shape = {7, {2, 6}};
 Choice global_choice = Choice.second;
 
+Shape.rectangle copy_rectangle(Shape.rectangle value) {
+  value.id++;
+  return value;
+}
+
 int main(void) {
   Shape.rectangle r = {10, {3, 4}};
   Shape.square s = {20, 5};
@@ -56,6 +61,10 @@ int main(void) {
     return 5;
   if (choose<&values[1]>() != 24 || choose<&global_choice>() != 20)
     return 6;
+  Shape.rectangle returned = copy_rectangle(r);
+  if (measure<&returned>(0) != 23 || r.id != 10 ||
+      get_spec_var_index(&returned) != get_subtype_index(Shape.rectangle))
+    return 7;
   printf("PPC runtime OK\n");
   return 0;
 }

@@ -48,7 +48,8 @@ check_execution() {
   [ ! -s "$output_prefix.stderr" ] || fail "unexpected stderr from $executable"
 }
 
-for source in "$source_dir"/test/llvm/valid/*.c "$source_dir"/examples/llvm/ppc-figures.c; do
+for source in "$source_dir"/test/llvm/valid/*.c \
+    "$source_dir"/examples/llvm/ppc-figures.c "$source_dir"/examples/llvm/ppc-by-value.c; do
   name=$(basename "$source" .c)
   prefix=$result_dir/$name
   expected_status=0
@@ -68,9 +69,19 @@ for source in "$source_dir"/test/llvm/valid/*.c "$source_dir"/examples/llvm/ppc-
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/record-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
+  elif [ "$name" = record-abi ]; then
+    "$host_cc" -std=c11 -O2 -c "$source_dir/test/llvm/support/record-abi-host.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
   fi
 
-  "$compiler" -c "$source" -o "$prefix.x86.o"
+  # For the SysV record ABI, use the system compiler as an independent
+  # reference, including register-pressure and packed-record cases.
+  if [ "$name" = record-abi ]; then
+    "$host_cc" -std=c11 -O2 -c "$source" -o "$prefix.x86.o"
+  else
+    "$compiler" -c "$source" -o "$prefix.x86.o"
+  fi
   "$host_cc" "$prefix.x86.o" "$@" -o "$prefix.x86.exe"
   check_execution "$prefix.x86.exe" "$prefix.x86" \
     "$source_dir/test/llvm/valid/$name.expected" "$expected_status"
@@ -130,7 +141,7 @@ done
 # Abort diagnostics exercise runtime-generated variadic dprintf calls and
 # distinguish an uncovered open family from a failed closed-family startup.
 ulimit -c 0
-for feature in UNCOVERED INCOMPLETE; do
+for feature in UNCOVERED UNCOVERED_RECORD INCOMPLETE; do
   echo "testing LLVM PPC runtime diagnostic $feature"
   prefix=$result_dir/runtime-$feature
   "$compiler" -c -DFAIL_$feature "$source_dir/test/llvm/runtime-fail.c" -o "$prefix.x86.o"
@@ -141,6 +152,7 @@ for feature in UNCOVERED INCOMPLETE; do
   "$llvm_llc" -O=2 -filetype=obj -relocation-model=pic "$prefix.O2.ll" -o "$prefix.O2.o"
   case $feature in
     UNCOVERED) message='PPC dispatch error: uncovered handler for dispatch<' ;;
+    UNCOVERED_RECORD) message='PPC dispatch error: uncovered handler for dispatch<1>()' ;;
     INCOMPLETE) message='PPC completeness error: missing handler for dispatch table slot' ;;
   esac
   for variant in x86 O0 O2; do
@@ -157,7 +169,7 @@ done
 
 # Unsupported source constructs must produce a compiler diagnostic instead
 # of invalid IR or a silently different executable.
-for feature in FLOAT AGGREGATE_ARGUMENT AGGREGATE_RESULT BITFIELD VARIADIC VARARG_FLOAT NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
+for feature in FLOAT AGGREGATE_FLOAT VARARG_AGGREGATE BITFIELD VARIADIC VARARG_FLOAT NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
   echo "testing LLVM diagnostic $feature"
   if "$compiler" -S -emit-llvm -DREJECT_$feature \
       "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \

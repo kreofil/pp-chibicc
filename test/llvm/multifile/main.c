@@ -14,6 +14,13 @@ int main(void) {
       get_spec_var_index(objects[0]) != get_subtype_index(Figure.rectangle) ||
       get_spec_var_index(objects[1]) != get_subtype_index(Figure.square))
     return 2;
+  Report previous = {0, 0, 1};
+  Report rectangle_report = report<objects[0]>(previous);
+  Report square_report = report<objects[1]>(previous);
+  if (rectangle_report.id != 7 || rectangle_report.perimeter != 14 ||
+      rectangle_report.count != 11 || square_report.id != 9 ||
+      square_report.perimeter != 20 || square_report.count != 2 || previous.count != 1)
+    return 3;
   puts("PPC multifile OK");
   return 0;
 }

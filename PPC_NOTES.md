@@ -8,7 +8,15 @@ on Linux x86-64, alongside the original assembly backend. It now supports
 struct/union storage, member access and copying, plus the existing PPC runtime
 lowering through `llvm.global_ctors` and `llvm.global_dtors` with unchanged
 registration priorities and common symbols. Existing PPC semantics and ABI
-remain unchanged. Aggregate arguments/results by value are not supported yet.
+remain unchanged. Integer/pointer-only aggregates now pass and return by value
+using the Linux x86-64 System V ABI: INTEGER eightbytes, whole-argument spill
+on register exhaustion, byval memory arguments and sret result buffers.
+Packed records with unaligned fields use memory; padding-only eightbytes do
+not consume registers. Argument snapshots are allocated once in function entry.
+The parser records explicit hidden result parameters, also for generated PPC
+abort handlers returning large records. Local union initialization from a union
+value or function result is supported; static union expression initializers
+are diagnosed. Ordinary C and PPC ABI interoperability is covered by tests.
 External variadic calls accept integer/pointer arguments, including generated
 runtime diagnostics; variadic definitions and floating-point arguments still
 produce diagnostics. Tests cover case/enum dispatch, startup completeness,
