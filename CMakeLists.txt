@@ -236,14 +236,18 @@ add_dependencies(test-all check-stage1 test-stage2 test-examples)
 
 # Emitting textual IR needs no LLVM library. The external tools are optional
 # and used only by the explicitly requested LLVM test targets.
-set(PPCHIBICC_LLVM_VERSION "19" CACHE STRING
-    "Preferred LLVM major version for the optional LLVM tests")
-find_program(PPCHIBICC_LLVM_AS
-  NAMES llvm-as-${PPCHIBICC_LLVM_VERSION} llvm-as)
-find_program(PPCHIBICC_LLVM_OPT
-  NAMES opt-${PPCHIBICC_LLVM_VERSION} opt)
-find_program(PPCHIBICC_LLVM_LLC
-  NAMES llc-${PPCHIBICC_LLVM_VERSION} llc)
+set(PPCHIBICC_LLVM_VERSION "" CACHE STRING
+    "LLVM tool suffix for optional tests (empty prefers unversioned tools)")
+function(find_llvm_tool variable tool)
+  if(PPCHIBICC_LLVM_VERSION)
+    find_program(${variable} NAMES ${tool}-${PPCHIBICC_LLVM_VERSION} ${tool})
+  else()
+    find_program(${variable} NAMES ${tool} ${tool}-21 ${tool}-20 ${tool}-19)
+  endif()
+endfunction()
+find_llvm_tool(PPCHIBICC_LLVM_AS llvm-as)
+find_llvm_tool(PPCHIBICC_LLVM_OPT opt)
+find_llvm_tool(PPCHIBICC_LLVM_LLC llc)
 
 function(add_llvm_test_target target compiler dependency output_name)
   if(PPCHIBICC_LLVM_AS AND PPCHIBICC_LLVM_OPT AND PPCHIBICC_LLVM_LLC)

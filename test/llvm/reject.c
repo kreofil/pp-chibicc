@@ -1,13 +1,21 @@
 #if defined(REJECT_FLOAT)
 int main(void) { double x = 1.5; return (int)x; }
-#elif defined(REJECT_STRUCT)
-int main(void) { struct S { int x; } s = {3}; return s.x; }
-#elif defined(REJECT_PPC)
-struct Figure {} case { int circle; };
-int main(void) { struct Figure.circle c = 3; return c.circle; }
+#elif defined(REJECT_AGGREGATE_ARGUMENT)
+struct S { int x; };
+int take(struct S s) { return s.x; }
+int main(void) { struct S s = {3}; return take(s); }
+#elif defined(REJECT_AGGREGATE_RESULT)
+struct S { int x; };
+struct S make(void) { struct S s = {3}; return s; }
+int main(void) { return make().x; }
+#elif defined(REJECT_BITFIELD)
+int main(void) { struct S { unsigned int x : 3; } s = {3}; return s.x; }
 #elif defined(REJECT_VARIADIC)
+int pick(int x, ...) { return x; }
+int main(void) { return pick(1, 2); }
+#elif defined(REJECT_VARARG_FLOAT)
 int printf(const char *format, ...);
-int main(void) { return printf("%d", 1); }
+int main(void) { return printf("%.1f", 1.0); }
 #elif defined(REJECT_NO_PROTOTYPE)
 int external();
 int main(void) { return external(3); }

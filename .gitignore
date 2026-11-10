@@ -25,6 +25,7 @@
 **/cmake-build-debug/**
 **/CMakeFiles/**
 **/build/**
+/build-llvm*/
 **/bin/**
 **/lib/**
 **/.cache/**

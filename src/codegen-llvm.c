@@ -27,6 +27,7 @@ static int llvm_block_id;
 static char *llvm_block;
 static bool llvm_terminated;
 static bool llvm_memset;
+static bool llvm_memmove;
 
 static char *llvm_expr(Node *node);
 static void llvm_stmt(Node *node);
@@ -50,6 +51,10 @@ static bool llvm_pointer(Type *ty) {
          ty->kind == TY_ARRAY || ty->kind == TY_FUNC;
 }
 
+static bool llvm_aggregate(Type *ty) {
+  return ty->kind == TY_STRUCT || ty->kind == TY_UNION;
+}
+
 static void llvm_check_scalar(Type *ty, Token *tok) {
   if (ty->is_atomic)
     llvm_unsupported(tok, "atomic types");
@@ -69,6 +74,14 @@ static void llvm_check_object(Type *ty, Token *tok) {
     llvm_check_object(ty->base, tok);
     return;
   }
+  if (llvm_aggregate(ty)) {
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+      if (mem->is_bitfield)
+        llvm_unsupported(tok, "bitfields");
+      llvm_check_object(mem->ty, tok);
+    }
+    return;
+  }
   llvm_check_scalar(ty, tok);
   if (ty->kind == TY_VOID || ty->kind == TY_FUNC)
     llvm_unsupported(tok, "this object type");
@@ -83,6 +96,10 @@ static char *llvm_type(Type *ty) {
 }
 
 static char *llvm_storage_type(Type *ty) {
+  // Use the frontend's exact size and alignment, including record padding
+  // and PPC tags. Aggregate expression values are addresses of this storage.
+  if (llvm_aggregate(ty))
+    return format("[%d x i8]", ty->size);
   if (ty->kind == TY_ARRAY)
     return format("[%d x %s]", ty->array_len, llvm_storage_type(ty->base));
   return llvm_type(ty);
@@ -192,6 +209,10 @@ static char *llvm_bool(char *value, Type *ty) {
 }
 
 static char *llvm_cast(char *value, Type *from, Type *to, Token *tok) {
+  if (to->kind == TY_VOID && llvm_aggregate(from)) {
+    llvm_check_object(from, tok);
+    return "0";
+  }
   llvm_check_scalar(from, tok);
   llvm_check_scalar(to, tok);
   if (to->kind == TY_VOID)
@@ -241,13 +262,23 @@ static char *llvm_addr(Node *node) {
     llvm_expr(node->lhs);
     return llvm_addr(node->rhs);
   case ND_MEMBER:
-    llvm_unsupported(node->tok, "struct/union/PPC member access");
+    if (node->member->is_bitfield)
+      llvm_unsupported(node->tok, "bitfields");
+    char *base = llvm_expr(node->lhs);
+    char *addr = llvm_reg();
+    llvm_print("  %s = getelementptr i8, ptr %s, i64 %d", addr, base,
+               node->member->offset);
+    return addr;
   }
   llvm_unsupported(node->tok, "this lvalue");
   return NULL;
 }
 
 static char *llvm_load(char *addr, Type *ty, Token *tok) {
+  if (llvm_aggregate(ty)) {
+    llvm_check_object(ty, tok);
+    return addr;
+  }
   llvm_check_scalar(ty, tok);
   if (ty->kind == TY_ARRAY || ty->kind == TY_FUNC)
     return addr;
@@ -279,7 +310,10 @@ static char *llvm_logical(Node *node) {
 }
 
 static char *llvm_conditional(Node *node) {
-  llvm_check_scalar(node->ty, node->tok);
+  if (llvm_aggregate(node->ty))
+    llvm_check_object(node->ty, node->tok);
+  else
+    llvm_check_scalar(node->ty, node->tok);
   char *cond = llvm_bool(llvm_expr(node->cond), node->cond->ty);
   char *then_block = llvm_label();
   char *else_block = llvm_label();
@@ -300,13 +334,14 @@ static char *llvm_conditional(Node *node) {
     return "0";
   char *result = llvm_reg();
   llvm_print("  %s = phi %s [%s, %%\"%s\"], [%s, %%\"%s\"]", result,
-             llvm_type(node->ty), then_value, then_end, else_value, else_end);
+             llvm_aggregate(node->ty) ? "ptr" : llvm_type(node->ty),
+             then_value, then_end, else_value, else_end);
   return result;
 }
 
-static void llvm_check_signature(Type *ty, Token *tok) {
-  if (ty->is_variadic)
-    llvm_unsupported(tok, "variadic or unprototyped functions");
+static void llvm_check_signature(Type *ty, Token *tok, bool definition) {
+  if (ty->is_variadic && (definition || !ty->params))
+    llvm_unsupported(tok, "variadic definitions or unprototyped functions");
   llvm_check_scalar(ty->return_ty, tok);
   for (Type *param = ty->params; param; param = param->next) {
     llvm_check_scalar(param, tok);
@@ -316,26 +351,37 @@ static void llvm_check_signature(Type *ty, Token *tok) {
 }
 
 static char *llvm_call(Node *node) {
-  llvm_check_signature(node->func_ty, node->tok);
+  llvm_check_signature(node->func_ty, node->tok, false);
   if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca"))
     llvm_unsupported(node->tok, "alloca");
   char *callee = llvm_expr(node->lhs);
   char *args = "";
   Type *param = node->func_ty->params;
   for (Node *arg = node->args; arg; arg = arg->next) {
-    if (!param)
+    if (!param && !node->func_ty->is_variadic)
       llvm_unsupported(node->tok, "arguments without a fixed prototype");
-    char *value = llvm_cast(llvm_expr(arg), arg->ty, param, arg->tok);
+    Type *target = param ? param : arg->ty;
+    if (!param && is_integer(target) && target->size < ty_int->size)
+      target = ty_int;
+    char *value = llvm_cast(llvm_expr(arg), arg->ty, target, arg->tok);
     args = format("%s%s%s %s%s", args, arg == node->args ? "" : ", ",
-                  llvm_type(param), llvm_abi_attr(param), value);
-    param = param->next;
+                  llvm_type(target), param ? llvm_abi_attr(target) : "", value);
+    if (param)
+      param = param->next;
   }
   if (param)
     llvm_unsupported(node->tok, "a call with missing arguments");
   Type *ret = node->func_ty->return_ty;
   char *result = ret->kind == TY_VOID ? NULL : llvm_reg();
-  llvm_print("  %scall %s%s %s(%s)", result ? format("%s = ", result) : "",
-             llvm_abi_attr(ret), llvm_type(ret), callee, args);
+  char *prototype = "";
+  if (node->func_ty->is_variadic) {
+    for (Type *ty = node->func_ty->params; ty; ty = ty->next)
+      prototype = format("%s%s%s", prototype,
+                         ty == node->func_ty->params ? "" : ", ", llvm_type(ty));
+    prototype = format(" (%s, ...)", prototype);
+  }
+  llvm_print("  %scall %s%s%s %s(%s)", result ? format("%s = ", result) : "",
+             llvm_abi_attr(ret), llvm_type(ret), prototype, callee, args);
   return result ? result : "0";
 }
 
@@ -414,8 +460,16 @@ static char *llvm_expr(Node *node) {
   case ND_DEREF:
     return llvm_load(llvm_expr(node->lhs), node->ty, node->tok);
   case ND_ASSIGN: {
-    llvm_check_scalar(node->ty, node->tok);
     char *addr = llvm_addr(node->lhs);
+    if (llvm_aggregate(node->ty)) {
+      llvm_check_object(node->ty, node->tok);
+      char *source = llvm_expr(node->rhs);
+      llvm_memmove = true;
+      llvm_print("  call void @llvm.memmove.p0.p0.i64(ptr %s, ptr %s, i64 %d, i1 false)",
+                 addr, source, node->ty->size);
+      return addr;
+    }
+    llvm_check_scalar(node->ty, node->tok);
     char *value = llvm_cast(llvm_expr(node->rhs), node->rhs->ty, node->ty, node->tok);
     llvm_print("  store %s %s, ptr %s, align 1", llvm_type(node->ty), value, addr);
     return value;
@@ -482,7 +536,7 @@ static char *llvm_expr(Node *node) {
   case ND_LE:
     return llvm_binary(node);
   case ND_MEMBER:
-    llvm_unsupported(node->tok, "struct/union/PPC member access");
+    return llvm_load(llvm_addr(node), node->ty, node->tok);
   case ND_CAS:
   case ND_EXCH:
     llvm_unsupported(node->tok, "atomic operations");
@@ -662,7 +716,7 @@ static void llvm_global(Obj *obj) {
 }
 
 static void llvm_function(Obj *fn) {
-  llvm_check_signature(fn->ty, fn->tok);
+  llvm_check_signature(fn->ty, fn->tok, true);
   llvm_reference(fn);
   for (LlvmRef *ref = llvm_refs; ref; ref = ref->next)
     if (!strcmp(ref->obj->name, fn->name))
@@ -678,9 +732,11 @@ static void llvm_function(Obj *fn) {
           llvm_abi_attr(fn->ty->return_ty), llvm_type(fn->ty->return_ty),
           llvm_global_name(fn->name));
   int index = 0;
-  for (Obj *param = fn->params; param; param = param->next) {
-    fprintf(llvm_out, "%s%s %s%%a%d", index ? ", " : "", llvm_type(param->ty),
-            llvm_abi_attr(param->ty), index);
+  // Generated error handlers may leave unused ordinary parameters out of
+  // fn->params. Their IR definition still needs the full declared prototype.
+  for (Type *param = fn->ty->params; param; param = param->next) {
+    fprintf(llvm_out, "%s%s %s%%a%d", index ? ", " : "", llvm_type(param),
+            llvm_abi_attr(param), index);
     index++;
   }
   llvm_print(") {");
@@ -713,21 +769,46 @@ static void llvm_function(Obj *fn) {
   llvm_print("}");
 }
 
+// PPC runtime registration is already ordinary AST. Preserve its existing
+// phase priorities when LLVM emits the ELF constructor/destructor arrays.
+static void llvm_initializers(Obj *prog, bool destructors) {
+  int count = 0;
+  for (Obj *fn = prog; fn; fn = fn->next)
+    if (fn->is_function && fn->is_definition &&
+        (destructors ? fn->fini_priority : fn->init_priority))
+      count++;
+  if (!count)
+    return;
+  llvm_print("@llvm.global_%s = appending global [%d x { i32, ptr, ptr }] [",
+             destructors ? "dtors" : "ctors", count);
+  int index = 0;
+  for (Obj *fn = prog; fn; fn = fn->next) {
+    int priority = destructors ? fn->fini_priority : fn->init_priority;
+    if (!fn->is_function || !fn->is_definition || !priority)
+      continue;
+    llvm_reference(fn);
+    llvm_print("  { i32, ptr, ptr } { i32 %d, ptr %s, ptr null }%s",
+               priority, llvm_global_name(fn->name), ++index == count ? "" : ",");
+  }
+  llvm_print("]");
+}
+
 void codegen_llvm(Obj *prog, FILE *out) {
   llvm_out = out;
   llvm_prog = prog;
   llvm_refs = NULL;
   llvm_memset = false;
-  llvm_print("; ppchibicc experimental LLVM IR backend (LLVM 19, Linux x86-64)");
+  llvm_memmove = false;
+  llvm_print("; ppchibicc experimental LLVM IR backend (LLVM 19+, Linux x86-64)");
   llvm_print("target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"");
   llvm_print("target triple = \"x86_64-pc-linux-gnu\"");
 
   for (Obj *obj = prog; obj; obj = obj->next) {
-    if (obj->init_priority || obj->fini_priority)
-      llvm_unsupported(obj->tok, "PPC runtime constructors/destructors");
     if (!obj->is_function && obj->is_definition)
       llvm_global(obj);
   }
+  llvm_initializers(prog, false);
+  llvm_initializers(prog, true);
   for (Obj *fn = prog; fn; fn = fn->next)
     if (fn->is_function && fn->is_definition && fn->is_live && !fn->is_static)
       llvm_function(fn);
@@ -758,7 +839,7 @@ void codegen_llvm(Obj *prog, FILE *out) {
                  MAX(0, obj->ty->size));
       continue;
     }
-    llvm_check_signature(obj->ty, obj->tok);
+    llvm_check_signature(obj->ty, obj->tok, false);
     fprintf(llvm_out, "declare %s%s %s(", llvm_abi_attr(obj->ty->return_ty),
             llvm_type(obj->ty->return_ty), llvm_global_name(obj->name));
     int index = 0;
@@ -766,8 +847,12 @@ void codegen_llvm(Obj *prog, FILE *out) {
       fprintf(llvm_out, "%s%s %s", index++ ? ", " : "", llvm_type(param),
               llvm_abi_attr(param));
     }
+    if (obj->ty->is_variadic)
+      fprintf(llvm_out, ", ...");
     llvm_print(")");
   }
   if (llvm_memset)
     llvm_print("declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)");
+  if (llvm_memmove)
+    llvm_print("declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)");
 }

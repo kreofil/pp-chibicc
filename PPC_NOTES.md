@@ -4,9 +4,16 @@ This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
 
 The experimental `-S -emit-llvm` backend emits LLVM IR for a limited C subset
-on Linux x86-64, alongside the original assembly backend. It does not yet
-lower PPC objects or the PPC runtime; existing PPC semantics and ABI remain
-unchanged. See `docs/llvm-backend-ru.md` for the supported subset and tests.
+on Linux x86-64, alongside the original assembly backend. It now supports
+struct/union storage, member access and copying, plus the existing PPC runtime
+lowering through `llvm.global_ctors` and `llvm.global_dtors` with unchanged
+registration priorities and common symbols. Existing PPC semantics and ABI
+remain unchanged. Aggregate arguments/results by value are not supported yet.
+External variadic calls accept integer/pointer arguments, including generated
+runtime diagnostics; variadic definitions and floating-point arguments still
+produce diagnostics. Tests cover case/enum dispatch, startup completeness,
+runtime errors, separate compilation and mixed native/LLVM objects, with
+LLVM 19 and 21. See `docs/llvm-backend-ru.md` for examples and limitations.
 While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage

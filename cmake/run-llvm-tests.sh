@@ -48,7 +48,7 @@ check_execution() {
   [ ! -s "$output_prefix.stderr" ] || fail "unexpected stderr from $executable"
 }
 
-for source in "$source_dir"/test/llvm/valid/*.c; do
+for source in "$source_dir"/test/llvm/valid/*.c "$source_dir"/examples/llvm/ppc-figures.c; do
   name=$(basename "$source" .c)
   prefix=$result_dir/$name
   expected_status=0
@@ -62,6 +62,10 @@ for source in "$source_dir"/test/llvm/valid/*.c; do
   set --
   if [ "$name" = abi ]; then
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/abi-host.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
+  elif [ "$name" = records ]; then
+    "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/record-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
   fi
@@ -89,9 +93,71 @@ for source in "$source_dir"/test/llvm/valid/*.c; do
     "$prefix.x86.stdout" "$expected_status"
 done
 
+# Each unit keeps the same common symbols and registration phases across
+# object files. Test both homogeneous builds and mixed native/LLVM objects.
+echo "testing LLVM PPC multifile (x86, O0, O2, mixed objects)"
+multifile=$result_dir/multifile
+mkdir -p "$multifile"
+for unit in base rectangle square main; do
+  source=$source_dir/test/llvm/multifile/$unit.c
+  prefix=$multifile/$unit
+  "$compiler" -c "$source" -o "$prefix.x86.o"
+  "$compiler" -S -emit-llvm "$source" -o "$prefix.ll"
+  "$llvm_as" "$prefix.ll" -o "$prefix.bc"
+  "$llvm_opt" -passes=verify -disable-output "$prefix.bc"
+  "$llvm_llc" -O=0 -filetype=obj -relocation-model=pic "$prefix.bc" -o "$prefix.O0.o"
+  "$llvm_opt" -S -passes='default<O2>' -verify-each "$prefix.bc" -o "$prefix.O2.ll"
+  "$llvm_llc" -O=2 -filetype=obj -relocation-model=pic "$prefix.O2.ll" -o "$prefix.O2.o"
+done
+for variant in x86 O0 O2; do
+  "$host_cc" "$multifile/base.$variant.o" "$multifile/rectangle.$variant.o" \
+    "$multifile/square.$variant.o" "$multifile/main.$variant.o" -o "$multifile/$variant.exe"
+  check_execution "$multifile/$variant.exe" "$multifile/$variant" \
+    "$source_dir/test/llvm/multifile/expected.txt" 0
+done
+for native in base rectangle square main; do
+  set --
+  for unit in base rectangle square main; do
+    variant=O2
+    [ "$unit" != "$native" ] || variant=x86
+    set -- "$@" "$multifile/$unit.$variant.o"
+  done
+  "$host_cc" "$@" -o "$multifile/mixed-$native.exe"
+  check_execution "$multifile/mixed-$native.exe" "$multifile/mixed-$native" \
+    "$source_dir/test/llvm/multifile/expected.txt" 0
+done
+
+# Abort diagnostics exercise runtime-generated variadic dprintf calls and
+# distinguish an uncovered open family from a failed closed-family startup.
+ulimit -c 0
+for feature in UNCOVERED INCOMPLETE; do
+  echo "testing LLVM PPC runtime diagnostic $feature"
+  prefix=$result_dir/runtime-$feature
+  "$compiler" -c -DFAIL_$feature "$source_dir/test/llvm/runtime-fail.c" -o "$prefix.x86.o"
+  "$compiler" -S -emit-llvm -DFAIL_$feature "$source_dir/test/llvm/runtime-fail.c" -o "$prefix.ll"
+  "$llvm_as" "$prefix.ll" -o "$prefix.bc"
+  "$llvm_llc" -O=0 -filetype=obj -relocation-model=pic "$prefix.bc" -o "$prefix.O0.o"
+  "$llvm_opt" -S -passes='default<O2>' -verify-each "$prefix.bc" -o "$prefix.O2.ll"
+  "$llvm_llc" -O=2 -filetype=obj -relocation-model=pic "$prefix.O2.ll" -o "$prefix.O2.o"
+  case $feature in
+    UNCOVERED) message='PPC dispatch error: uncovered handler for dispatch<' ;;
+    INCOMPLETE) message='PPC completeness error: missing handler for dispatch table slot' ;;
+  esac
+  for variant in x86 O0 O2; do
+    "$host_cc" "$prefix.$variant.o" -o "$prefix.$variant.exe"
+    if "$prefix.$variant.exe" >"$prefix.$variant.stdout" 2>"$prefix.$variant.stderr"; then
+      fail "$feature runtime error was not detected ($variant)"
+    else
+      status=$?
+    fi
+    [ "$status" -eq 134 ] || fail "$feature failed without SIGABRT ($variant, $status)"
+    grep -Fq "$message" "$prefix.$variant.stderr" || fail "missing $feature diagnostic ($variant)"
+  done
+done
+
 # Unsupported source constructs must produce a compiler diagnostic instead
 # of invalid IR or a silently different executable.
-for feature in FLOAT STRUCT PPC VARIADIC NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
+for feature in FLOAT AGGREGATE_ARGUMENT AGGREGATE_RESULT BITFIELD VARIADIC VARARG_FLOAT NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
   echo "testing LLVM diagnostic $feature"
   if "$compiler" -S -emit-llvm -DREJECT_$feature \
       "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \
