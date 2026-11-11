@@ -57,7 +57,7 @@ before linking existing object inputs. Tests cover the driver at stage1/stage2,
 ABI fixtures, mixed PPC objects, archives, shared/static linking, size modes,
 IR/stdin/stdout, dependency files, path escaping and failed-tool cleanup. A
 standalone CMake application example is in examples/llvm/build-demo. See
-`docs/llvm-driver-ru.md` for commands and the optimization/tool selection rules.
+`docs/llvm-compiler-ru.md` for commands and the optimization/tool selection rules.
 The optional llvm-opt-demo target compares verify-only IR, mem2reg,
 sroa/mem2reg and default<O2> from one bitcode input with fixed llc settings.
 It validates execution against known results and native output, saves IR,

@@ -9,9 +9,9 @@ LLVM. Для проверки IR, оптимизации и получения �
 Целевая платформа первого backend — Linux x86-64 с ABI System V. Применение
 другого `target triple` само по себе не переносит frontend на другую платформу.
 
-Для обычной сборки теперь доступен
-[драйвер `--backend=llvm`](llvm-driver-ru.md): он сам вызывает `opt` и `llc`
-и формирует `.o`, ассемблер или исполняемый файл. Пример:
+Для обычной сборки используйте [режим `--backend=llvm`](llvm-compiler-ru.md).
+Компилятор сам вызывает `opt` и `llc` и формирует `.o`, ассемблер или
+исполняемый файл. Пример:
 
 ```sh
 bin/ppchibicc --backend=llvm -O2 examples/llvm/hello.c -o build/hello

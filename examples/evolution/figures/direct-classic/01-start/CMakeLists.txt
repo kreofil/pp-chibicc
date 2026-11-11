@@ -1,18 +1,15 @@
-# set minimum cmake version
 cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
-project(evo-demo)               # Название проекта
 
-# SET(CMAKE_C_COMPILER ppclang)
-SET(CMAKE_C_COMPILER ppchibicc)
+# Компилятор выбирается до project(). Путь можно задать через
+# -DCMAKE_C_COMPILER=/absolute/path/to/ppchibicc.
+set(CMAKE_C_COMPILER ppchibicc CACHE FILEPATH "Компилятор C")
+project(evo-demo LANGUAGES C)
 
 set(CMAKE_C_STANDARD 17)
-#set(CMAKE_C_STANDARD 23)
-set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type is Debug" FORCE)
-# Настройка флагов компиляции
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -xc")
+set(CMAKE_BUILD_TYPE Debug CACHE STRING "Тип сборки")
 
-set(BUILD_DIR "${CMAKE_BINARY_DIR}")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${BUILD_DIR}/../bin")
+# Исполняемый файл находится внутри выбранного каталога сборки.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 # Установка переменной со списком исходников
 set(SOURCE_FILES
@@ -43,3 +40,13 @@ set(SOURCE_FILES
 )
 
 add_executable(evo-demo ${SOURCE_FILES})
+
+# Основной режим компиляции: LLVM с уровнем O2.
+target_compile_options(evo-demo PRIVATE --backend=llvm -O2)
+target_link_options(evo-demo PRIVATE --backend=llvm)
+
+# В LLVM backend пока нет switch, используемого в этом модуле.
+# Опции исходного файла идут после опций target: последний backend побеждает.
+set_source_files_properties(figures-input.c PROPERTIES
+    COMPILE_OPTIONS --backend=x86-64
+)
