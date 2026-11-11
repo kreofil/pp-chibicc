@@ -5,4 +5,7 @@ int perimeter<Figure *f>(void);
 int pair<Figure *first, Figure *second>(int extra);
 typedef struct Report { long id, perimeter, count; } Report;
 Report report<Figure *f>(Report previous);
+typedef struct Dimensions { double width, height; } Dimensions;
+typedef struct Measurement { long id; double area; } Measurement;
+Measurement measure<Figure *f>(Dimensions extra);
 #endif

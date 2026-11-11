@@ -27,9 +27,12 @@ struct LlvmArgSlot {
 typedef struct {
   bool memory;
   int count;
-  int bits[2];
+  char *types[2];
+  bool sse[2];
   int offsets[2];
 } LlvmAbi;
+
+enum { LLVM_ABI_NONE, LLVM_ABI_INTEGER, LLVM_ABI_SSE };
 
 static FILE *llvm_out;
 static Obj *llvm_prog;
@@ -130,18 +133,6 @@ static char *llvm_float_constant(Node *node) {
   return format("0x%016lX", (unsigned long)repr.bits);
 }
 
-static bool llvm_has_float(Type *ty) {
-  if (is_flonum(ty))
-    return true;
-  if (ty->kind == TY_ARRAY)
-    return llvm_has_float(ty->base);
-  if (llvm_aggregate(ty))
-    for (Member *mem = ty->members; mem; mem = mem->next)
-      if (llvm_has_float(mem->ty))
-        return true;
-  return false;
-}
-
 static void llvm_check_abi_type(Type *ty, Token *tok) {
   if (!llvm_aggregate(ty)) {
     llvm_check_scalar(ty, tok);
@@ -150,8 +141,6 @@ static void llvm_check_abi_type(Type *ty, Token *tok) {
   llvm_check_object(ty, tok);
   if (ty->size < 0)
     llvm_unsupported(tok, "incomplete aggregate ABI types");
-  if (llvm_has_float(ty))
-    llvm_unsupported(tok, "passing or returning aggregates with floating-point fields by value");
 }
 
 static char *llvm_storage_type(Type *ty) {
@@ -172,27 +161,34 @@ static char *llvm_abi_attr(Type *ty) {
   return "";
 }
 
-// The supported records contain only INTEGER-class fields. Classify actual
-// fields, not padding: an aligned record may have a wholly empty eightbyte.
-// Unaligned fields and records larger than two eightbytes use memory.
-static bool llvm_abi_fields(Type *ty, int offset, int *ends) {
+// Classify actual fields, not padding. INTEGER wins over SSE when fields
+// share an eightbyte (including overlapping union members). Unaligned fields
+// and records larger than two eightbytes use memory. The supported float and
+// double fields need no SSEUP/X87 classes; long double is diagnosed earlier.
+static bool llvm_abi_fields(Type *ty, int offset, int *ends, int *classes,
+                            bool *fp64) {
   if (!ty->size)
     return true;
   if (offset % MAX(1, ty->align))
     return false;
   if (llvm_aggregate(ty)) {
     for (Member *mem = ty->members; mem; mem = mem->next)
-      if (!llvm_abi_fields(mem->ty, offset + mem->offset, ends))
+      if (!llvm_abi_fields(mem->ty, offset + mem->offset, ends, classes, fp64))
         return false;
   } else if (ty->kind == TY_ARRAY) {
     for (int i = 0; i < ty->array_len; i++)
-      if (!llvm_abi_fields(ty->base, offset + i * ty->base->size, ends))
+      if (!llvm_abi_fields(ty->base, offset + i * ty->base->size, ends, classes, fp64))
         return false;
   } else {
     for (int i = offset; i < offset + ty->size; i++) {
       if (i < 0 || i >= 16)
         return false;
       ends[i / 8] = MAX(ends[i / 8], i % 8 + 1);
+      int cls = is_flonum(ty) ? LLVM_ABI_SSE : LLVM_ABI_INTEGER;
+      if (cls == LLVM_ABI_INTEGER || classes[i / 8] == LLVM_ABI_NONE)
+        classes[i / 8] = cls;
+      if (ty->kind == TY_DOUBLE)
+        fp64[i / 8] = true;
     }
   }
   return true;
@@ -201,23 +197,49 @@ static bool llvm_abi_fields(Type *ty, int offset, int *ends) {
 static void llvm_record_abi(Type *ty, LlvmAbi *abi) {
   memset(abi, 0, sizeof(*abi));
   int ends[2] = {};
-  if (ty->size > 16 || !llvm_abi_fields(ty, 0, ends)) {
+  int classes[2] = {};
+  bool fp64[2] = {};
+  if (ty->size > 16 || !llvm_abi_fields(ty, 0, ends, classes, fp64)) {
     abi->memory = true;
     return;
   }
   for (int i = 0; i < 2; i++)
     if (ends[i]) {
-      abi->offsets[abi->count] = i * 8;
-      abi->bits[abi->count++] = ends[i] * 8;
+      int piece = abi->count++;
+      abi->offsets[piece] = i * 8;
+      abi->sse[piece] = classes[i] == LLVM_ABI_SSE;
+      // Two floats share one XMM register. A lone float must use a 4-byte
+      // load/store, even if the record has trailing alignment padding.
+      abi->types[piece] = !abi->sse[piece] ? format("i%d", ends[i] * 8) :
+                         fp64[i] ? "double" : ends[i] <= 4 ? "float" : "<2 x float>";
     }
 }
 
-static void llvm_parameter_abi(Type *ty, int *gp, LlvmAbi *abi) {
+static void llvm_parameter_abi(Type *ty, int *gp, int *fp, LlvmAbi *abi) {
   llvm_record_abi(ty, abi);
-  if (!abi->memory && abi->count > 6 - *gp)
+  int need_gp = 0;
+  int need_fp = 0;
+  for (int i = 0; i < abi->count; i++) {
+    if (abi->sse[i])
+      need_fp++;
+    else
+      need_gp++;
+  }
+  if (need_gp > 6 - *gp || need_fp > 8 - *fp)
     abi->memory = true;
-  if (!abi->memory)
-    *gp += abi->count;
+  // A spilled aggregate consumes neither register class. The next argument
+  // may still use registers that were insufficient for this whole record.
+  if (!abi->memory) {
+    *gp += need_gp;
+    *fp += need_fp;
+  }
+}
+
+static void llvm_scalar_abi(Type *ty, int *gp, int *fp) {
+  if (is_flonum(ty))
+    *fp = MIN(8, *fp + 1);
+  else
+    *gp = MIN(6, *gp + 1);
 }
 
 static char *llvm_return_type(Type *ty) {
@@ -228,8 +250,8 @@ static char *llvm_return_type(Type *ty) {
   if (abi.memory || !abi.count)
     return "void";
   if (abi.count == 1)
-    return format("i%d", abi.bits[0]);
-  return format("{ i%d, i%d }", abi.bits[0], abi.bits[1]);
+    return abi.types[0];
+  return format("{ %s, %s }", abi.types[0], abi.types[1]);
 }
 
 static char *llvm_list_append(char *list, char *item) {
@@ -241,6 +263,7 @@ static char *llvm_list_append(char *list, char *item) {
 static char *llvm_parameters(Type *ty, bool names, bool attributes) {
   char *list = "";
   int gp = 0;
+  int fp = 0;
   if (llvm_aggregate(ty->return_ty)) {
     LlvmAbi abi;
     llvm_record_abi(ty->return_ty, &abi);
@@ -256,22 +279,21 @@ static char *llvm_parameters(Type *ty, bool names, bool attributes) {
   for (Type *param = ty->params; param; param = param->next, index++) {
     if (llvm_aggregate(param)) {
       LlvmAbi abi;
-      llvm_parameter_abi(param, &gp, &abi);
+      llvm_parameter_abi(param, &gp, &fp, &abi);
       if (abi.memory) {
         list = llvm_list_append(list, format("ptr%s%s", attributes ?
           format(" byval(%s) align %d", llvm_storage_type(param), MAX(8, param->align)) : "",
           names ? format(" %%a%d", index) : ""));
       } else {
         for (int i = 0; i < abi.count; i++)
-          list = llvm_list_append(list, format("i%d%s", abi.bits[i],
+          list = llvm_list_append(list, format("%s%s", abi.types[i],
             names ? format(" %%a%d_%d", index, i) : ""));
       }
     } else {
       list = llvm_list_append(list, format("%s %s%s", llvm_type(param),
         attributes ? llvm_abi_attr(param) : "",
         names ? format("%%a%d", index) : ""));
-      if (!is_flonum(param))
-        gp = MIN(6, gp + 1);
+      llvm_scalar_abi(param, &gp, &fp);
     }
   }
   if (ty->is_variadic)
@@ -381,13 +403,13 @@ static void llvm_copy(char *dest, char *source, Type *ty) {
 static char *llvm_load_piece(char *addr, LlvmAbi *abi, int index) {
   addr = llvm_offset(addr, abi->offsets[index]);
   char *value = llvm_reg();
-  llvm_print("  %s = load i%d, ptr %s, align 1", value, abi->bits[index], addr);
+  llvm_print("  %s = load %s, ptr %s, align 1", value, abi->types[index], addr);
   return value;
 }
 
 static void llvm_store_piece(char *addr, LlvmAbi *abi, int index, char *value) {
   addr = llvm_offset(addr, abi->offsets[index]);
-  llvm_print("  store i%d %s, ptr %s, align 1", abi->bits[index], value, addr);
+  llvm_print("  store %s %s, ptr %s, align 1", abi->types[index], value, addr);
 }
 
 // Snapshot aggregate arguments into reusable entry-block slots. An alloca at
@@ -608,6 +630,7 @@ static char *llvm_call(Node *node) {
   LlvmAbi ret_abi = {};
   char *ret_addr = NULL;
   int gp = 0;
+  int fp = 0;
   if (llvm_aggregate(ret)) {
     llvm_record_abi(ret, &ret_abi);
     ret_addr = llvm_addr_var(node->ret_buffer);
@@ -628,7 +651,7 @@ static char *llvm_call(Node *node) {
       if (!llvm_aggregate(arg->ty) || !is_assignable(target, arg->ty))
         error_tok(arg->tok, "LLVM backend: incompatible aggregate argument");
       LlvmAbi abi;
-      llvm_parameter_abi(target, &gp, &abi);
+      llvm_parameter_abi(target, &gp, &fp, &abi);
       char *source = llvm_expr(arg);
       char *slot = llvm_argument_slot(arg);
       llvm_copy(slot, source, target);
@@ -637,7 +660,7 @@ static char *llvm_call(Node *node) {
           llvm_storage_type(target), MAX(8, target->align), slot));
       } else {
         for (int i = 0; i < abi.count; i++)
-          args = llvm_list_append(args, format("i%d %s", abi.bits[i],
+          args = llvm_list_append(args, format("%s %s", abi.types[i],
             llvm_load_piece(slot, &abi, i)));
       }
     } else {
@@ -650,8 +673,7 @@ static char *llvm_call(Node *node) {
       char *value = llvm_cast(llvm_expr(arg), arg->ty, target, arg->tok);
       args = llvm_list_append(args, format("%s %s%s", llvm_type(target),
         param ? llvm_abi_attr(target) : "", value));
-      if (!is_flonum(target))
-        gp = MIN(6, gp + 1);
+      llvm_scalar_abi(target, &gp, &fp);
     }
     if (param)
       param = param->next;
@@ -892,9 +914,9 @@ static void llvm_stmt(Node *node) {
             result = piece;
           } else {
             char *inserted = llvm_reg();
-            llvm_print("  %s = insertvalue %s %s, i%d %s, %d", inserted,
+            llvm_print("  %s = insertvalue %s %s, %s %s, %d", inserted,
                        ret_type, result ? result : "poison",
-                       llvm_return_abi.bits[i], piece, i);
+                       llvm_return_abi.types[i], piece, i);
             result = inserted;
           }
         }
@@ -1099,11 +1121,12 @@ static void llvm_function(Obj *fn) {
     param = param->next;
   }
   int gp = llvm_return_abi.memory ? 1 : 0;
+  int fp = 0;
   int index = 0;
   for (Type *ty = fn->ty->params; ty; ty = ty->next, index++) {
     if (llvm_aggregate(ty)) {
       LlvmAbi abi;
-      llvm_parameter_abi(ty, &gp, &abi);
+      llvm_parameter_abi(ty, &gp, &fp, &abi);
       if (param) {
         char *addr = llvm_addr_var(param);
         if (abi.memory)
@@ -1116,8 +1139,7 @@ static void llvm_function(Obj *fn) {
       if (param)
         llvm_print("  store %s %%a%d, ptr %s, align 1", llvm_type(ty),
                    index, llvm_addr_var(param));
-      if (!is_flonum(ty))
-        gp = MIN(6, gp + 1);
+      llvm_scalar_abi(ty, &gp, &fp);
     }
     // Generated abort handlers can omit their unused ordinary parameters.
     if (param)

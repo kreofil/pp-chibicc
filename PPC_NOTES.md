@@ -8,9 +8,13 @@ on Linux x86-64, alongside the original assembly backend. It now supports
 struct/union storage, member access and copying, plus the existing PPC runtime
 lowering through `llvm.global_ctors` and `llvm.global_dtors` with unchanged
 registration priorities and common symbols. Existing PPC semantics and ABI
-remain unchanged. Integer/pointer-only aggregates now pass and return by value
-using the Linux x86-64 System V ABI: INTEGER eightbytes, whole-argument spill
-on register exhaustion, byval memory arguments and sret result buffers.
+remain unchanged. Aggregates with integer, pointer, float and double fields
+pass and return by value using the Linux x86-64 System V ABI: INTEGER/SSE
+eightbytes, whole-argument spill on register exhaustion, byval memory arguments
+and sret result buffers. INTEGER wins when overlapping or adjacent fields
+share an eightbyte; two floats in an SSE eightbyte use LLVM <2 x float>.
+The six GP and eight SSE argument registers are counted independently, and
+spilling an aggregate leaves both budgets available to later arguments.
 Packed records with unaligned fields use memory; padding-only eightbytes do
 not consume registers. Argument snapshots are allocated once in function entry.
 The parser records explicit hidden result parameters, also for generated PPC
@@ -21,19 +25,24 @@ Scalar float/double arithmetic, comparisons, conversions, direct/indirect
 calls and memory fields are supported, including PPC scalar arguments/results.
 IEEE NaN conditions and signed zero are preserved without fast-math flags.
 Floating-point constants use exact LLVM hexadecimal encodings. Scalar SSE
-arguments do not consume the GP register budget used for integer record ABI.
+arguments do not consume the GP register budget used for record ABI.
 External variadic calls accept integer/pointer and float/double arguments,
-including float-to-double default promotion. Variadic definitions, long double
-and aggregates containing floating-point fields passed/returned by value are
-still diagnosed; floating-point record ABI classification is a separate step.
+including float-to-double default promotion and named aggregate parameters.
+Variadic definitions, long double (including record fields) and aggregates
+among unnamed variadic arguments are still diagnosed.
 Floating-point semantic and ABI tests use the system C compiler as an
 independent reference, including edge cases with existing native-backend
 limitations (NaN conditions and unsigned 64-bit conversions).
 Tests cover case/enum dispatch, startup completeness,
 runtime errors, separate compilation and mixed native/LLVM objects, with
 LLVM 19 and 21. The ppc-floating example exercises double payloads, ordinary
-double arguments/results and printf output. See `docs/llvm-backend-ru.md`
-for examples and limitations.
+double arguments/results and printf output. The ppc-floating-by-value example
+adds ordinary double-aggregate arguments/results and mixed integer/SSE results
+of PPC handlers. Multifile tests exchange these records across native/LLVM
+objects; record ABI tests cover nested arrays, unions, register rollback,
+packed/aligned records and calls in both directions with the system compiler.
+Interoperability was also checked with Clang 21 at LLVM O0 and O2.
+See `docs/llvm-backend-ru.md` for examples and limitations.
 While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage

@@ -50,7 +50,8 @@ check_execution() {
 
 for source in "$source_dir"/test/llvm/valid/*.c \
     "$source_dir"/examples/llvm/ppc-figures.c "$source_dir"/examples/llvm/ppc-by-value.c \
-    "$source_dir"/examples/llvm/ppc-floating.c; do
+    "$source_dir"/examples/llvm/ppc-floating.c \
+    "$source_dir"/examples/llvm/ppc-floating-by-value.c; do
   name=$(basename "$source" .c)
   prefix=$result_dir/$name
   expected_status=0
@@ -147,7 +148,7 @@ done
 # Abort diagnostics exercise runtime-generated variadic dprintf calls and
 # distinguish an uncovered open family from a failed closed-family startup.
 ulimit -c 0
-for feature in UNCOVERED UNCOVERED_FLOAT UNCOVERED_RECORD INCOMPLETE; do
+for feature in UNCOVERED UNCOVERED_FLOAT UNCOVERED_RECORD UNCOVERED_REAL_RECORD INCOMPLETE; do
   echo "testing LLVM PPC runtime diagnostic $feature"
   prefix=$result_dir/runtime-$feature
   "$compiler" -c -DFAIL_$feature "$source_dir/test/llvm/runtime-fail.c" -o "$prefix.x86.o"
@@ -160,6 +161,7 @@ for feature in UNCOVERED UNCOVERED_FLOAT UNCOVERED_RECORD INCOMPLETE; do
     UNCOVERED) message='PPC dispatch error: uncovered handler for dispatch<' ;;
     UNCOVERED_FLOAT) message='PPC dispatch error: uncovered handler for dispatch<1>()' ;;
     UNCOVERED_RECORD) message='PPC dispatch error: uncovered handler for dispatch<1>()' ;;
+    UNCOVERED_REAL_RECORD) message='PPC dispatch error: uncovered handler for dispatch<1>()' ;;
     INCOMPLETE) message='PPC completeness error: missing handler for dispatch table slot' ;;
   esac
   for variant in x86 O0 O2; do
@@ -176,7 +178,7 @@ done
 
 # Unsupported source constructs must produce a compiler diagnostic instead
 # of invalid IR or a silently different executable.
-for feature in LONG_DOUBLE AGGREGATE_FLOAT AGGREGATE_FLOAT_NESTED AGGREGATE_FLOAT_UNION VARARG_AGGREGATE BITFIELD VARIADIC VARARG_LONG_DOUBLE NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
+for feature in LONG_DOUBLE AGGREGATE_LONG_DOUBLE AGGREGATE_LONG_DOUBLE_NESTED AGGREGATE_LONG_DOUBLE_UNION VARARG_AGGREGATE BITFIELD VARIADIC VARARG_LONG_DOUBLE NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
   echo "testing LLVM diagnostic $feature"
   if "$compiler" -S -emit-llvm -DREJECT_$feature \
       "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \

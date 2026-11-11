@@ -17,3 +17,13 @@ long host_fixed_variadic(Pair pair, int count, ...) {
   va_end(ap);
   return pair.a + pair.b + a + b + c + d + count;
 }
+
+double host_real_variadic(FloatPair pair, IntDouble mixed, int count, ...) {
+  va_list ap;
+  va_start(ap, count);
+  double result = pair.x + 2*pair.y + 3*mixed.tag + 4*mixed.value;
+  for (int i = 0; i < count; i++)
+    result += (i + 1) * va_arg(ap, double);
+  va_end(ap);
+  return result;
+}

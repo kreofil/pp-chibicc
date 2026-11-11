@@ -1,7 +1,7 @@
 #if defined(REJECT_LONG_DOUBLE)
 int main(void) { long double x = 1.5L; return (int)x; }
-#elif defined(REJECT_AGGREGATE_FLOAT)
-struct S { double x; };
+#elif defined(REJECT_AGGREGATE_LONG_DOUBLE)
+struct S { long double x; };
 struct S make(struct S s) { return s; }
 int main(void) { struct S s = {3}; return (int)make(s).x; }
 #elif defined(REJECT_VARARG_AGGREGATE)
@@ -13,12 +13,12 @@ int main(void) { struct S { unsigned int x : 3; } s = {3}; return s.x; }
 #elif defined(REJECT_VARIADIC)
 int pick(int x, ...) { return x; }
 int main(void) { return pick(1, 2); }
-#elif defined(REJECT_AGGREGATE_FLOAT_NESTED)
-struct S { struct { float x[2]; } nested; };
+#elif defined(REJECT_AGGREGATE_LONG_DOUBLE_NESTED)
+struct S { struct { long double x[2]; } nested; };
 int take(struct S s) { return (int)s.nested.x[0]; }
 int main(void) { struct S s = {{{3, 4}}}; return take(s); }
-#elif defined(REJECT_AGGREGATE_FLOAT_UNION)
-union U { long x; double y; };
+#elif defined(REJECT_AGGREGATE_LONG_DOUBLE_UNION)
+union U { long x; long double y; };
 union U make(void) { union U u = {3}; return u; }
 int main(void) { return (int)make().x; }
 #elif defined(REJECT_VARARG_LONG_DOUBLE)

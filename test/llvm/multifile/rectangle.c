@@ -8,3 +8,8 @@ Report report<Figure.rectangle *f>(Report previous) {
   previous.count += 10;
   return previous;
 }
+Measurement measure<Figure.rectangle *f>(Dimensions extra) {
+  Measurement result = {f->id, (f->rectangle.width + extra.width) *
+                              (f->rectangle.height + extra.height)};
+  return result;
+}

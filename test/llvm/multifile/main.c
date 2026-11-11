@@ -21,6 +21,14 @@ int main(void) {
       rectangle_report.count != 11 || square_report.id != 9 ||
       square_report.perimeter != 20 || square_report.count != 2 || previous.count != 1)
     return 3;
+  Dimensions extra = {0.5, 1.25};
+  Measurement rectangle_measure = measure<objects[0]>(extra);
+  Measurement square_measure = measure<objects[1]>(extra);
+  Measurement zero_measure = measure<&zero>(extra);
+  if (rectangle_measure.id != 7 || rectangle_measure.area != 18.375 ||
+      square_measure.id != 9 || square_measure.area != 1.75 ||
+      zero_measure.id != 11 || zero_measure.area != 1.75 || extra.width != 0.5)
+    return 4;
   puts("PPC multifile OK");
   return 0;
 }

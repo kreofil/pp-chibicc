@@ -25,6 +25,15 @@ int main(void) {
     value = emitted_large(value, 0);
   if (value.a != 1 || value.b != 2 || value.c != 3)
     return 42;
+  FloatPair float_pair = {1.5f, 2.5f};
+  IntDouble mixed = {7, 11};
+  if (host_real_variadic(float_pair, mixed, 10, 1.0f, 2.0, 3.0f, 4.0,
+                         5.0f, 6.0, 7.0f, 8.0, 9.0f, 10.0) != 456.5)
+    return 43;
+  DoublePair double_pair = {7, 11};
+  DoublePair real_nested = host_double_pair(emitted_double_pair(double_pair));
+  if (real_nested.x != 28.5 || real_nested.y != 10.0)
+    return 44;
   puts("record ABI OK");
   return 0;
 }
