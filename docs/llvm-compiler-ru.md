@@ -152,6 +152,41 @@ ctest --test-dir build-llvm-app --output-on-failure
 CMake определяет compiler ID как `unknown`; приведённый проект успешно
 проходит определение ABI, сборку и CTest без принудительного задания GNU/Clang ID.
 
+### Файлы `.ppc` и `.pph`
+
+`.ppc` — файлы реализации, компилируемые как C с расширениями 4П. `.pph` —
+исключительно заголовки, подключаемые через `#include`; отдельные объекты из
+них не создаются. Для одиночного файла язык можно указать явно:
+
+```sh
+bin/ppchibicc --backend=llvm -O2 -x c main.ppc -o program
+```
+
+В CMake свойство `LANGUAGE C` задаётся файлам реализации. Для распознанного
+Clang при политике CMP0119 NEW (например, с `cmake_minimum_required(VERSION 3.20)`)
+CMake сам добавляет `-x c`. У ppchibicc compiler ID пока не распознаётся,
+поэтому это свойство выбирает C-компилятор, но нужный флаг языка не добавляет.
+Рабочая настройка для ppchibicc:
+
+```cmake
+set(SOURCE_FILES main.ppc animals.ppc)
+set(HEADER_FILES animals.pph)
+
+set_source_files_properties(${SOURCE_FILES} PROPERTIES LANGUAGE C)
+set_property(SOURCE ${SOURCE_FILES} APPEND PROPERTY COMPILE_OPTIONS -x c)
+set_source_files_properties(${HEADER_FILES} PROPERTIES HEADER_FILE_ONLY TRUE)
+
+add_executable(animals ${SOURCE_FILES} ${HEADER_FILES})
+target_compile_options(animals PRIVATE --backend=llvm -O2)
+target_link_options(animals PRIVATE --backend=llvm)
+```
+
+Заголовки остаются в списке target для отображения в IDE, но не компилируются
+отдельно. `LANGUAGE C` не следует применять ко всему списку вместе с заголовками:
+это свойство заставляет CMake компилировать файл, если не задан `HEADER_FILE_ONLY`.
+Параметр `-x c` здесь относится только к компиляции исходников и не попадает
+в линковку готовых объектов. Для исходного x86-64 backend правила расширений те же.
+
 ### Существующий пример `direct-classic/01-start`
 
 В [CMakeLists.txt этого примера](../examples/evolution/figures/direct-classic/01-start/CMakeLists.txt)
