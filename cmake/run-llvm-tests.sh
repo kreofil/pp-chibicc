@@ -252,6 +252,14 @@ for level in 0 2; do
   [ ! -s "$prefix.stderr" ] || fail 'classic figures produced stderr'
 done
 
+# Reuse the native suite's source lists and golden outputs for all eight
+# evolutionary steps, including no-ordinary-argument PPC handlers in 03/08.
+for level in 0 2; do
+  PPCHIBICC_LLVM_OPT="$llvm_opt" PPCHIBICC_LLVM_LLC="$llvm_llc" \
+    "$source_dir/cmake/run-example-tests.sh" "$source_dir" "$compiler" \
+    --backend=llvm "-O$level"
+done
+
 "$source_dir/cmake/run-llvm-driver-tests.sh" "$source_dir" "$compiler" "$host_cc" \
   "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/driver-pipeline"
 echo "LLVM tests passed"

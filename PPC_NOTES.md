@@ -57,6 +57,16 @@ cover narrow/wide types, boundary values, ranges, Duff's device and diagnostics.
 All 15 units of direct-classic/01-start now compile through LLVM, with CTest
 fixture checks. See `docs/llvm-switch-ru.md`, including the reproducible audit
 of the other standalone CMake examples and the remaining compatibility gaps.
+The eight CMake projects blocked by empty ordinary argument lists now use
+explicit (void) in the relevant PPC declarations, definitions and handlers,
+including ppList_sort, FigurePerimeter, DrawCell/isLife, FigureDestroy and
+RunThread. Calls still use empty parentheses after the PPC arguments. The
+compiler's existing treatment of unprototyped C functions is unchanged.
+The example migration changes no PPC dispatch rules or ABI. The LLVM suites
+now reuse all eight evolutionary figure fixtures at O0/O2, including stage2.
+A repeated audit builds 23 of 38 standalone CMake projects through LLVM 23;
+15 figure outputs match their fixtures. The remaining 15 failures concern
+CMake language/header settings. See docs/llvm-void-signatures-ru.md.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.

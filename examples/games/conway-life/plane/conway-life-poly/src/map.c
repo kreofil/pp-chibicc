@@ -3,21 +3,21 @@
 
 //------------------------------------------------------------------------------
 // Обобщенная функция вывода клетки
-void DrawCell<Cell* c>() {
+void DrawCell<Cell* c>(void) {
     printf("?");
 }
 // Обработчик специализации, выводящий пустую клетку
-void DrawCell<Cell.empty* c>() {
+void DrawCell<Cell.empty* c>(void) {
     printf(" ");
 }
 // Обработчик специализации, выводящий живую клетку
-void DrawCell<Cell.filled* c>() {
+void DrawCell<Cell.filled* c>(void) {
     // printf("O");
     printf("\x1b[1;32mO\x1b[0m");
     // printf("\x1b[1;31mO\x1b[0m");
 }
 // Обработчик специализации, выводящий обрамляющую клетку
-void DrawCell<Cell.locked* c>() {
+void DrawCell<Cell.locked* c>(void) {
     // printf("#");
     printf("\x1b[1;30m#\x1b[0m");
 }
@@ -60,9 +60,9 @@ void SetCellOnTheMap(Map* map, int i, int j, Cell cell) {
 
 //------------------------------------------------------------------------------
 // Проверка клетки на наличие жизни. Обобщенная функция.
-int isLife<Cell* c>() {return 0;}
+int isLife<Cell* c>(void) {return 0;}
 // Обработчик специализации, выявляющий Жизнь в клетке
-int isLife<Cell.filled* c>() {return 1;}
+int isLife<Cell.filled* c>(void) {return 1;}
 
 //------------------------------------------------------------------------------
 // Проверка окрестных клеток на число живых

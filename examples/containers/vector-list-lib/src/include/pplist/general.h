@@ -16,6 +16,6 @@ void ppList_print(FILE* f, ppList* v);
 
 // Функция, осуществляющая сортировку элементов списка.
 // Операция сортировки задается непосредственно для каждой специализации.
-void ppList_sort<ppList* v>();
+void ppList_sort<ppList* v>(void);
 
 #endif // __pplist_general__
