@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 export LC_ALL=C
+export PYTHONDONTWRITEBYTECODE=1
 
 fail() { echo "LLVM PGO benchmark: $*" >&2; exit 1; }
 [ "$#" -eq 11 ] || fail "expected PGO demo arguments followed by Python 3"
@@ -23,6 +24,7 @@ rm -f "$result_dir/report.md" "$result_dir/samples.json" "$result_dir/samples.ts
 mkdir -p "$result_dir/source" "$result_dir/objects" "$result_dir/bin"
 cp "$bench"/* "$result_dir/source/"
 cp "$source_dir/cmake/llvm-pgo-bench.py" "$result_dir/source/"
+cp "$source_dir/cmake/llvm_bench.py" "$result_dir/source/"
 "$compiler" -c "$bench/setup.c" -o "$result_dir/objects/setup.o"
 "$host_cc" -std=c11 -O2 -Wall -Wextra -Werror -fno-lto \
   -c "$bench/timer.c" -o "$result_dir/objects/timer.o"
@@ -45,7 +47,7 @@ done
   uname -a
   if command -v lscpu >/dev/null 2>&1; then lscpu; fi
   echo 'Checksums:'
-  sha256sum "$bench"/* "$source_dir/cmake/llvm-pgo-bench.py" \
+  sha256sum "$bench"/* "$source_dir/cmake/llvm-pgo-bench.py" "$source_dir/cmake/llvm_bench.py" \
     "$source_dir/cmake/run-llvm-pgo-bench.sh" "$result_dir"/objects/*.o \
     "$result_dir"/bin/*.exe
 } >"$result_dir/manifest.txt"

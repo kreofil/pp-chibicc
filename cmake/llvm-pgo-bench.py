@@ -1,61 +1,21 @@
 #!/usr/bin/env python3
 """Repeat timed, checked PPC kernels; Python and process startup are not timed."""
-import csv
-import hashlib
 import itertools
 import json
 import math
-import os
 from pathlib import Path
 import platform
-import random
-import statistics
 import subprocess
 import sys
 import time
+
+from llvm_bench import affinity, digest, measure, settings, summarize, write_tables
 
 VARIANTS = ("native", "O2", "PGO")
 WORKLOADS = ("rectangle", "square", "mixed", "growing")
 BATCH = 4096
 WARMUP = 8
 MAX_ROUNDS = 1000000
-
-
-def settings():
-    result = {}
-    for name, default, convert, low, high in (
-        ("SAMPLES", "7", int, 3, 101),
-        ("SECONDS", "0.1", float, 0.01, 1.0),
-        ("SEED", "20261111", int, 0, 2**32 - 1),
-    ):
-        key = "PPCHIBICC_BENCH_" + name
-        value = convert(os.environ.get(key, default))
-        if not low <= value <= high:
-            raise ValueError("{} must be in [{}; {}]".format(key, low, high))
-        result[name.lower()] = value
-    result["cpu"] = os.environ.get("PPCHIBICC_BENCH_CPU", "auto")
-    if result["cpu"] not in ("auto", "none") and int(result["cpu"]) < 0:
-        raise ValueError("PPCHIBICC_BENCH_CPU must be auto, none or a CPU number")
-    return result
-
-
-def affinity(requested):
-    if not hasattr(os, "sched_getaffinity"):
-        if requested not in ("auto", "none"):
-            raise ValueError("CPU affinity is unavailable on this platform")
-        return {"requested": requested, "effective": "unavailable"}
-    allowed = sorted(os.sched_getaffinity(0))
-    if requested != "none":
-        selected = allowed[0] if requested == "auto" else int(requested)
-        if selected not in allowed:
-            raise ValueError("CPU {} is outside allowed affinity {}".format(selected, allowed))
-        os.sched_setaffinity(0, {selected})
-    return {"requested": requested, "allowed": allowed,
-            "effective": sorted(os.sched_getaffinity(0))}
-
-
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def execute(directory, variant, mode, rounds):
@@ -110,23 +70,6 @@ def check(directory):
     return results
 
 
-def summarize(samples):
-    result = {}
-    for mode, variant in itertools.product(range(4), VARIANTS):
-        group = [s for s in samples if s["mode"] == mode and s["variant"] == variant]
-        wall = [s["wall_seconds"] * 1e9 / s["calls"] for s in group]
-        median = statistics.median(wall)
-        mad = statistics.median(abs(v - median) for v in wall)
-        result[mode, variant] = {
-            "workload": WORKLOADS[mode], "variant": variant, "rounds": group[0]["rounds"],
-            "median_ns": median, "mad_percent": mad / median * 100,
-            "min_ns": min(wall), "max_ns": max(wall),
-            "median_cpu_ns": statistics.median(s["cpu_seconds"] * 1e9 / s["calls"] for s in group),
-            "median_cpu_wall": statistics.median(s["cpu_seconds"] / s["wall_seconds"] for s in group),
-        }
-    return result
-
-
 def main():
     config = settings()
     if sys.argv[1:] == ["--check-config"]:
@@ -145,51 +88,11 @@ def main():
     }
     print("Checking benchmark results and argument handling", flush=True)
     info["checks"] = check(directory)
-    rng = random.Random(config["seed"])
-    info["calibration"], rounds_by_mode = [], {}
-    for mode in range(4):
-        estimates = []
-        variants = list(VARIANTS)
-        rng.shuffle(variants)
-        for variant in variants:
-            rounds = 32
-            for _ in range(8):
-                sample = execute(directory, variant, mode, rounds)
-                info["calibration"].append(sample)
-                elapsed = sample["wall_seconds"]
-                if elapsed >= min(0.02, config["seconds"] / 4) or rounds == MAX_ROUNDS:
-                    break
-                rounds = min(MAX_ROUNDS, max(rounds + 1, math.ceil(rounds * 0.025 / elapsed)))
-            estimates.append(math.ceil(rounds * config["seconds"] / elapsed))
-        # Equal work for all three variants; size it using the fastest one.
-        rounds_by_mode[mode] = max(1, min(MAX_ROUNDS, max(estimates)))
-        print("{}: {} rounds/sample for all variants".format(WORKLOADS[mode], rounds_by_mode[mode]), flush=True)
-    info["rounds_by_mode"] = rounds_by_mode
-    samples = []
-    for repeat in range(config["samples"]):
-        jobs = list(itertools.product(range(4), VARIANTS))
-        rng.shuffle(jobs)
-        for mode, variant in jobs:
-            sample = execute(directory, variant, mode, rounds_by_mode[mode])
-            sample.update(repeat=repeat + 1, order=len(samples) + 1)
-            samples.append(sample)
-            # Retain each finished sample even if a later process is interrupted.
-            (directory / "samples.json").write_text(
-                json.dumps(dict(info, samples=samples), indent=2) + "\n", encoding="utf-8")
-        print("Completed measurement block {}/{}".format(repeat + 1, config["samples"]), flush=True)
-    for variant, checksum in info["executable_sha256"].items():
-        if digest(directory / "bin" / (variant + ".exe")) != checksum:
-            raise RuntimeError("executable changed during measurement: " + variant)
-
-    with (directory / "samples.tsv").open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(samples[0]), delimiter="\t")
-        writer.writeheader()
-        writer.writerows(samples)
-    summary = summarize(samples)
-    with (directory / "summary.tsv").open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(next(iter(summary.values()))), delimiter="\t")
-        writer.writeheader()
-        writer.writerows(summary.values())
+    samples = measure(directory, info, VARIANTS, WORKLOADS,
+                      lambda variant, mode, rounds: execute(directory, variant, mode, rounds),
+                      MAX_ROUNDS)
+    summary = summarize(samples, VARIANTS, WORKLOADS)
+    write_tables(directory, samples, summary)
     report = [
         "# Время диспетчеризации 4П: native, O2 и PGO", "",
         "Дата UTC: {}. Профиль: только rectangle, 4096 вызовов.".format(info["utc"]),

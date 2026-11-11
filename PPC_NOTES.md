@@ -77,6 +77,15 @@ extension. A shared ordinary-C timer excludes startup and warmup; Python 3.8+
 calibrates equal work, pins the process CPU by default, randomizes repeated
 runs, and reports medians, MAD and raw wall/CPU times without speed thresholds.
 See `docs/llvm-pgo-benchmark-ru.md` for reproduction and interpretation.
+The optional llvm-figures-bench target exercises the existing ppVector and
+ppvector-figures perimeter code on shuffled collections, restoring and sorting
+the vector on every round. Two independent profiles (90% rectangles and 50%)
+are evaluated on new seeds and larger collections. A shared C timer and Python
+measurement protocol check sortedness and exact position-weighted checksums;
+the original ten-figure program is also compared between native and LLVM O2.
+No-argument ppVector_sort and selected FigurePerimeter signatures now use
+explicit (void), including the vector examples sharing that interface, so
+they fit the supported LLVM function subset. See `docs/llvm-figures-benchmark-ru.md`.
 While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage

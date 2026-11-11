@@ -283,7 +283,7 @@ function(add_llvm_target target script compiler dependency output_name descripti
   else()
     add_custom_target(${target}
       COMMAND "${CMAKE_COMMAND}" -E echo
-              "LLVM target ${target}: required tools are missing. Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC. llvm-dispatch-demo also needs PPCHIBICC_LLVM_LINK. llvm-pgo-demo and llvm-pgo-bench need LLVM/Clang 23+, PPCHIBICC_LLVM_LINK, PPCHIBICC_LLVM_PROFDATA, PPCHIBICC_LLVM_CLANG and the compiler-rt profile runtime. llvm-pgo-bench also needs Python 3.8+ (Python3_EXECUTABLE)."
+              "LLVM target ${target}: required tools are missing. Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC. llvm-dispatch-demo also needs PPCHIBICC_LLVM_LINK. PGO targets (llvm-pgo-demo, llvm-pgo-bench, llvm-figures-bench) need LLVM/Clang 23+, PPCHIBICC_LLVM_LINK, PPCHIBICC_LLVM_PROFDATA, PPCHIBICC_LLVM_CLANG and the compiler-rt profile runtime. Benchmark targets also need Python 3.8+ (Python3_EXECUTABLE)."
       COMMAND "${CMAKE_COMMAND}" -E false
       VERBATIM
     )
@@ -304,6 +304,10 @@ add_llvm_target(llvm-pgo-demo cmake/run-llvm-pgo-demo.sh "$<TARGET_FILE:ppchibic
   "${PPCHIBICC_LLVM_LINK}" "${PPCHIBICC_LLVM_PROFDATA}" "${PPCHIBICC_LLVM_CLANG}")
 add_llvm_target(llvm-pgo-bench cmake/run-llvm-pgo-bench.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-pgo-bench "Measuring native, LLVM O2 and PGO dispatch"
+  "${PPCHIBICC_LLVM_LINK}" "${PPCHIBICC_LLVM_PROFDATA}" "${PPCHIBICC_LLVM_CLANG}"
+  "${Python3_EXECUTABLE}")
+add_llvm_target(llvm-figures-bench cmake/run-llvm-figures-bench.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-figures-bench "Measuring collection sorting with held-out PGO workloads"
   "${PPCHIBICC_LLVM_LINK}" "${PPCHIBICC_LLVM_PROFDATA}" "${PPCHIBICC_LLVM_CLANG}"
   "${Python3_EXECUTABLE}")
 

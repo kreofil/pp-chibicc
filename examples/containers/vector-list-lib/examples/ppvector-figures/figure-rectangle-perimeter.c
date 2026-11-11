@@ -10,11 +10,11 @@
 // Прототип функции вычисления периметра прямоугольника
 double RectanglePerimeter(Rectangle *r);
 // Прототип обобщенной функции вычисления периметра
-double FigurePerimeter<Figure *f>();
+double FigurePerimeter<Figure *f>(void);
 
 //------------------------------------------------------------------------------
 // Периметр прямоугольника как фигуры
-double FigurePerimeter<Figure.rect *f>() {
+double FigurePerimeter<Figure.rect *f>(void) {
   return RectanglePerimeter(&(f->rect));
   // return (double)(2*(f->@x + f->@y));
 }

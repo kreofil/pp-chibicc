@@ -16,6 +16,6 @@ void ppVector_print(FILE* f, ppVector* v);
 
 // Функция, осуществляющая сортировку элементов вектора.
 // Операция сортировки задается непосредственно для каждой специализации.
-void ppVector_sort<ppVector* v>();
+void ppVector_sort<ppVector* v>(void);
 
 #endif // __ppvector_general__

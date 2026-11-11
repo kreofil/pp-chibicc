@@ -1,7 +1,7 @@
 BUILD_DIR ?= build
 CMAKE ?= cmake
 
-.PHONY: all configure build test test-stage2 test-examples test-llvm llvm-opt-demo llvm-dispatch-demo llvm-pgo-demo llvm-pgo-bench test-all clean distclean rebuild
+.PHONY: all configure build test test-stage2 test-examples test-llvm llvm-opt-demo llvm-dispatch-demo llvm-pgo-demo llvm-pgo-bench llvm-figures-bench test-all clean distclean rebuild
 
 all: build
 
@@ -34,6 +34,9 @@ llvm-pgo-demo: configure
 
 llvm-pgo-bench: configure
 	$(CMAKE) --build $(BUILD_DIR) --target llvm-pgo-bench
+
+llvm-figures-bench: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-figures-bench
 
 test-all: configure
 	$(CMAKE) --build $(BUILD_DIR) --target test-all
