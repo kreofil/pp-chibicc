@@ -235,7 +235,7 @@ add_custom_target(test-all)
 add_dependencies(test-all check-stage1 test-stage2 test-examples)
 
 # Emitting textual IR needs no LLVM library. The external tools are optional
-# and used only by the explicitly requested LLVM test targets.
+# and used only by explicitly requested LLVM tests and experiments.
 set(PPCHIBICC_LLVM_VERSION "" CACHE STRING
     "LLVM tool suffix for optional tests (empty prefers unversioned tools)")
 function(find_llvm_tool variable tool)
@@ -249,33 +249,35 @@ find_llvm_tool(PPCHIBICC_LLVM_AS llvm-as)
 find_llvm_tool(PPCHIBICC_LLVM_OPT opt)
 find_llvm_tool(PPCHIBICC_LLVM_LLC llc)
 
-function(add_llvm_test_target target compiler dependency output_name)
+function(add_llvm_target target script compiler dependency output_name description)
   if(PPCHIBICC_LLVM_AS AND PPCHIBICC_LLVM_OPT AND PPCHIBICC_LLVM_LLC)
     add_custom_target(${target}
-      COMMAND "${CMAKE_SOURCE_DIR}/cmake/run-llvm-tests.sh"
+      COMMAND "${CMAKE_SOURCE_DIR}/${script}"
               "${CMAKE_SOURCE_DIR}" "${compiler}" "${CMAKE_C_COMPILER}"
               "${PPCHIBICC_LLVM_AS}" "${PPCHIBICC_LLVM_OPT}"
               "${PPCHIBICC_LLVM_LLC}" "${CMAKE_BINARY_DIR}/${output_name}"
       DEPENDS ${dependency}
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-      COMMENT "Checking LLVM IR, execution and scalar ABI (${target})"
+      COMMENT "${description}"
       USES_TERMINAL
       VERBATIM
     )
   else()
     add_custom_target(${target}
       COMMAND "${CMAKE_COMMAND}" -E echo
-              "LLVM tests require matching llvm-as, opt and llc (LLVM 19 or newer). Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC when configuring."
+              "LLVM targets require matching llvm-as, opt and llc (LLVM 19 or newer). Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC when configuring."
       COMMAND "${CMAKE_COMMAND}" -E false
       VERBATIM
     )
   endif()
 endfunction()
 
-add_llvm_test_target(test-llvm "$<TARGET_FILE:ppchibicc_stage1>"
-  ppchibicc_stage1 llvm-test)
-add_llvm_test_target(test-llvm-stage2 "${PPCHIBICC_STAGE2_COMPILER}"
-  ppchibicc_stage2 llvm-test-stage2)
+add_llvm_target(test-llvm cmake/run-llvm-tests.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-test "Checking LLVM IR, execution and ABI (test-llvm)")
+add_llvm_target(test-llvm-stage2 cmake/run-llvm-tests.sh "${PPCHIBICC_STAGE2_COMPILER}"
+  ppchibicc_stage2 llvm-test-stage2 "Checking LLVM IR, execution and ABI (test-llvm-stage2)")
+add_llvm_target(llvm-opt-demo cmake/run-llvm-opt-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-opt-demo "Comparing LLVM optimization pipelines")
 
 add_custom_target(distclean
   COMMAND "${CMAKE_COMMAND}"

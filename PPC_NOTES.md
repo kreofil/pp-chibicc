@@ -43,6 +43,12 @@ objects; record ABI tests cover nested arrays, unions, register rollback,
 packed/aligned records and calls in both directions with the system compiler.
 Interoperability was also checked with Clang 21 at LLVM O0 and O2.
 See `docs/llvm-backend-ru.md` for examples and limitations.
+The optional llvm-opt-demo target compares verify-only IR, mem2reg,
+sroa/mem2reg and default<O2> from one bitcode input with fixed llc settings.
+It validates execution against known results and native output, saves IR,
+assembly, pass pipelines and tool/source checksums, and reports static counts
+for local aggregate code and PPC runtime dispatch. See
+`docs/llvm-optimization-ru.md` for the LLVM 19/21 observations.
 While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage
