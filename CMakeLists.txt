@@ -248,15 +248,25 @@ endfunction()
 find_llvm_tool(PPCHIBICC_LLVM_AS llvm-as)
 find_llvm_tool(PPCHIBICC_LLVM_OPT opt)
 find_llvm_tool(PPCHIBICC_LLVM_LLC llc)
-message(STATUS "LLVM tools (optional): llvm-as=${PPCHIBICC_LLVM_AS}; opt=${PPCHIBICC_LLVM_OPT}; llc=${PPCHIBICC_LLVM_LLC}")
+find_llvm_tool(PPCHIBICC_LLVM_LINK llvm-link)
+message(STATUS "LLVM tools (optional): llvm-as=${PPCHIBICC_LLVM_AS}; opt=${PPCHIBICC_LLVM_OPT}; llc=${PPCHIBICC_LLVM_LLC}; llvm-link=${PPCHIBICC_LLVM_LINK}")
 
 function(add_llvm_target target script compiler dependency output_name description)
-  if(PPCHIBICC_LLVM_AS AND PPCHIBICC_LLVM_OPT AND PPCHIBICC_LLVM_LLC)
+  set(tools_found TRUE)
+  if(ARGC GREATER 6 AND NOT ARGN)
+    set(tools_found FALSE)
+  endif()
+  foreach(llvm_tool IN ITEMS "${PPCHIBICC_LLVM_AS}" "${PPCHIBICC_LLVM_OPT}" "${PPCHIBICC_LLVM_LLC}" ${ARGN})
+    if(NOT llvm_tool)
+      set(tools_found FALSE)
+    endif()
+  endforeach()
+  if(tools_found)
     add_custom_target(${target}
       COMMAND "${CMAKE_SOURCE_DIR}/${script}"
               "${CMAKE_SOURCE_DIR}" "${compiler}" "${CMAKE_C_COMPILER}"
               "${PPCHIBICC_LLVM_AS}" "${PPCHIBICC_LLVM_OPT}"
-              "${PPCHIBICC_LLVM_LLC}" "${CMAKE_BINARY_DIR}/${output_name}"
+              "${PPCHIBICC_LLVM_LLC}" "${CMAKE_BINARY_DIR}/${output_name}" ${ARGN}
       DEPENDS ${dependency}
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
       COMMENT "${description}"
@@ -266,7 +276,7 @@ function(add_llvm_target target script compiler dependency output_name descripti
   else()
     add_custom_target(${target}
       COMMAND "${CMAKE_COMMAND}" -E echo
-              "LLVM targets require matching llvm-as, opt and llc (LLVM 19 or newer). Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC when configuring."
+              "LLVM targets require matching llvm-as, opt and llc (LLVM 19 or newer); llvm-dispatch-demo also requires llvm-link. Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT, PPCHIBICC_LLVM_LLC and, for the dispatch demo, PPCHIBICC_LLVM_LINK when configuring."
       COMMAND "${CMAKE_COMMAND}" -E false
       VERBATIM
     )
@@ -279,6 +289,9 @@ add_llvm_target(test-llvm-stage2 cmake/run-llvm-tests.sh "${PPCHIBICC_STAGE2_COM
   ppchibicc_stage2 llvm-test-stage2 "Checking LLVM IR, execution and ABI (test-llvm-stage2)")
 add_llvm_target(llvm-opt-demo cmake/run-llvm-opt-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-opt-demo "Comparing LLVM optimization pipelines")
+add_llvm_target(llvm-dispatch-demo cmake/run-llvm-dispatch-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-dispatch-demo "Comparing PPC dispatch and module visibility"
+  "${PPCHIBICC_LLVM_LINK}")
 
 add_custom_target(distclean
   COMMAND "${CMAKE_COMMAND}"

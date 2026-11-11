@@ -56,6 +56,13 @@ versioned tools through -23 and prints the selected paths. Existing cache
 entries remain explicit selections; separate build directories keep toolchains
 apart. The demo emits objects directly with llc, so .prefalign in LLVM 23's
 assembly listing does not require a newer system GNU assembler.
+The llvm-dispatch-demo target compares known-specialization, closed-family
+and open multifile calls, with a plain C function-pointer control. It tests
+separate objects, per-unit O2, linked O2 and explicit internalization while
+preserving inspectable public probe functions. An extension replaces one
+object without rebuilding callers. On LLVM 23.1.6 the PPC call sites remain
+indirect in all these modes; O2 eliminates the control's indirect call.
+See `docs/llvm-dispatch-ru.md` for assumptions and reproducible results.
 While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage
