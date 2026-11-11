@@ -249,18 +249,24 @@ find_llvm_tool(PPCHIBICC_LLVM_AS llvm-as)
 find_llvm_tool(PPCHIBICC_LLVM_OPT opt)
 find_llvm_tool(PPCHIBICC_LLVM_LLC llc)
 find_llvm_tool(PPCHIBICC_LLVM_LINK llvm-link)
+find_llvm_tool(PPCHIBICC_LLVM_PROFDATA llvm-profdata)
+find_llvm_tool(PPCHIBICC_LLVM_CLANG clang)
 message(STATUS "LLVM tools (optional): llvm-as=${PPCHIBICC_LLVM_AS}; opt=${PPCHIBICC_LLVM_OPT}; llc=${PPCHIBICC_LLVM_LLC}; llvm-link=${PPCHIBICC_LLVM_LINK}")
+message(STATUS "LLVM PGO tools (optional): llvm-profdata=${PPCHIBICC_LLVM_PROFDATA}; clang=${PPCHIBICC_LLVM_CLANG}")
 
 function(add_llvm_target target script compiler dependency output_name description)
   set(tools_found TRUE)
-  if(ARGC GREATER 6 AND NOT ARGN)
+  if(NOT PPCHIBICC_LLVM_AS OR NOT PPCHIBICC_LLVM_OPT OR NOT PPCHIBICC_LLVM_LLC)
     set(tools_found FALSE)
   endif()
-  foreach(llvm_tool IN ITEMS "${PPCHIBICC_LLVM_AS}" "${PPCHIBICC_LLVM_OPT}" "${PPCHIBICC_LLVM_LLC}" ${ARGN})
-    if(NOT llvm_tool)
-      set(tools_found FALSE)
-    endif()
-  endforeach()
+  if(ARGC GREATER 6)
+    math(EXPR last_tool_index "${ARGC} - 1")
+    foreach(tool_index RANGE 6 ${last_tool_index})
+      if(NOT ARGV${tool_index})
+        set(tools_found FALSE)
+      endif()
+    endforeach()
+  endif()
   if(tools_found)
     add_custom_target(${target}
       COMMAND "${CMAKE_SOURCE_DIR}/${script}"
@@ -276,7 +282,7 @@ function(add_llvm_target target script compiler dependency output_name descripti
   else()
     add_custom_target(${target}
       COMMAND "${CMAKE_COMMAND}" -E echo
-              "LLVM targets require matching llvm-as, opt and llc (LLVM 19 or newer); llvm-dispatch-demo also requires llvm-link. Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT, PPCHIBICC_LLVM_LLC and, for the dispatch demo, PPCHIBICC_LLVM_LINK when configuring."
+              "LLVM target ${target}: required tools are missing. Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC. llvm-dispatch-demo also needs PPCHIBICC_LLVM_LINK. llvm-pgo-demo needs LLVM/Clang 23+, PPCHIBICC_LLVM_LINK, PPCHIBICC_LLVM_PROFDATA, PPCHIBICC_LLVM_CLANG and the compiler-rt profile runtime."
       COMMAND "${CMAKE_COMMAND}" -E false
       VERBATIM
     )
@@ -292,6 +298,9 @@ add_llvm_target(llvm-opt-demo cmake/run-llvm-opt-demo.sh "$<TARGET_FILE:ppchibic
 add_llvm_target(llvm-dispatch-demo cmake/run-llvm-dispatch-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-dispatch-demo "Comparing PPC dispatch and module visibility"
   "${PPCHIBICC_LLVM_LINK}")
+add_llvm_target(llvm-pgo-demo cmake/run-llvm-pgo-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-pgo-demo "Profiling PPC dispatch and testing indirect-call promotion"
+  "${PPCHIBICC_LLVM_LINK}" "${PPCHIBICC_LLVM_PROFDATA}" "${PPCHIBICC_LLVM_CLANG}")
 
 add_custom_target(distclean
   COMMAND "${CMAKE_COMMAND}"

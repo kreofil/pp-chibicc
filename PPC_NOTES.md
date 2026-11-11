@@ -63,6 +63,14 @@ preserving inspectable public probe functions. An extension replaces one
 object without rebuilding callers. On LLVM 23.1.6 the PPC call sites remain
 indirect in all these modes; O2 eliminates the control's indirect call.
 See `docs/llvm-dispatch-ru.md` for assumptions and reproducible results.
+The optional llvm-pgo-demo target uses real IR instrumentation, compiler-rt
+and llvm-profdata with LLVM/Clang 23. Training observes 4096 rectangle calls;
+the standard PGO O2 pipeline promotes that target with an address guard and
+inlines it while keeping the general indirect path. The optimized core is
+also linked with unseen handlers that modify data and retag an object with
+init_spec. Native, O2 and PGO outputs agree. main and extension objects stay
+outside the profiled module; internalization is not required. See
+`docs/llvm-pgo-ru.md` for the LLVM 23.1.6 results and runtime requirements.
 While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage
