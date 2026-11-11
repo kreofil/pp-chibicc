@@ -883,7 +883,7 @@ static char *llvm_expr(Node *node) {
 }
 
 static void llvm_stmt(Node *node) {
-  if (node->kind != ND_BLOCK && node->kind != ND_LABEL)
+  if (node->kind != ND_BLOCK && node->kind != ND_LABEL && node->kind != ND_CASE)
     llvm_ensure_block();
   switch (node->kind) {
   case ND_BLOCK:
@@ -994,13 +994,43 @@ static void llvm_stmt(Node *node) {
     llvm_begin(node->unique_label);
     llvm_stmt(node->lhs);
     return;
+  case ND_SWITCH: {
+    char *value = llvm_expr(node->cond);
+    char *ty = llvm_type(node->cond->ty);
+    // GNU ranges remain constant-size tests, even across the signed boundary
+    // or the full integer domain. Modular subtraction avoids signed overflow.
+    for (Node *c = node->case_next; c; c = c->case_next) {
+      if (c->begin == c->end)
+        continue;
+      unsigned long span = (unsigned long)c->end - (unsigned long)c->begin;
+      char *delta = llvm_reg();
+      char *inside = llvm_reg();
+      char *next = llvm_label();
+      llvm_print("  %s = sub %s %s, %ld", delta, ty, value, c->begin);
+      llvm_print("  %s = icmp ule %s %s, %ld", inside, ty, delta, (long)span);
+      llvm_print("  br i1 %s, label %%\"%s\", label %%\"%s\"", inside, c->label, next);
+      llvm_terminated = true;
+      llvm_begin(next);
+    }
+    llvm_print("  switch %s %s, label %%\"%s\" [", ty, value,
+               node->default_case ? node->default_case->label : node->brk_label);
+    for (Node *c = node->case_next; c; c = c->case_next)
+      if (c->begin == c->end)
+        llvm_print("    %s %ld, label %%\"%s\"", ty, c->begin, c->label);
+    llvm_print("  ]");
+    llvm_terminated = true;
+    llvm_stmt(node->then);
+    llvm_begin(node->brk_label);
+    return;
+  }
+  case ND_CASE:
+    llvm_begin(node->label);
+    llvm_stmt(node->lhs);
+    return;
   case ND_ASM:
     llvm_unsupported(node->tok, "inline assembly");
   case ND_GOTO_EXPR:
     llvm_unsupported(node->tok, "computed goto");
-  case ND_SWITCH:
-  case ND_CASE:
-    llvm_unsupported(node->tok, "switch statements");
   default:
     llvm_unsupported(node->tok, "this statement");
   }

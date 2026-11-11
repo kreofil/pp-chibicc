@@ -1240,15 +1240,24 @@ static void gen_stmt(Node *node) {
       char *di = (node->cond->ty->size == 8) ? "%rdi" : "%edi";
 
       if (n->begin == n->end) {
-        println("  cmp $%ld, %s", n->begin, ax);
+        if (node->cond->ty->size == 8 && n->begin != (int)n->begin) {
+          println("  mov $%ld, %%rdi", n->begin);
+          println("  cmp %%rdi, %%rax");
+        } else {
+          println("  cmp $%ld, %s", n->begin, ax);
+        }
         println("  je %s", n->label);
         continue;
       }
 
       // [GNU] Case ranges
+      char *r8 = (node->cond->ty->size == 8) ? "%r8" : "%r8d";
+      unsigned long span = (unsigned long)n->end - (unsigned long)n->begin;
       println("  mov %s, %s", ax, di);
-      println("  sub $%ld, %s", n->begin, di);
-      println("  cmp $%ld, %s", n->end - n->begin, di);
+      println("  mov $%ld, %s", n->begin, r8);
+      println("  sub %s, %s", r8, di);
+      println("  mov $%ld, %s", (long)span, r8);
+      println("  cmp %s, %s", r8, di);
       println("  jbe %s", n->label);
     }
 

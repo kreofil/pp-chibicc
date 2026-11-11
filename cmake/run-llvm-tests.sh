@@ -84,7 +84,7 @@ for source in "$source_dir"/test/llvm/valid/*.c \
   # Use the system compiler as an independent reference for ABI boundaries
   # and IEEE floating-point edge cases. The native backend has existing
   # limitations here (notably NaN conditions and unsigned 64-bit conversions).
-  if [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ]; then
+  if [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ] || [ "$name" = switch ]; then
     "$host_cc" -std=c11 -O2 -c "$source" -o "$prefix.x86.o"
   else
     "$compiler" -c "$source" -o "$prefix.x86.o"
@@ -238,6 +238,19 @@ expect_driver_error unsupported-output -S -emit-llvm -DREJECT_LONG_DOUBLE \
   "$source_dir/test/llvm/reject.c" -o "$driver_dir/preserved.ll"
 cmp "$driver_dir/preserved.expected" "$driver_dir/preserved.ll" ||
   fail "an emission failure overwrote an existing output file"
+
+# This real program previously needed one native switch-containing unit.
+# Compile every C unit through LLVM, including with the self-hosted compiler.
+classic=$source_dir/examples/evolution/figures/direct-classic/01-start
+mkdir -p "$result_dir/classic-figures"
+for level in 0 2; do
+  prefix=$result_dir/classic-figures/O$level
+  PPCHIBICC_LLVM_OPT="$llvm_opt" PPCHIBICC_LLVM_LLC="$llvm_llc" \
+    "$compiler" --backend=llvm "-O$level" "$classic"/*.c -o "$prefix.exe"
+  "$prefix.exe" "$classic/data/input1.txt" "$prefix.output" >"$prefix.stdout" 2>"$prefix.stderr"
+  cmp "$classic/data/output1.txt" "$prefix.output" || fail 'classic figures output differs'
+  [ ! -s "$prefix.stderr" ] || fail 'classic figures produced stderr'
+done
 
 "$source_dir/cmake/run-llvm-driver-tests.sh" "$source_dir" "$compiler" "$host_cc" \
   "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/driver-pipeline"

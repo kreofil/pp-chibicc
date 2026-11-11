@@ -43,6 +43,20 @@ objects; record ABI tests cover nested arrays, unions, register rollback,
 packed/aligned records and calls in both directions with the system compiler.
 Interoperability was also checked with Clang 21 and 23 at LLVM O0 and O2.
 See `docs/llvm-backend-ru.md` for examples and limitations.
+LLVM now lowers ordinary switch/case/default to the LLVM switch instruction,
+preserving fallthrough, nested loops, break/continue and goto entry into cases.
+GNU case ranges use modular subtraction and unsigned bounds checks without
+expanding the range. The shared parser applies integer promotions, retains
+64-bit case values, converts labels to the condition type and rejects duplicate
+or overlapping labels/defaults. Constant folding now preserves the width and
+signedness of intermediate integers; unsigned arithmetic avoids host signed
+overflow. Native 64-bit switch comparisons also load constants that do not fit
+an immediate, and range spans are computed without signed overflow. These C
+semantic corrections leave the PPC ABI unchanged. Shared native/LLVM tests
+cover narrow/wide types, boundary values, ranges, Duff's device and diagnostics.
+All 15 units of direct-classic/01-start now compile through LLVM, with CTest
+fixture checks. See `docs/llvm-switch-ru.md`, including the reproducible audit
+of the other standalone CMake examples and the remaining compatibility gaps.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.

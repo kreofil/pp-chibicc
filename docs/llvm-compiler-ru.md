@@ -164,17 +164,14 @@ project(evo-demo LANGUAGES C)
 # После объявления add_executable(evo-demo ...):
 target_compile_options(evo-demo PRIVATE --backend=llvm -O2)
 target_link_options(evo-demo PRIVATE --backend=llvm)
-
-set_source_files_properties(figures-input.c PROPERTIES
-    COMPILE_OPTIONS --backend=x86-64
-)
 ```
 
-Это **смешанная сборка**: 14 C-файлов проходят через LLVM, а `figures-input.c`
-компилируется исходным x86-64 backend. В этом файле используется `switch`,
-который LLVM backend пока не поддерживает. Опции отдельного исходного файла
-передаются после опций target, поэтому для него побеждает последний
-`--backend=x86-64`. Исходные C-файлы менять не требуется.
+Теперь **все 15 C-файлов проходят через LLVM**, включая `figures-input.c`:
+компилятор поддерживает используемый в нём `switch`. Подробнее об этой
+реализации и её проверках — в [описании поддержки switch](llvm-switch-ru.md).
+Для смешанной сборки можно задать выбранному исходному файлу свойство
+`COMPILE_OPTIONS --backend=x86-64`. Опции исходного файла идут после опций
+target, и действует последний выбор backend.
 
 Из корня репозитория, с уже собранным `bin/ppchibicc`, используйте отдельный
 каталог сборки:
@@ -182,7 +179,8 @@ set_source_files_properties(figures-input.c PROPERTIES
 ```sh
 cmake -S examples/evolution/figures/direct-classic/01-start -B build-llvm-classic \
   -DCMAKE_C_COMPILER="$PWD/bin/ppchibicc"
-cmake --build build-llvm-classic
+cmake --build build-llvm-classic --clean-first
+ctest --test-dir build-llvm-classic --output-on-failure
 build-llvm-classic/bin/evo-demo \
   examples/evolution/figures/direct-classic/01-start/data/input1.txt \
   build-llvm-classic/output1.txt
@@ -194,6 +192,7 @@ diff -u examples/evolution/figures/direct-classic/01-start/data/output1.txt \
 переменными окружения, описанными выше. Программа находится в `bin` внутри
 каталога сборки. Проверено на LLVM 23.1.6: вывод совпадает с эталоном
 `data/output1.txt` на всех восьми фигурах, включая очистку контейнера.
+Две проверки CTest запускают программу и сравнивают её файл с этим эталоном.
 
 ## Проверки компилятора
 

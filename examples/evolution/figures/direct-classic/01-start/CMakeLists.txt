@@ -45,8 +45,12 @@ add_executable(evo-demo ${SOURCE_FILES})
 target_compile_options(evo-demo PRIVATE --backend=llvm -O2)
 target_link_options(evo-demo PRIVATE --backend=llvm)
 
-# В LLVM backend пока нет switch, используемого в этом модуле.
-# Опции исходного файла идут после опций target: последний backend побеждает.
-set_source_files_properties(figures-input.c PROPERTIES
-    COMPILE_OPTIONS --backend=x86-64
-)
+enable_testing()
+add_test(NAME figures-run
+    COMMAND evo-demo "${CMAKE_CURRENT_SOURCE_DIR}/data/input1.txt"
+                     "${CMAKE_CURRENT_BINARY_DIR}/output1.txt")
+add_test(NAME figures-output
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/output1.txt"
+            "${CMAKE_CURRENT_BINARY_DIR}/output1.txt")
+set_tests_properties(figures-output PROPERTIES DEPENDS figures-run)

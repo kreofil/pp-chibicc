@@ -55,6 +55,24 @@ EOF
     check "$name"
 }
 
+for code in \
+  'switch (1.0) { case 1: break; }' \
+  'switch ((int *)0) { case 0: break; }' \
+  'switch (x) { case 1.0: break; }' \
+  'switch (x) { case x: break; }' \
+  'switch (x) { case 1: case 1: break; }' \
+  'switch (x) { case -1: case 0xffffffffU: break; }' \
+  'switch ((unsigned)x) { case 0: case 0x100000000UL: break; }' \
+  'switch ((unsigned long)x) { case -1: case 0xffffffffffffffffUL: break; }' \
+  'switch (x) { case 1 ... 5: case 5 ... 7: break; }' \
+  'switch ((unsigned)x) { case -3 ... -1: case 0xffffffffU: break; }' \
+  'switch ((unsigned)x) { case -1 ... 1: break; }' \
+  'switch (x) { default: default: break; }'; do
+    expect_fail "switch rejects $code" <<EOF
+int main(void) { int x = 0; $code return 0; }
+EOF
+done
+
 # Every nullptr constraint violation must produce a diagnostic, not a crash.
 expect_nullptr_fail() {
     name=$1

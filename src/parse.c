@@ -193,6 +193,7 @@ static Node *expr_stmt(Token **rest, Token *tok);
 static Node *expr(Token **rest, Token *tok);
 static int64_t eval(Node *node);
 static int64_t eval2(Node *node, char ***label);
+static int64_t eval2_raw(Node *node, char ***label);
 static int64_t eval_rval(Node *node, char ***label);
 static bool is_const_expr(Node *node);
 static Node *assign(Token **rest, Token *tok);
@@ -1992,6 +1993,20 @@ static Node *asm_stmt(Token **rest, Token *tok) {
   return node;
 }
 
+// Convert a case constant to the promoted controlling type before comparing
+// labels. In particular, do not truncate 64-bit labels through a C int.
+static int64_t switch_case_value(Token **rest, Token *tok) {
+  Node *value = conditional(rest, tok);
+  add_type(value);
+  if (!is_integer(value->ty))
+    error_tok(value->tok, "case value must have integer type");
+  return eval(new_cast(value, current_switch->cond->ty));
+}
+
+static bool switch_case_less(Type *ty, int64_t left, int64_t right) {
+  return ty->is_unsigned ? (uint64_t)left < (uint64_t)right : left < right;
+}
+
 // stmt = "return" expr? ";"
 //      | "if" "(" expr ")" stmt ("else" stmt)?
 //      | "switch" "(" expr ")" stmt
@@ -2046,8 +2061,10 @@ static Node *stmt(Token **rest, Token *tok) {
     tok = skip(tok->next, "(");
     node->cond = expr(&tok, tok);
     add_type(node->cond);
-    if (node->cond->ty->kind == TY_NULLPTR)
+    if (!is_integer(node->cond->ty))
       error_tok(node->cond->tok, "switch condition must have integer type");
+    if (node->cond->ty->size < 4)
+      node->cond = new_cast(node->cond, ty_int);
     tok = skip(tok, ")");
 
     Node *sw = current_switch;
@@ -2068,37 +2085,44 @@ static Node *stmt(Token **rest, Token *tok) {
       error_tok(tok, "stray case");
 
     Node *node = new_node(ND_CASE, tok);
-    int begin = const_expr(&tok, tok->next);
-    int end;
+    int64_t begin = switch_case_value(&tok, tok->next);
+    int64_t end;
 
     if (equal(tok, "...")) {
       // [GNU] Case ranges, e.g. "case 1 ... 5:"
-      end = const_expr(&tok, tok->next);
-      if (end < begin)
-        error_tok(tok, "empty case range specified");
+      end = switch_case_value(&tok, tok->next);
+      if (switch_case_less(current_switch->cond->ty, end, begin))
+        error_tok(node->tok, "empty case range specified");
     } else {
       end = begin;
     }
 
     tok = skip(tok, ":");
     node->label = new_unique_name();
-    node->lhs = stmt(rest, tok);
     node->begin = begin;
     node->end = end;
+    Type *ty = current_switch->cond->ty;
+    for (Node *other = current_switch->case_next; other; other = other->case_next)
+      if (!switch_case_less(ty, end, other->begin) &&
+          !switch_case_less(ty, other->end, begin))
+        error_tok(node->tok, "duplicate or overlapping case value");
     node->case_next = current_switch->case_next;
     current_switch->case_next = node;
+    node->lhs = stmt(rest, tok);
     return node;
   }
 
   if (equal(tok, "default")) {
     if (!current_switch)
       error_tok(tok, "stray default");
+    if (current_switch->default_case)
+      error_tok(tok, "duplicate default label");
 
     Node *node = new_node(ND_CASE, tok);
     tok = skip(tok->next, ":");
     node->label = new_unique_name();
-    node->lhs = stmt(rest, tok);
     current_switch->default_case = node;
+    node->lhs = stmt(rest, tok);
     return node;
   }
 
@@ -2312,23 +2336,45 @@ static int64_t eval(Node *node) {
 // expression for a global variable.
 static int64_t eval2(Node *node, char ***label) {
   add_type(node);
+  int64_t value = eval2_raw(node, label);
+  // Constant expressions keep the width of every intermediate integer, not
+  // just the final initializer/case type (e.g. ~0U is UINT_MAX, not ULONG_MAX).
+  if (node->ty->kind == TY_BOOL)
+    return value != 0;
+  if (is_integer(node->ty)) {
+    if (node->ty->size == 1) {
+      if (node->ty->is_unsigned) return (uint8_t)value;
+      return (int8_t)value;
+    }
+    if (node->ty->size == 2) {
+      if (node->ty->is_unsigned) return (uint16_t)value;
+      return (int16_t)value;
+    }
+    if (node->ty->size == 4) {
+      if (node->ty->is_unsigned) return (uint32_t)value;
+      return (int32_t)value;
+    }
+  }
+  return value;
+}
 
+static int64_t eval2_raw(Node *node, char ***label) {
   if (is_flonum(node->ty))
     return eval_double(node);
 
   switch (node->kind) {
   case ND_ADD:
-    return eval2(node->lhs, label) + eval(node->rhs);
+    return (uint64_t)eval2(node->lhs, label) + eval(node->rhs);
   case ND_SUB:
-    return eval2(node->lhs, label) - eval(node->rhs);
+    return (uint64_t)eval2(node->lhs, label) - eval(node->rhs);
   case ND_MUL:
-    return eval(node->lhs) * eval(node->rhs);
+    return (uint64_t)eval(node->lhs) * eval(node->rhs);
   case ND_DIV:
     if (node->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) / eval(node->rhs);
     return eval(node->lhs) / eval(node->rhs);
   case ND_NEG:
-    return -eval(node->lhs);
+    return (uint64_t)0 - eval(node->lhs);
   case ND_MOD:
     if (node->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) % eval(node->rhs);
@@ -2340,7 +2386,7 @@ static int64_t eval2(Node *node, char ***label) {
   case ND_BITXOR:
     return eval(node->lhs) ^ eval(node->rhs);
   case ND_SHL:
-    return eval(node->lhs) << eval(node->rhs);
+    return (uint64_t)eval(node->lhs) << eval(node->rhs);
   case ND_SHR:
     if (node->ty->is_unsigned && node->ty->size == 8)
       return (uint64_t)eval(node->lhs) >> eval(node->rhs);
@@ -2379,7 +2425,12 @@ static int64_t eval2(Node *node, char ***label) {
       switch (node->ty->size) {
       case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
       case 2: return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
-      case 4: return node->ty->is_unsigned ? (uint32_t)val : (int32_t)val;
+      case 4:
+        // Keep signed int negative when returning int64_t: the conditional
+        // operator would convert the signed arm to uint32_t first.
+        if (node->ty->is_unsigned)
+          return (uint32_t)val;
+        return (int32_t)val;
       }
     }
     return val;
