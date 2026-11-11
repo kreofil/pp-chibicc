@@ -294,6 +294,8 @@ add_llvm_target(test-llvm cmake/run-llvm-tests.sh "$<TARGET_FILE:ppchibicc_stage
   ppchibicc_stage1 llvm-test "Checking LLVM IR, execution and ABI (test-llvm)")
 add_llvm_target(test-llvm-stage2 cmake/run-llvm-tests.sh "${PPCHIBICC_STAGE2_COMPILER}"
   ppchibicc_stage2 llvm-test-stage2 "Checking LLVM IR, execution and ABI (test-llvm-stage2)")
+add_llvm_target(test-llvm-driver cmake/run-llvm-driver-tests.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-driver-test "Checking the LLVM compiler driver")
 add_llvm_target(llvm-opt-demo cmake/run-llvm-opt-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-opt-demo "Comparing LLVM optimization pipelines")
 add_llvm_target(llvm-dispatch-demo cmake/run-llvm-dispatch-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"

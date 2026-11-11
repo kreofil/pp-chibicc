@@ -299,6 +299,31 @@ echo 'int main() {}' > $tmp/foo.c
 [ -f $tmp/a.out ]
 check a.out
 
+# Stage boundaries also apply when inputs are already object files.
+mkdir "$tmp/stage-boundaries"
+echo 'int main(void) { return 0; }' > "$tmp/stage-boundaries/main.c"
+"$chibicc" -c "$tmp/stage-boundaries/main.c" -o "$tmp/stage-boundaries/main.o"
+check 'stage-boundary object build'
+(cd "$tmp/stage-boundaries"; "$chibicc" -c main.o && [ ! -e a.out ])
+check '-c object input does not link'
+(cd "$tmp/stage-boundaries"; "$chibicc" -S main.o && [ ! -e a.out ])
+check '-S object input does not link'
+
+# An assembly unit must participate in a mixed C/assembly link.
+echo 'int value(void); int main(void) { return value() != 7; }' > "$tmp/stage-boundaries/caller.c"
+cat > "$tmp/stage-boundaries/value.s" <<'EOF'
+.text
+.globl value
+value:
+  mov $7, %eax
+  ret
+.section .note.GNU-stack,"",@progbits
+EOF
+"$chibicc" "$tmp/stage-boundaries/caller.c" "$tmp/stage-boundaries/value.s" -o "$tmp/stage-boundaries/mixed"
+check 'mixed C/assembly link'
+"$tmp/stage-boundaries/mixed"
+check 'mixed C/assembly result'
+
 # -E
 echo foo > $tmp/out
 echo "#include \"$tmp/out\"" | $chibicc -E -xc - | grep -q foo

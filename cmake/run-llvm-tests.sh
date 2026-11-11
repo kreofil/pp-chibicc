@@ -109,6 +109,15 @@ for source in "$source_dir"/test/llvm/valid/*.c \
   "$host_cc" "$prefix.O2.o" "$@" -o "$prefix.O2.exe"
   check_execution "$prefix.O2.exe" "$prefix.O2" \
     "$prefix.x86.stdout" "$expected_status"
+
+  # Exercise the public driver and its own linker with the same independent
+  # ABI/IEEE reference, not just the manually orchestrated LLVM pipeline.
+  for level in 0 2; do
+    PPCHIBICC_LLVM_OPT="$llvm_opt" PPCHIBICC_LLVM_LLC="$llvm_llc" \
+      "$compiler" --backend=llvm "-O$level" "$source" "$@" -o "$prefix.driver-O$level.exe"
+    check_execution "$prefix.driver-O$level.exe" "$prefix.driver-O$level" \
+      "$prefix.x86.stdout" "$expected_status"
+  done
 done
 
 # Each unit keeps the same common symbols and registration phases across
@@ -230,4 +239,6 @@ expect_driver_error unsupported-output -S -emit-llvm -DREJECT_LONG_DOUBLE \
 cmp "$driver_dir/preserved.expected" "$driver_dir/preserved.ll" ||
   fail "an emission failure overwrote an existing output file"
 
+"$source_dir/cmake/run-llvm-driver-tests.sh" "$source_dir" "$compiler" "$host_cc" \
+  "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/driver-pipeline"
 echo "LLVM tests passed"

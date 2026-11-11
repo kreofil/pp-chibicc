@@ -1190,6 +1190,12 @@ void codegen_llvm(Obj *prog, FILE *out) {
   llvm_memset = false;
   llvm_memmove = false;
   llvm_print("; ppchibicc experimental LLVM IR backend (LLVM 19+, Linux x86-64)");
+  // Keep the source name stable when the driver writes IR to a temporary
+  // file. Hex escapes cover quotes, backslashes and non-ASCII file names.
+  fprintf(llvm_out, "source_filename = \"");
+  for (char *p = base_file; *p; p++)
+    fprintf(llvm_out, "\\%02X", (unsigned char)*p);
+  fprintf(llvm_out, "\"\n");
   llvm_print("target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"");
   llvm_print("target triple = \"x86_64-pc-linux-gnu\"");
 

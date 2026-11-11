@@ -1,8 +1,10 @@
 #include "chibicc.h"
 
 typedef enum {
-  FILE_NONE, FILE_C, FILE_ASM, FILE_OBJ, FILE_AR, FILE_DSO,
+  FILE_NONE, FILE_C, FILE_ASM, FILE_OBJ, FILE_AR, FILE_DSO, FILE_IR,
 } FileType;
+
+typedef enum { BACKEND_X86_64, BACKEND_LLVM } Backend;
 
 StringArray include_paths;
 bool opt_fcommon = true;
@@ -17,6 +19,9 @@ static bool opt_MMD;
 static bool opt_MP;
 static bool opt_S;
 static bool opt_emit_llvm;
+static Backend opt_backend;
+static bool opt_backend_explicit;
+static char *opt_optimization = "0";
 static bool opt_c;
 static bool opt_cc1;
 static bool opt_hash_hash_hash;
@@ -37,7 +42,11 @@ static StringArray tmpfiles;
 
 static void usage(int status) {
   fprintf(stderr, "ppchibicc [ -o <path> ] <file>\n");
-  fprintf(stderr, "  -S -emit-llvm  emit experimental LLVM IR (.ll) for a subset of C\n");
+  fprintf(stderr, "  -S -emit-llvm  emit raw experimental LLVM IR (.ll), without LLVM tools\n");
+  fprintf(stderr, "  --backend=llvm  compile C or .ll/.bc using external opt and llc\n");
+  fprintf(stderr, "  --backend=x86-64  use the original backend (default)\n");
+  fprintf(stderr, "  -O0/-O1/-O2/-O3/-Os/-Oz  LLVM optimization level (default: -O0)\n");
+  fprintf(stderr, "  PPCHIBICC_LLVM_OPT / PPCHIBICC_LLVM_LLC override tool paths\n");
   exit(status);
 }
 
@@ -87,6 +96,8 @@ static FileType parse_opt_x(char *s) {
     return FILE_C;
   if (!strcmp(s, "assembler"))
     return FILE_ASM;
+  if (!strcmp(s, "ir"))
+    return FILE_IR;
   if (!strcmp(s, "none"))
     return FILE_NONE;
   error("<command line>: unknown argument for -x: %s", s);
@@ -161,6 +172,23 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-emit-llvm")) {
       opt_emit_llvm = true;
+      continue;
+    }
+
+    if (!strncmp(argv[i], "--backend=", 10)) {
+      char *name = argv[i] + 10;
+      if (!strcmp(name, "llvm"))
+        opt_backend = BACKEND_LLVM;
+      else if (!strcmp(name, "x86-64"))
+        opt_backend = BACKEND_X86_64;
+      else
+        error("unknown backend: %s (expected x86-64 or llvm)", name);
+      opt_backend_explicit = true;
+      continue;
+    }
+
+    if (!strncmp(argv[i], "-O", 2)) {
+      opt_optimization = argv[i][2] ? argv[i] + 2 : "1";
       continue;
     }
 
@@ -330,8 +358,7 @@ static void parse_args(int argc, char **argv) {
     }
 
     // These options are ignored for now.
-    if (!strncmp(argv[i], "-O", 2) ||
-        !strncmp(argv[i], "-W", 2) ||
+    if (!strncmp(argv[i], "-W", 2) ||
         !strncmp(argv[i], "-g", 2) ||
         !strncmp(argv[i], "-std=", 5) ||
         !strcmp(argv[i], "-ffreestanding") ||
@@ -358,6 +385,11 @@ static void parse_args(int argc, char **argv) {
 
   if (opt_emit_llvm && (!opt_S || opt_c || opt_E || opt_M))
     error("-emit-llvm requires -S and cannot be combined with -c, -E or -M");
+  if (opt_emit_llvm && opt_backend_explicit && opt_backend != BACKEND_LLVM)
+    error("-emit-llvm conflicts with --backend=x86-64");
+  if (opt_backend == BACKEND_LLVM && !opt_emit_llvm &&
+      (strlen(opt_optimization) != 1 || !strchr("0123sz", opt_optimization[0])))
+    error("unsupported LLVM optimization level: -O%s (use -O0, -O1, -O2, -O3, -Os or -Oz)", opt_optimization);
 
   // -E implies that the input is the C macro language.
   if (opt_E)
@@ -575,7 +607,7 @@ static void cc1(void) {
   FILE *output_buf = open_memstream(&buf, &buflen);
 
   // Both backends consume the same parsed and typed program.
-  if (opt_emit_llvm)
+  if (opt_emit_llvm || opt_backend == BACKEND_LLVM)
     codegen_llvm(prog, output_buf);
   else
     codegen(prog, output_buf);
@@ -590,6 +622,64 @@ static void cc1(void) {
 static void assemble(char *input, char *output) {
   char *cmd[] = {"as", "-c", input, "-o", output, NULL};
   run_subprocess(cmd);
+}
+
+static char *llvm_tool(char *variable, char *fallback) {
+  char *path = getenv(variable);
+  return path && *path ? path : fallback;
+}
+
+// Finish both external stages before opening the requested output. Temporary
+// bitcode and machine output are removed by cleanup, including on tool failure.
+static char *compile_llvm(char *input, bool assembly) {
+  char *bitcode = create_tmpfile();
+  char *output = create_tmpfile();
+  bool size = strchr("sz", opt_optimization[0]);
+  char *level = size ? "2" : opt_optimization;
+  StringArray opt_cmd = {};
+  strarray_push(&opt_cmd, llvm_tool("PPCHIBICC_LLVM_OPT", "opt"));
+  strarray_push(&opt_cmd, "-mcpu=x86-64");
+  strarray_push(&opt_cmd, size ? "-passes=forceattrs,default<O2>" :
+                format("-passes=default<O%s>", level));
+  strarray_push(&opt_cmd, "-verify-each");
+  // LLVM 23 removed default<Os>/default<Oz>. Size is now expressed by
+  // function attributes; forceattrs also handles supplied .ll/.bc inputs.
+  if (size)
+    strarray_push(&opt_cmd, "-force-attribute=optsize");
+  if (!strcmp(opt_optimization, "z"))
+    strarray_push(&opt_cmd, "-force-attribute=minsize");
+  strarray_push(&opt_cmd, input);
+  strarray_push(&opt_cmd, "-o");
+  strarray_push(&opt_cmd, bitcode);
+  strarray_push(&opt_cmd, NULL);
+  run_subprocess(opt_cmd.data);
+
+  char *llc_cmd[] = {
+    llvm_tool("PPCHIBICC_LLVM_LLC", "llc"), "-mcpu=x86-64",
+    format("-O=%s", level), "-relocation-model=pic",
+    assembly ? "-filetype=asm" : "-filetype=obj", bitcode, "-o", output, NULL,
+  };
+  run_subprocess(llc_cmd);
+  return output;
+}
+
+static void copy_output(char *input, char *output) {
+  FILE *in = fopen(input, "rb");
+  if (!in)
+    error("cannot read LLVM output: %s: %s", input, strerror(errno));
+  FILE *out = open_file(output);
+  char buf[8192];
+  size_t len;
+  while ((len = fread(buf, 1, sizeof(buf), in)))
+    if (fwrite(buf, 1, len, out) != len)
+      error("cannot write output: %s: %s", output, strerror(errno));
+  if (ferror(in))
+    error("cannot read LLVM output: %s: %s", input, strerror(errno));
+  fclose(in);
+  if (fflush(out))
+    error("cannot write output: %s: %s", output, strerror(errno));
+  if (out != stdout && fclose(out))
+    error("cannot close output: %s: %s", output, strerror(errno));
 }
 
 static char *find_file(char *pattern) {
@@ -713,6 +803,8 @@ static FileType get_file_type(char *filename) {
     return FILE_C;
   if (endswith(filename, ".s"))
     return FILE_ASM;
+  if (endswith(filename, ".ll") || endswith(filename, ".bc"))
+    return FILE_IR;
 
   error("<command line>: unknown file extension: %s", filename);
 }
@@ -728,7 +820,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (input_paths.len > 1 && opt_o && (opt_c || opt_S | opt_E))
+  if (input_paths.len > 1 && opt_o && (opt_c || opt_S || opt_E))
     error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
 
   StringArray ld_args = {};
@@ -774,18 +866,44 @@ int main(int argc, char **argv) {
 
     // Handle .s
     if (type == FILE_ASM) {
-      if (!opt_S)
+      if (opt_S || opt_M)
+        continue;
+      if (opt_c)
         assemble(input, output);
+      else {
+        char *tmp = create_tmpfile();
+        assemble(input, tmp);
+        strarray_push(&ld_args, tmp);
+      }
+      continue;
+    }
+
+    if (type == FILE_IR && opt_backend != BACKEND_LLVM)
+      error("LLVM IR input requires --backend=llvm: %s", input);
+
+    // Just preprocess
+    if (opt_E || opt_M) {
+      if (type != FILE_C)
+        error("preprocessing requires C source: %s", input);
+      run_cc1(argc, argv, input, NULL);
+      continue;
+    }
+
+    if (opt_backend == BACKEND_LLVM && !opt_emit_llvm) {
+      char *ir = input;
+      if (type == FILE_C) {
+        ir = create_tmpfile();
+        run_cc1(argc, argv, input, ir);
+      }
+      char *machine_output = compile_llvm(ir, opt_S);
+      if (opt_S || opt_c)
+        copy_output(machine_output, output);
+      else
+        strarray_push(&ld_args, machine_output);
       continue;
     }
 
     assert(type == FILE_C);
-
-    // Just preprocess
-    if (opt_E || opt_M) {
-      run_cc1(argc, argv, input, NULL);
-      continue;
-    }
 
     // Compile
     if (opt_S) {
@@ -810,7 +928,7 @@ int main(int argc, char **argv) {
     continue;
   }
 
-  if (ld_args.len > 0)
+  if (ld_args.len > 0 && !opt_c && !opt_S && !opt_E && !opt_M)
     run_linker(&ld_args, opt_o ? opt_o : "a.out");
   return 0;
 }

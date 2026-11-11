@@ -43,6 +43,21 @@ objects; record ABI tests cover nested arrays, unions, register rollback,
 packed/aligned records and calls in both directions with the system compiler.
 Interoperability was also checked with Clang 21 and 23 at LLVM O0 and O2.
 See `docs/llvm-backend-ru.md` for examples and limitations.
+The public driver now accepts --backend=llvm to compile C, .ll or .bc through
+external opt/llc, produce objects directly and use the existing ELF linker.
+-S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.
+O0/O1/O2/O3 use standard pipelines; Os/Oz use forceattrs with optsize/minsize
+and O2, including LLVM 23 where default<Os>/default<Oz> were removed. Tools
+are selected through PATH or PPCHIBICC_LLVM_OPT/PPCHIBICC_LLVM_LLC environment
+variables. Compilation remains per translation unit, with PIC machine output.
+source_filename preserves the escaped C source name across temporary IR files.
+The native backend remains the default; preprocessing and object-only linking
+need no LLVM tools. Assembly inputs are included in the link, and -c/-S stop
+before linking existing object inputs. Tests cover the driver at stage1/stage2,
+ABI fixtures, mixed PPC objects, archives, shared/static linking, size modes,
+IR/stdin/stdout, dependency files, path escaping and failed-tool cleanup. A
+standalone CMake application example is in examples/llvm/build-demo. See
+`docs/llvm-driver-ru.md` for commands and the optimization/tool selection rules.
 The optional llvm-opt-demo target compares verify-only IR, mem2reg,
 sroa/mem2reg and default<O2> from one bitcode input with fixed llc settings.
 It validates execution against known results and native output, saves IR,
