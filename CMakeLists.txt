@@ -251,6 +251,7 @@ find_llvm_tool(PPCHIBICC_LLVM_LLC llc)
 find_llvm_tool(PPCHIBICC_LLVM_LINK llvm-link)
 find_llvm_tool(PPCHIBICC_LLVM_PROFDATA llvm-profdata)
 find_llvm_tool(PPCHIBICC_LLVM_CLANG clang)
+find_package(Python3 3.8 QUIET COMPONENTS Interpreter)
 message(STATUS "LLVM tools (optional): llvm-as=${PPCHIBICC_LLVM_AS}; opt=${PPCHIBICC_LLVM_OPT}; llc=${PPCHIBICC_LLVM_LLC}; llvm-link=${PPCHIBICC_LLVM_LINK}")
 message(STATUS "LLVM PGO tools (optional): llvm-profdata=${PPCHIBICC_LLVM_PROFDATA}; clang=${PPCHIBICC_LLVM_CLANG}")
 
@@ -282,7 +283,7 @@ function(add_llvm_target target script compiler dependency output_name descripti
   else()
     add_custom_target(${target}
       COMMAND "${CMAKE_COMMAND}" -E echo
-              "LLVM target ${target}: required tools are missing. Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC. llvm-dispatch-demo also needs PPCHIBICC_LLVM_LINK. llvm-pgo-demo needs LLVM/Clang 23+, PPCHIBICC_LLVM_LINK, PPCHIBICC_LLVM_PROFDATA, PPCHIBICC_LLVM_CLANG and the compiler-rt profile runtime."
+              "LLVM target ${target}: required tools are missing. Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC. llvm-dispatch-demo also needs PPCHIBICC_LLVM_LINK. llvm-pgo-demo and llvm-pgo-bench need LLVM/Clang 23+, PPCHIBICC_LLVM_LINK, PPCHIBICC_LLVM_PROFDATA, PPCHIBICC_LLVM_CLANG and the compiler-rt profile runtime. llvm-pgo-bench also needs Python 3.8+ (Python3_EXECUTABLE)."
       COMMAND "${CMAKE_COMMAND}" -E false
       VERBATIM
     )
@@ -301,6 +302,10 @@ add_llvm_target(llvm-dispatch-demo cmake/run-llvm-dispatch-demo.sh "$<TARGET_FIL
 add_llvm_target(llvm-pgo-demo cmake/run-llvm-pgo-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-pgo-demo "Profiling PPC dispatch and testing indirect-call promotion"
   "${PPCHIBICC_LLVM_LINK}" "${PPCHIBICC_LLVM_PROFDATA}" "${PPCHIBICC_LLVM_CLANG}")
+add_llvm_target(llvm-pgo-bench cmake/run-llvm-pgo-bench.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-pgo-bench "Measuring native, LLVM O2 and PGO dispatch"
+  "${PPCHIBICC_LLVM_LINK}" "${PPCHIBICC_LLVM_PROFDATA}" "${PPCHIBICC_LLVM_CLANG}"
+  "${Python3_EXECUTABLE}")
 
 add_custom_target(distclean
   COMMAND "${CMAKE_COMMAND}"

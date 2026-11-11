@@ -71,6 +71,12 @@ also linked with unseen handlers that modify data and retag an object with
 init_spec. Native, O2 and PGO outputs agree. main and extension objects stay
 outside the profiled module; internalization is not required. See
 `docs/llvm-pgo-ru.md` for the LLVM 23.1.6 results and runtime requirements.
+The optional llvm-pgo-bench target reuses these production objects in a
+checked microbenchmark: rectangle, square, mixed and an unseen mutating
+extension. A shared ordinary-C timer excludes startup and warmup; Python 3.8+
+calibrates equal work, pins the process CPU by default, randomizes repeated
+runs, and reports medians, MAD and raw wall/CPU times without speed thresholds.
+See `docs/llvm-pgo-benchmark-ru.md` for reproduction and interpretation.
 While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage
