@@ -25,6 +25,7 @@ major=$(llvm_major "$llvm_as")
   [ "$major" = "$(llvm_major "$llvm_llc")" ] ||
   fail "llvm-as, opt and llc must have the same major version"
 [ "$major" -ge 19 ] || fail "LLVM 19 or newer is required"
+opt_version=$("$llvm_opt" --version | sed -n 's/.*LLVM version \([^[:space:]]*\).*/\1/p' | head -n 1)
 
 source=$source_dir/examples/llvm/optimization.c
 expected=$source_dir/examples/llvm/optimization.expected
@@ -113,7 +114,7 @@ for variant in raw mem2reg sroa O2; do
   esac
   prefix=$result_dir/$variant
   mkdir -p "$prefix"
-  echo "LLVM $major: $variant ($passes)"
+  echo "LLVM $opt_version: $variant ($passes)"
   printf '%s\t%s\tx86-64\t-O=2 -mcpu=x86-64 -relocation-model=pic\n' \
     "$variant" "$passes" >>"$result_dir/pipelines.tsv"
   "$llvm_opt" -mcpu=x86-64 -passes="$passes" -print-pipeline-passes \
@@ -153,7 +154,7 @@ done
 {
   echo '# Сравнение оптимизаций LLVM'
   echo
-  echo "Версия LLVM: $major. Все проверки выполнения пройдены."
+  echo "Версия LLVM (opt): $opt_version. Все проверки выполнения пройдены."
   echo 'Для каждого pipeline используются один исходный bitcode и одинаковые настройки llc.'
   echo
   echo 'Это статические числа инструкций IR; они не измеряют время выполнения или ускорение.'

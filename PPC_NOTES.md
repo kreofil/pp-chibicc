@@ -35,20 +35,27 @@ independent reference, including edge cases with existing native-backend
 limitations (NaN conditions and unsigned 64-bit conversions).
 Tests cover case/enum dispatch, startup completeness,
 runtime errors, separate compilation and mixed native/LLVM objects, with
-LLVM 19 and 21. The ppc-floating example exercises double payloads, ordinary
+LLVM 19, 21 and 23. The ppc-floating example exercises double payloads, ordinary
 double arguments/results and printf output. The ppc-floating-by-value example
 adds ordinary double-aggregate arguments/results and mixed integer/SSE results
 of PPC handlers. Multifile tests exchange these records across native/LLVM
 objects; record ABI tests cover nested arrays, unions, register rollback,
 packed/aligned records and calls in both directions with the system compiler.
-Interoperability was also checked with Clang 21 at LLVM O0 and O2.
+Interoperability was also checked with Clang 21 and 23 at LLVM O0 and O2.
 See `docs/llvm-backend-ru.md` for examples and limitations.
 The optional llvm-opt-demo target compares verify-only IR, mem2reg,
 sroa/mem2reg and default<O2> from one bitcode input with fixed llc settings.
 It validates execution against known results and native output, saves IR,
 assembly, pass pipelines and tool/source checksums, and reports static counts
 for local aggregate code and PPC runtime dispatch. See
-`docs/llvm-optimization-ru.md` for the LLVM 19/21 observations.
+`docs/llvm-optimization-ru.md` for the LLVM 19/21/23 observations.
+The current toolchain line is Clang/LLVM 23.1.x. Full native, self-hosted
+stage2, LLVM O0/O2 and optimization-demo checks pass with Clang/LLVM 23.1.6;
+LLVM 23 object interoperability also passes against GCC 14.2.0. CMake searches
+versioned tools through -23 and prints the selected paths. Existing cache
+entries remain explicit selections; separate build directories keep toolchains
+apart. The demo emits objects directly with llc, so .prefalign in LLVM 23's
+assembly listing does not require a newer system GNU assembler.
 While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage
