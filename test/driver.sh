@@ -73,6 +73,23 @@ int main(void) { int x = 0; $code return 0; }
 EOF
 done
 
+# Empty C lists retain C11/C17 declaration compatibility and fixed prototypes;
+# empty PPC ordinary lists accept no ordinary arguments.
+for code in \
+  'int f(); int f(float n);' \
+  'int f(); int f(char n);' \
+  'int f(); int f(int n, ...);' \
+  'int f(int n); int f() { return 0; }' \
+  'int f() { return 0; } int f(int n);' \
+  'int f(void); int f(); int g() { return f(1); }' \
+  'int f(int n); int f(); int g() { return f(); }' \
+  'typedef struct X {} case {} X; int f<X *x>() { return 0; } int g() { X x; return f<&x>(1); }' \
+  'typedef struct X {} case {} X; int f<X *x>(); int f<X *x>(int n) { return n; }'; do
+    expect_fail "function parameters reject $code" <<EOF
+$code
+EOF
+done
+
 # Every nullptr constraint violation must produce a diagnostic, not a crash.
 expect_nullptr_fail() {
     name=$1

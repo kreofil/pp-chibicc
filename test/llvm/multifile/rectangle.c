@@ -1,5 +1,5 @@
 #include "rectangle.h"
-int perimeter<Figure.rectangle *f>(void) {
+int perimeter<Figure.rectangle *f>() {
   return 2 * (f->rectangle.width + f->rectangle.height);
 }
 Report report<Figure.rectangle *f>(Report previous) {

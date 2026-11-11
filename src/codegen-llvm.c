@@ -296,7 +296,9 @@ static char *llvm_parameters(Type *ty, bool names, bool attributes) {
       llvm_scalar_abi(param, &gp, &fp);
     }
   }
-  if (ty->is_variadic)
+  // A C f() definition has zero parameters. Only its declarations and calls
+  // use the LLVM vararg spelling for unspecified parameter types.
+  if (ty->is_variadic || (ty->is_unprototyped && !names))
     list = llvm_list_append(list, "...");
   return list;
 }
@@ -610,8 +612,8 @@ static char *llvm_conditional(Node *node) {
 }
 
 static void llvm_check_signature(Type *ty, Token *tok, bool definition) {
-  if (ty->is_variadic && (definition || !ty->params))
-    llvm_unsupported(tok, "variadic definitions or unprototyped functions");
+  if (ty->is_variadic && definition)
+    llvm_unsupported(tok, "variadic function definitions");
   llvm_check_abi_type(ty->return_ty, tok);
   for (Type *param = ty->params; param; param = param->next) {
     llvm_check_abi_type(param, tok);
@@ -642,12 +644,13 @@ static char *llvm_call(Node *node) {
   }
   Type *param = node->func_ty->params;
   for (Node *arg = node->args; arg; arg = arg->next) {
-    if (!param && !node->func_ty->is_variadic)
+    if (!param && !node->func_ty->is_variadic && !node->func_ty->is_unprototyped)
       llvm_unsupported(node->tok, "arguments without a fixed prototype");
     Type *target = param ? param : arg->ty;
     if (llvm_aggregate(target)) {
       if (!param)
-        llvm_unsupported(arg->tok, "aggregate variadic arguments");
+        llvm_unsupported(arg->tok, node->func_ty->is_unprototyped ?
+                         "aggregate arguments without a prototype" : "aggregate variadic arguments");
       if (!llvm_aggregate(arg->ty) || !is_assignable(target, arg->ty))
         error_tok(arg->tok, "LLVM backend: incompatible aggregate argument");
       LlvmAbi abi;
@@ -683,7 +686,7 @@ static char *llvm_call(Node *node) {
   char *ret_type = llvm_return_type(ret);
   char *result = !strcmp(ret_type, "void") ? NULL : llvm_reg();
   char *prototype = "";
-  if (node->func_ty->is_variadic)
+  if (node->func_ty->is_variadic || node->func_ty->is_unprototyped)
     prototype = format(" (%s)", llvm_parameters(node->func_ty, false, false));
   llvm_print("  %scall %s%s%s %s(%s)", result ? format("%s = ", result) : "",
              llvm_aggregate(ret) ? "" : llvm_abi_attr(ret), ret_type, prototype, callee, args);

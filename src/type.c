@@ -116,6 +116,17 @@ bool is_compatible(Type *t1, Type *t2) {
   case TY_FUNC: {
     if (!is_compatible(t1->return_ty, t2->return_ty))
       return false;
+    if (t1->is_unprototyped || t2->is_unprototyped) {
+      Type *prototype = t1->is_unprototyped ? t2 : t1;
+      if (prototype->is_variadic)
+        return false;
+      // A C11/C17 prototype is compatible with f() only when its parameter
+      // types survive the default argument promotions unchanged.
+      for (Type *p = prototype->params; p; p = p->next)
+        if (p->kind == TY_FLOAT || (is_integer(p) && p->size < ty_int->size))
+          return false;
+      return true;
+    }
     if (t1->is_variadic != t2->is_variadic)
       return false;
 

@@ -24,9 +24,14 @@ int main(void) { return (int)make().x; }
 #elif defined(REJECT_VARARG_LONG_DOUBLE)
 int printf(const char *format, ...);
 int main(void) { return printf("%.1Lf", 1.0L); }
-#elif defined(REJECT_NO_PROTOTYPE)
+#elif defined(REJECT_UNPROTOTYPED_AGGREGATE)
+struct S { int n; };
 int external();
-int main(void) { return external(3); }
+int main(void) { struct S s = {3}; return external(s); }
+#elif defined(REJECT_PPC_VARIADIC)
+typedef struct Item {} case {} Item;
+int pick<Item *p>(int n, ...) { return n; }
+int main(void) { Item item; return pick<&item>(1, 2); }
 #elif defined(REJECT_VLA)
 int main(void) { int n = 3; int a[n]; a[0] = 1; return a[0]; }
 #elif defined(REJECT_TLS)

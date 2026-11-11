@@ -383,6 +383,7 @@ struct Type {
   Type *return_ty;
   Type *params;
   bool is_variadic;
+  bool is_unprototyped; // C () leaves parameter types unspecified, unlike ...
   Type *next;
 };
 

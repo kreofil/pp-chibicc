@@ -738,12 +738,10 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     cur = cur->next = copy_type(ty2);
   }
 
-  if (cur == &head)
-    is_variadic = true;
-
   ty = func_type(ty);
   ty->params = head.next;
   ty->is_variadic = is_variadic;
+  ty->is_unprototyped = cur == &head && !is_variadic;
   *rest = tok->next;
   return ty;
 }
@@ -4345,7 +4343,7 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
     Node *arg = assign(&tok, tok);
     add_type(arg);
 
-    if (!param_ty && !ty->is_variadic)
+    if (!param_ty && !ty->is_variadic && !ty->is_unprototyped)
       error_tok(tok, "too many arguments");
 
     if (param_ty) {
@@ -4360,6 +4358,8 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
       // If parameter type is omitted (e.g. in "..."), float
       // arguments are promoted to double.
       arg = new_cast(arg, ty_double);
+    } else if (is_integer(arg->ty) && arg->ty->size < ty_int->size) {
+      arg = new_cast(arg, ty_int);
     }
 
     cur = cur->next = arg;
@@ -5948,6 +5948,8 @@ static Token *ppc_function(Token *tok, Type *basety, VarAttr *attr) {
   if (!equal(tok, "("))
     error_tok(tok, "expected '(' after PPC parameter list");
   Type *ordinary_fn_ty = func_params(&tok, tok->next, basety);
+  // PPC already has an explicit procedural parameter list. An empty ordinary
+  // list denotes zero ordinary arguments, just like (void), not C varargs.
 
   int ppc_param_count = type_list_len(ppc_param_tys);
   if (!ppc_param_count)
@@ -6071,6 +6073,8 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
       param_ty = param_ty->next;
     } else if (copy->ty->kind == TY_FLOAT) {
       copy = new_cast(copy, ty_double);
+    } else if (is_integer(copy->ty) && copy->ty->size < ty_int->size) {
+      copy = new_cast(copy, ty_int);
     }
 
     arg_cur = arg_cur->next = copy;
@@ -6156,6 +6160,16 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
       error_tok(tok, "redefinition of %s", name_str);
     if (!fn->is_static && attr->is_static)
       error_tok(tok, "static declaration follows a non-static declaration");
+    if ((fn->ty->is_unprototyped || ty->is_unprototyped) &&
+        !is_compatible(fn->ty, ty))
+      error_tok(ty->name, "incompatible function declaration");
+    if ((equal(tok, "{") && ty->is_unprototyped && fn->ty->params) ||
+        (fn->is_definition && fn->ty->is_unprototyped && ty->params))
+      error_tok(ty->name, "function definition has no parameters");
+    // Keep an existing prototype after a later f() declaration; definitions
+    // with named parameters must replace an earlier unspecified signature.
+    if (!ty->is_unprototyped || fn->ty->is_unprototyped)
+      fn->ty = ty;
     fn->is_definition = fn->is_definition || equal(tok, "{");
   } else {
     fn = new_gvar(name_str, ty);

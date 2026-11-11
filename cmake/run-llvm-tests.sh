@@ -79,12 +79,16 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$host_cc" -std=c11 -O2 -c "$source_dir/test/llvm/support/floating-abi-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
+  elif [ "$name" = empty-params ]; then
+    "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/empty-params-host.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
   fi
 
   # Use the system compiler as an independent reference for ABI boundaries
   # and IEEE floating-point edge cases. The native backend has existing
   # limitations here (notably NaN conditions and unsigned 64-bit conversions).
-  if [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ] || [ "$name" = switch ]; then
+  if [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ] || [ "$name" = switch ] || [ "$name" = empty-params ]; then
     "$host_cc" -std=c11 -O2 -c "$source" -o "$prefix.x86.o"
   else
     "$compiler" -c "$source" -o "$prefix.x86.o"
@@ -187,7 +191,7 @@ done
 
 # Unsupported source constructs must produce a compiler diagnostic instead
 # of invalid IR or a silently different executable.
-for feature in LONG_DOUBLE AGGREGATE_LONG_DOUBLE AGGREGATE_LONG_DOUBLE_NESTED AGGREGATE_LONG_DOUBLE_UNION VARARG_AGGREGATE BITFIELD VARIADIC VARARG_LONG_DOUBLE NO_PROTOTYPE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
+for feature in LONG_DOUBLE AGGREGATE_LONG_DOUBLE AGGREGATE_LONG_DOUBLE_NESTED AGGREGATE_LONG_DOUBLE_UNION VARARG_AGGREGATE BITFIELD VARIADIC PPC_VARIADIC VARARG_LONG_DOUBLE UNPROTOTYPED_AGGREGATE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
   echo "testing LLVM diagnostic $feature"
   if "$compiler" -S -emit-llvm -DREJECT_$feature \
       "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \
