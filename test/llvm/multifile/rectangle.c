@@ -22,3 +22,5 @@ Measurement measure<Figure.rectangle *f>(Dimensions extra) {
                               (f->rectangle.height + extra.height)};
   return result;
 }
+
+long double extended<Figure.rectangle *f>(long double extra) { return f->rectangle.width * f->rectangle.height + extra; }

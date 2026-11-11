@@ -198,7 +198,7 @@ static int64_t eval_rval(Node *node, char ***label);
 static bool is_const_expr(Node *node);
 static Node *assign(Token **rest, Token *tok);
 static Node *logor(Token **rest, Token *tok);
-static double eval_double(Node *node);
+static long double eval_float(Node *node);
 static Node *conditional(Token **rest, Token *tok);
 static Node *logand(Token **rest, Token *tok);
 static Node *bitor(Token **rest, Token *tok);
@@ -1915,12 +1915,19 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
     return cur;
 
   if (ty->kind == TY_FLOAT) {
-    *(float *)(buf + offset) = eval_double(init->expr);
+    *(float *)(buf + offset) = eval_float(init->expr);
     return cur;
   }
 
   if (ty->kind == TY_DOUBLE) {
-    *(double *)(buf + offset) = eval_double(init->expr);
+    *(double *)(buf + offset) = eval_float(init->expr);
+    return cur;
+  }
+
+  if (ty->kind == TY_LDOUBLE) {
+    long double value = eval_float(init->expr);
+    // The target's ten value bytes are followed by six zero padding bytes.
+    memcpy(buf + offset, &value, 10);
     return cur;
   }
 
@@ -2358,9 +2365,13 @@ static int64_t eval2(Node *node, char ***label) {
   return value;
 }
 
+static bool eval_truth(Node *node) {
+  return is_flonum(node->ty) ? eval_float(node) != 0 : eval(node) != 0;
+}
+
 static int64_t eval2_raw(Node *node, char ***label) {
   if (is_flonum(node->ty))
-    return eval_double(node);
+    return eval_float(node);
 
   switch (node->kind) {
   case ND_ADD:
@@ -2392,33 +2403,49 @@ static int64_t eval2_raw(Node *node, char ***label) {
       return (uint64_t)eval(node->lhs) >> eval(node->rhs);
     return eval(node->lhs) >> eval(node->rhs);
   case ND_EQ:
+    if (is_flonum(node->lhs->ty))
+      return eval_float(node->lhs) == eval_float(node->rhs);
     return eval(node->lhs) == eval(node->rhs);
   case ND_NE:
+    if (is_flonum(node->lhs->ty))
+      return eval_float(node->lhs) != eval_float(node->rhs);
     return eval(node->lhs) != eval(node->rhs);
   case ND_LT:
+    if (is_flonum(node->lhs->ty))
+      return eval_float(node->lhs) < eval_float(node->rhs);
     if (node->lhs->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) < eval(node->rhs);
     return eval(node->lhs) < eval(node->rhs);
   case ND_LE:
+    if (is_flonum(node->lhs->ty))
+      return eval_float(node->lhs) <= eval_float(node->rhs);
     if (node->lhs->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) <= eval(node->rhs);
     return eval(node->lhs) <= eval(node->rhs);
   case ND_COND:
-    return eval(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
+    return eval_truth(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
   case ND_COMMA:
     return eval2(node->rhs, label);
   case ND_NOT:
-    return !eval(node->lhs);
+    return !eval_truth(node->lhs);
   case ND_BITNOT:
     return ~eval(node->lhs);
   case ND_LOGAND:
-    return eval(node->lhs) && eval(node->rhs);
+    return eval_truth(node->lhs) && eval_truth(node->rhs);
   case ND_LOGOR:
-    return eval(node->lhs) || eval(node->rhs);
+    return eval_truth(node->lhs) || eval_truth(node->rhs);
   case ND_CAST: {
     if (node->ty->kind == TY_BOOL && is_flonum(node->lhs->ty))
-      return eval_double(node->lhs) != 0;
-    int64_t val = eval2(node->lhs, label);
+      return eval_float(node->lhs) != 0;
+    int64_t val;
+    if (is_integer(node->ty) && is_flonum(node->lhs->ty)) {
+      if (node->ty->is_unsigned)
+        val = (uint64_t)eval_float(node->lhs);
+      else
+        val = (int64_t)eval_float(node->lhs);
+    } else {
+      val = eval2(node->lhs, label);
+    }
     if (node->ty->kind == TY_BOOL)
       return val != 0;
     if (is_integer(node->ty)) {
@@ -2594,7 +2621,9 @@ int64_t const_expr(Token **rest, Token *tok) {
   return eval(node);
 }
 
-static double eval_double(Node *node) {
+// Keep the target type's precision at every node, including explicit casts.
+// In particular a long-double initializer must never pass through double.
+static long double eval_float(Node *node) {
   add_type(node);
 
   if (is_integer(node->ty)) {
@@ -2603,30 +2632,44 @@ static double eval_double(Node *node) {
     return eval(node);
   }
 
+  long double value;
   switch (node->kind) {
   case ND_ADD:
-    return eval_double(node->lhs) + eval_double(node->rhs);
+    value = eval_float(node->lhs) + eval_float(node->rhs);
+    break;
   case ND_SUB:
-    return eval_double(node->lhs) - eval_double(node->rhs);
+    value = eval_float(node->lhs) - eval_float(node->rhs);
+    break;
   case ND_MUL:
-    return eval_double(node->lhs) * eval_double(node->rhs);
+    value = eval_float(node->lhs) * eval_float(node->rhs);
+    break;
   case ND_DIV:
-    return eval_double(node->lhs) / eval_double(node->rhs);
+    value = eval_float(node->lhs) / eval_float(node->rhs);
+    break;
   case ND_NEG:
-    return -eval_double(node->lhs);
+    value = -eval_float(node->lhs);
+    break;
   case ND_COND:
-    return eval_double(node->cond) ? eval_double(node->then) : eval_double(node->els);
+    value = eval_truth(node->cond) ? eval_float(node->then) : eval_float(node->els);
+    break;
   case ND_COMMA:
-    return eval_double(node->rhs);
+    value = eval_float(node->rhs);
+    break;
   case ND_CAST:
-    if (is_flonum(node->lhs->ty))
-      return eval_double(node->lhs);
-    return eval(node->lhs);
+    value = eval_float(node->lhs);
+    break;
   case ND_NUM:
-    return node->fval;
+    value = node->fval;
+    break;
+  default:
+    error_tok(node->tok, "not a compile-time constant");
   }
 
-  error_tok(node->tok, "not a compile-time constant");
+  if (node->ty->kind == TY_FLOAT)
+    return (float)value;
+  if (node->ty->kind == TY_DOUBLE)
+    return (double)value;
+  return value;
 }
 
 // Convert op= operators to expressions containing an assignment.

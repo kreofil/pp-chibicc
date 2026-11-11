@@ -1,10 +1,4 @@
-#if defined(REJECT_LONG_DOUBLE)
-int main(void) { long double x = 1.5L; return (int)x; }
-#elif defined(REJECT_AGGREGATE_LONG_DOUBLE)
-struct S { long double x; };
-struct S make(struct S s) { return s; }
-int main(void) { struct S s = {3}; return (int)make(s).x; }
-#elif defined(REJECT_VARARG_AGGREGATE)
+#if defined(REJECT_VARARG_AGGREGATE)
 struct S { int x; };
 int take(int n, ...);
 int main(void) { struct S s = {3}; return take(1, s); }
@@ -15,25 +9,10 @@ int main(void) { struct S { unsigned int x : 3; } s = {3}; return s.x; }
 struct S { int n; };
 int pick(int x, ...) { va_list ap; va_start(ap, x); return va_arg(ap, struct S).n; }
 int main(void) { return 0; }
-#elif defined(REJECT_AGGREGATE_LONG_DOUBLE_NESTED)
-struct S { struct { long double x[2]; } nested; };
-int take(struct S s) { return (int)s.nested.x[0]; }
-int main(void) { struct S s = {{{3, 4}}}; return take(s); }
-#elif defined(REJECT_AGGREGATE_LONG_DOUBLE_UNION)
-union U { long x; long double y; };
-union U make(void) { union U u = {3}; return u; }
-int main(void) { return (int)make().x; }
-#elif defined(REJECT_VARARG_LONG_DOUBLE)
-int printf(const char *format, ...);
-int main(void) { return printf("%.1Lf", 1.0L); }
 #elif defined(REJECT_UNPROTOTYPED_AGGREGATE)
 struct S { int n; };
 int external();
 int main(void) { struct S s = {3}; return external(s); }
-#elif defined(REJECT_VA_ARG_LONG_DOUBLE)
-#include <stdarg.h>
-int pick(int x, ...) { va_list ap; va_start(ap, x); return (int)va_arg(ap, long double); }
-int main(void) { return 0; }
 #elif defined(REJECT_VLA)
 int main(void) { int n = 3; int a[n]; a[0] = 1; return a[0]; }
 #elif defined(REJECT_TLS)

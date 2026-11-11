@@ -361,12 +361,18 @@ static char f64f80[] = "movsd %xmm0, -8(%rsp); fldl -8(%rsp)";
 
 static char f80i8[] = FROM_F80_1 "fistps" FROM_F80_2 "movsbl -24(%rsp), %eax";
 static char f80u8[] = FROM_F80_1 "fistps" FROM_F80_2 "movzbl -24(%rsp), %eax";
-static char f80i16[] = FROM_F80_1 "fistps" FROM_F80_2 "movzbl -24(%rsp), %eax";
-static char f80u16[] = FROM_F80_1 "fistpl" FROM_F80_2 "movswl -24(%rsp), %eax";
+static char f80i16[] = FROM_F80_1 "fistps" FROM_F80_2 "movswl -24(%rsp), %eax";
+static char f80u16[] = FROM_F80_1 "fistpl" FROM_F80_2 "movzwl -24(%rsp), %eax";
 static char f80i32[] = FROM_F80_1 "fistpl" FROM_F80_2 "mov -24(%rsp), %eax";
-static char f80u32[] = FROM_F80_1 "fistpl" FROM_F80_2 "mov -24(%rsp), %eax";
+static char f80u32[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %eax";
 static char f80i64[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %rax";
-static char f80u64[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %rax";
+// x87 has only signed integer stores. Subtract 2^63 before converting the
+// upper half of uint64_t, then restore its top bit (also used by stage2's
+// compile-time floating evaluator).
+static char f80u64[] = FROM_F80_1
+  "movl $1593835520, -32(%rsp); flds -32(%rsp); fucomip %st(1), %st; ja 1f; "
+  "fsubs -32(%rsp); fistpq -24(%rsp); mov -24(%rsp), %rax; btc $63, %rax; jmp 2f; "
+  "1: fistpq -24(%rsp); mov -24(%rsp), %rax; 2: fldcw -10(%rsp)";
 static char f80f32[] = "fstps -8(%rsp); movss -8(%rsp), %xmm0";
 static char f80f64[] = "fstpl -8(%rsp); movsd -8(%rsp), %xmm0";
 

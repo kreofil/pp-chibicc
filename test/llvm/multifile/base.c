@@ -20,3 +20,5 @@ Measurement measure<Figure *f>(Dimensions extra) {
   Measurement result = {f->id, extra.width + extra.height};
   return result;
 }
+
+long double extended<Figure *f>(long double extra) { return f->id + extra; }

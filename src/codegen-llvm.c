@@ -26,13 +26,15 @@ struct LlvmArgSlot {
 
 typedef struct {
   bool memory;
+  bool x87;
   int count;
   char *types[2];
   bool sse[2];
   int offsets[2];
 } LlvmAbi;
 
-enum { LLVM_ABI_NONE, LLVM_ABI_INTEGER, LLVM_ABI_SSE };
+enum { LLVM_ABI_NONE, LLVM_ABI_INTEGER, LLVM_ABI_SSE,
+       LLVM_ABI_X87, LLVM_ABI_X87UP, LLVM_ABI_MEMORY };
 
 static FILE *llvm_out;
 static Obj *llvm_prog;
@@ -81,8 +83,6 @@ static void llvm_check_scalar(Type *ty, Token *tok) {
     llvm_unsupported(tok, "atomic types");
   if (ty->is_volatile)
     llvm_unsupported(tok, "volatile types");
-  if (ty->kind == TY_LDOUBLE)
-    llvm_unsupported(tok, "long double");
   if (is_integer(ty) || is_flonum(ty) || llvm_pointer(ty) || ty->kind == TY_VOID)
     return;
   llvm_unsupported(tok, "this value type (aggregate or VLA)");
@@ -119,16 +119,32 @@ static char *llvm_type(Type *ty) {
     return "float";
   if (ty->kind == TY_DOUBLE)
     return "double";
+  if (ty->kind == TY_LDOUBLE)
+    return "x86_fp80";
   return format("i%d", ty->size * 8);
 }
 
 static char *llvm_zero(Type *ty) {
+  // LLVM 19/21 require hexadecimal syntax for x86_fp80 even for zero.
+  if (ty->kind == TY_LDOUBLE)
+    return "0xK00000000000000000000";
   return llvm_pointer(ty) ? "null" : is_flonum(ty) ? "0.0" : "0";
 }
 
 // LLVM spells a float hexadecimal constant using the bits of its exact
 // double representation. Round to the source type before encoding the bits.
 static char *llvm_float_constant(Node *node) {
+  if (node->ty->kind == TY_LDOUBLE) {
+    // x86_fp80 has a 64-bit explicit significand and a 16-bit sign/exponent.
+    // Ignore the six padding bytes of the host's 16-byte long double.
+    union { long double value; unsigned char bytes[16]; } repr;
+    repr.value = node->fval;
+    uint64_t significand = 0;
+    for (int i = 0; i < 8; i++)
+      significand |= (uint64_t)repr.bytes[i] << (i * 8);
+    unsigned exponent = repr.bytes[8] | (unsigned)repr.bytes[9] << 8;
+    return format("0xK%04X%016lX", exponent, (unsigned long)significand);
+  }
   union { double value; uint64_t bits; } repr;
   repr.value = node->ty->kind == TY_FLOAT ? (float)node->fval : (double)node->fval;
   return format("0x%016lX", (unsigned long)repr.bits);
@@ -162,10 +178,24 @@ static char *llvm_abi_attr(Type *ty) {
   return "";
 }
 
-// Classify actual fields, not padding. INTEGER wins over SSE when fields
-// share an eightbyte (including overlapping union members). Unaligned fields
-// and records larger than two eightbytes use memory. The supported float and
-// double fields need no SSEUP/X87 classes; long double is diagnosed earlier.
+static int llvm_merge_class(int a, int b) {
+  if (a == b || b == LLVM_ABI_NONE)
+    return a;
+  if (a == LLVM_ABI_NONE)
+    return b;
+  if (a == LLVM_ABI_MEMORY || b == LLVM_ABI_MEMORY)
+    return LLVM_ABI_MEMORY;
+  if (a == LLVM_ABI_INTEGER || b == LLVM_ABI_INTEGER)
+    return LLVM_ABI_INTEGER;
+  if (a == LLVM_ABI_X87 || a == LLVM_ABI_X87UP ||
+      b == LLVM_ABI_X87 || b == LLVM_ABI_X87UP)
+    return LLVM_ABI_MEMORY;
+  return LLVM_ABI_SSE;
+}
+
+// Classify actual fields, not padding, including overlapping union members.
+// X87/X87UP records return in st(0), but all their arguments use memory.
+// Unaligned fields and records larger than two eightbytes also use memory.
 static bool llvm_abi_fields(Type *ty, int offset, int *ends, int *classes,
                             bool *fp64) {
   if (!ty->size)
@@ -180,14 +210,20 @@ static bool llvm_abi_fields(Type *ty, int offset, int *ends, int *classes,
     for (int i = 0; i < ty->array_len; i++)
       if (!llvm_abi_fields(ty->base, offset + i * ty->base->size, ends, classes, fp64))
         return false;
+  } else if (ty->kind == TY_LDOUBLE) {
+    if (offset != 0)
+      return false;
+    ends[0] = MAX(ends[0], 8);
+    ends[1] = MAX(ends[1], 2);
+    classes[0] = llvm_merge_class(classes[0], LLVM_ABI_X87);
+    classes[1] = llvm_merge_class(classes[1], LLVM_ABI_X87UP);
   } else {
     for (int i = offset; i < offset + ty->size; i++) {
       if (i < 0 || i >= 16)
         return false;
       ends[i / 8] = MAX(ends[i / 8], i % 8 + 1);
       int cls = is_flonum(ty) ? LLVM_ABI_SSE : LLVM_ABI_INTEGER;
-      if (cls == LLVM_ABI_INTEGER || classes[i / 8] == LLVM_ABI_NONE)
-        classes[i / 8] = cls;
+      classes[i / 8] = llvm_merge_class(classes[i / 8], cls);
       if (ty->kind == TY_DOUBLE)
         fp64[i / 8] = true;
     }
@@ -200,8 +236,16 @@ static void llvm_record_abi(Type *ty, LlvmAbi *abi) {
   int ends[2] = {};
   int classes[2] = {};
   bool fp64[2] = {};
-  if (ty->size > 16 || !llvm_abi_fields(ty, 0, ends, classes, fp64)) {
+  if (ty->size > 16 || !llvm_abi_fields(ty, 0, ends, classes, fp64) ||
+      classes[0] == LLVM_ABI_MEMORY || classes[1] == LLVM_ABI_MEMORY ||
+      (classes[1] == LLVM_ABI_X87UP && classes[0] != LLVM_ABI_X87)) {
     abi->memory = true;
+    return;
+  }
+  if (classes[0] == LLVM_ABI_X87 && classes[1] == LLVM_ABI_X87UP) {
+    abi->x87 = true;
+    abi->count = 1;
+    abi->types[0] = "x86_fp80";
     return;
   }
   for (int i = 0; i < 2; i++)
@@ -218,6 +262,10 @@ static void llvm_record_abi(Type *ty, LlvmAbi *abi) {
 
 static void llvm_parameter_abi(Type *ty, int *gp, int *fp, LlvmAbi *abi) {
   llvm_record_abi(ty, abi);
+  if (abi->memory || abi->x87) {
+    abi->memory = true;
+    return;
+  }
   int need_gp = 0;
   int need_fp = 0;
   for (int i = 0; i < abi->count; i++) {
@@ -237,6 +285,9 @@ static void llvm_parameter_abi(Type *ty, int *gp, int *fp, LlvmAbi *abi) {
 }
 
 static void llvm_scalar_abi(Type *ty, int *gp, int *fp) {
+  // System V passes scalar long double on the stack, preserving both budgets.
+  if (ty->kind == TY_LDOUBLE)
+    return;
   if (is_flonum(ty))
     *fp = MIN(8, *fp + 1);
   else
