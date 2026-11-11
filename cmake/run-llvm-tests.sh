@@ -214,8 +214,8 @@ cp "$source_dir/test/llvm/valid/functions.c" "$driver_dir/input.c"
 "$llvm_as" "$driver_dir/input.ll" -o "$driver_dir/input.bc"
 "$compiler" -S -emit-llvm "$driver_dir/input.c" -o - >"$driver_dir/stdout.ll"
 "$llvm_as" "$driver_dir/stdout.ll" -o "$driver_dir/stdout.bc"
-cp "$driver_dir/input.c" "$driver_dir/input.ppc"
-"$compiler" -S -emit-llvm -xc "$driver_dir/input.ppc" -o "$driver_dir/explicit.ll"
+cp "$driver_dir/input.c" "$driver_dir/input.custom"
+"$compiler" -S -emit-llvm -xc "$driver_dir/input.custom" -o "$driver_dir/explicit.ll"
 "$llvm_as" "$driver_dir/explicit.ll" -o "$driver_dir/explicit.bc"
 
 expect_driver_error() {

@@ -96,6 +96,37 @@ mkdir -p "$result_dir/default-names"
 
 echo 'testing LLVM driver: separate PPC units, mixed objects and archives'
 multi=$source_dir/test/llvm/multifile
+
+# Source suffixes select PPC automatically; headers remain includes. Preserve
+# the real multifile program, replacing only its filenames/include spellings.
+extensions=$result_dir/extensions
+mkdir -p "$extensions"
+for unit in base rectangle square; do
+  sed 's/"base.h"/"base.pph"/;s/"rectangle.h"/"rectangle.pph"/;s/"square.h"/"square.pph"/' \
+    "$multi/$unit.h" >"$extensions/$unit.pph"
+done
+for unit in base rectangle square main; do
+  sed 's/"base.h"/"base.pph"/;s/"rectangle.h"/"rectangle.pph"/;s/"square.h"/"square.pph"/' \
+    "$multi/$unit.c" >"$extensions/$unit.ppc"
+done
+for level in 0 2; do
+  "$compiler" --backend=llvm "-O$level" "$extensions"/*.ppc -o "$extensions/O$level.exe"
+  "$extensions/O$level.exe" >"$extensions/O$level.stdout"
+  cmp "$multi/expected.txt" "$extensions/O$level.stdout" || fail '.ppc/.pph multifile output'
+done
+"$compiler" -S -emit-llvm "$extensions/base.ppc" -o "$extensions/base.ll"
+"$llvm_as" "$extensions/base.ll" -o "$extensions/base.bc"
+"$compiler" --backend=llvm -M "$extensions/main.ppc" >"$extensions/main.d"
+grep -q 'base.pph' "$extensions/main.d" || fail '.pph dependency missing'
+"$compiler" --backend=llvm -E "$extensions/base.pph" -o "$extensions/base.i"
+reject --backend=llvm -c "$extensions/base.pph" -o "$extensions/header.o"
+[ ! -e "$extensions/header.o" ] || fail 'header silently compiled'
+"$compiler" --backend=llvm -x c -c "$extensions/base.pph" -o "$extensions/header.o"
+cp "$hello" "$extensions/hello.custom"
+reject --backend=llvm -c "$extensions/hello.custom" -o "$extensions/custom.o"
+"$compiler" --backend=llvm -x c "$extensions/hello.custom" -o "$extensions/custom.exe"
+check_hello "$extensions/custom.exe"
+
 "$compiler" --backend=llvm -O2 "$multi/base.c" "$multi/rectangle.c" "$multi/square.c" "$multi/main.c" \
   -o "$result_dir/multifile.exe"
 "$result_dir/multifile.exe" >"$result_dir/multifile.stdout"

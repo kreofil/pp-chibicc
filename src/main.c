@@ -1,7 +1,7 @@
 #include "chibicc.h"
 
 typedef enum {
-  FILE_NONE, FILE_C, FILE_ASM, FILE_OBJ, FILE_AR, FILE_DSO, FILE_IR,
+  FILE_NONE, FILE_C, FILE_HEADER, FILE_ASM, FILE_OBJ, FILE_AR, FILE_DSO, FILE_IR,
 } FileType;
 
 typedef enum { BACKEND_X86_64, BACKEND_LLVM } Backend;
@@ -47,6 +47,7 @@ static void usage(int status) {
   fprintf(stderr, "  --backend=x86-64  use the original backend (default)\n");
   fprintf(stderr, "  -O0/-O1/-O2/-O3/-Os/-Oz  LLVM optimization level (default: -O0)\n");
   fprintf(stderr, "  PPCHIBICC_LLVM_OPT / PPCHIBICC_LLVM_LLC override tool paths\n");
+  fprintf(stderr, "  .c/.ppc are source files; .h/.pph are headers (-E/-M, or explicit -x c)\n");
   exit(status);
 }
 
@@ -799,8 +800,10 @@ static FileType get_file_type(char *filename) {
     return FILE_DSO;
   if (endswith(filename, ".o"))
     return FILE_OBJ;
-  if (endswith(filename, ".c"))
+  if (endswith(filename, ".c") || endswith(filename, ".ppc"))
     return FILE_C;
+  if (endswith(filename, ".h") || endswith(filename, ".pph"))
+    return FILE_HEADER;
   if (endswith(filename, ".s"))
     return FILE_ASM;
   if (endswith(filename, ".ll") || endswith(filename, ".bc"))
@@ -858,6 +861,11 @@ int main(int argc, char **argv) {
 
     FileType type = get_file_type(input);
 
+    // Headers are include inputs, not independent object files or PCH files.
+    // -x c can deliberately override this classification.
+    if (type == FILE_HEADER && !opt_E && !opt_M)
+      error("header input requires -E, -M, or -x c to compile as a source: %s", input);
+
     // Handle .o or .a
     if (type == FILE_OBJ || type == FILE_AR || type == FILE_DSO) {
       strarray_push(&ld_args, input);
@@ -883,7 +891,7 @@ int main(int argc, char **argv) {
 
     // Just preprocess
     if (opt_E || opt_M) {
-      if (type != FILE_C)
+      if (type != FILE_C && type != FILE_HEADER)
         error("preprocessing requires C source: %s", input);
       run_cc1(argc, argv, input, NULL);
       continue;

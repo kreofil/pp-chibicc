@@ -183,24 +183,34 @@ CMake определяет compiler ID как `unknown`; приведённый 
 
 `.ppc` — файлы реализации, компилируемые как C с расширениями 4П. `.pph` —
 исключительно заголовки, подключаемые через `#include`; отдельные объекты из
-них не создаются. Для одиночного файла язык можно указать явно:
+них не создаются. Компилятор распознаёт `.ppc` автоматически, как `.c`:
 
 ```sh
-bin/ppchibicc --backend=llvm -O2 -x c main.ppc -o program
+bin/ppchibicc --backend=llvm -O2 main.ppc -o program
 ```
 
-В CMake свойство `LANGUAGE C` задаётся файлам реализации. Для распознанного
-Clang при политике CMP0119 NEW (например, с `cmake_minimum_required(VERSION 3.20)`)
-CMake сам добавляет `-x c`. У ppchibicc compiler ID пока не распознаётся,
-поэтому это свойство выбирает C-компилятор, но нужный флаг языка не добавляет.
-Рабочая настройка для ppchibicc:
+`.h` и `.pph` распознаются как заголовки. Их можно передать непосредственно
+для препроцессирования и получения зависимостей:
+
+```sh
+bin/ppchibicc -E types.pph -o types.i
+bin/ppchibicc -M types.pph
+```
+
+Обычный `#include` допускает любое расширение. Отдельная компиляция заголовка
+без выбора языка диагностируется; предкомпилированные заголовки не создаются.
+При намеренной компиляции заголовка как единицы трансляции используйте `-x c`.
+Для прочих расширений реализации этот параметр также остаётся доступен.
+
+В CMake свойство `LANGUAGE C` задаётся файлам реализации: оно выбирает
+C-компилятор для непривычного CMake расширения `.ppc`. Сам ppchibicc уже
+распознаёт это расширение, поэтому дополнительный `-x c` ему не нужен:
 
 ```cmake
 set(SOURCE_FILES main.ppc animals.ppc)
 set(HEADER_FILES animals.pph)
 
 set_source_files_properties(${SOURCE_FILES} PROPERTIES LANGUAGE C)
-set_property(SOURCE ${SOURCE_FILES} APPEND PROPERTY COMPILE_OPTIONS -x c)
 set_source_files_properties(${HEADER_FILES} PROPERTIES HEADER_FILE_ONLY TRUE)
 
 add_executable(animals ${SOURCE_FILES} ${HEADER_FILES})
@@ -211,8 +221,10 @@ target_link_options(animals PRIVATE --backend=llvm)
 Заголовки остаются в списке target для отображения в IDE, но не компилируются
 отдельно. `LANGUAGE C` не следует применять ко всему списку вместе с заголовками:
 это свойство заставляет CMake компилировать файл, если не задан `HEADER_FILE_ONLY`.
-Параметр `-x c` здесь относится только к компиляции исходников и не попадает
-в линковку готовых объектов. Для исходного x86-64 backend правила расширений те же.
+Для другого расширения, например `.custom`, задайте `LANGUAGE C` и
+`set_property(SOURCE ${SOURCE_FILES} APPEND PROPERTY COMPILE_OPTIONS -x c)`.
+Этот параметр относится к компиляции исходников и не попадает в линковку
+готовых объектов. Для исходного x86-64 backend правила расширений те же.
 
 ### Существующий пример `direct-classic/01-start`
 

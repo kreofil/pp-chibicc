@@ -276,6 +276,60 @@ check -o
 $chibicc --help 2>&1 | grep -q ppchibicc
 check --help
 
+# Native PPC suffixes use the same frontend as .c and include-only headers.
+mkdir -p "$tmp/extensions"
+cat > "$tmp/extensions/value.pph" <<'EOF'
+#ifndef EXTENSION_VALUE
+#define EXTENSION_VALUE
+typedef struct Value { int common; } case { int number; } Value;
+int measure<Value *v>();
+int helper();
+#endif
+EOF
+echo '#define EXPECTED 12' > "$tmp/extensions/value.h"
+cat > "$tmp/extensions/value.ppc" <<'EOF'
+#include "value.pph"
+int measure<Value *v>() { return v->common; }
+int measure<Value.number *v>() { return v->common + v->number; }
+EOF
+echo 'int helper() { return 5; }' > "$tmp/extensions/helper.c"
+cat > "$tmp/extensions/main.ppc" <<'EOF'
+#include "value.pph"
+#include "value.h"
+int main() { Value.number v = {3, 4}; return measure<&v>() + helper() != EXPECTED; }
+EOF
+$chibicc "$tmp/extensions/main.ppc" "$tmp/extensions/value.ppc" \
+    "$tmp/extensions/helper.c" -o "$tmp/extensions/program"
+check 'automatic .ppc and mixed .c compilation'
+"$tmp/extensions/program"
+check '.pph/.h includes and PPC dispatch'
+$chibicc -M "$tmp/extensions/main.ppc" > "$tmp/extensions/deps"
+grep -q 'value.pph' "$tmp/extensions/deps" && grep -q 'value.h' "$tmp/extensions/deps"
+check '.pph and .h dependencies'
+for suffix in h pph; do
+    header="$tmp/extensions/value.$suffix"
+    $chibicc -E "$header" -o "$tmp/extensions/header-$suffix.i"
+    check "preprocess .$suffix header"
+    $chibicc -M "$header" > "$tmp/extensions/header-$suffix.d"
+    grep -q "value.$suffix" "$tmp/extensions/header-$suffix.d"
+    check "dependencies for .$suffix header"
+    echo preserve > "$tmp/extensions/header.o"
+    $chibicc -c "$header" -o "$tmp/extensions/header.o" 2> "$tmp/extensions/error"
+    [ $? -ne 0 ] && grep -q 'header input' "$tmp/extensions/error" && \
+        [ "$(cat "$tmp/extensions/header.o")" = preserve ]
+    check ".$suffix remains a header"
+    $chibicc -x c -c "$header" -o "$tmp/extensions/header.o"
+    check "explicit -x c for .$suffix"
+done
+cp "$tmp/extensions/helper.c" "$tmp/extensions/helper.custom"
+$chibicc -c "$tmp/extensions/helper.custom" -o "$tmp/extensions/custom.o" 2> "$tmp/extensions/error"
+[ $? -ne 0 ] && grep -q 'unknown file extension' "$tmp/extensions/error"
+check 'unknown suffix requires a language selection'
+$chibicc -x c -c "$tmp/extensions/helper.custom" -o "$tmp/extensions/custom.o"
+check '-x c for another suffix'
+$chibicc -x c -x none -c "$tmp/extensions/value.ppc" -o "$tmp/extensions/reset.o"
+check '-x none restores suffix detection'
+
 # Compiler lookup through PATH must retain the built-in include directory.
 echo '#include <stddef.h>' > $tmp/path-include.c
 echo 'nullptr_t value = nullptr;' >> $tmp/path-include.c

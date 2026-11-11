@@ -80,6 +80,15 @@ definitions and aggregate arguments without a prototype remain diagnosed.
 Native/stage2 and LLVM 19/21/23 tests cover function pointers, type/refinement
 rules, scalar host ABI, small/large aggregate results, multimethods, strict
 enum dispatch, and mixed native/LLVM modules. PPC ABI is unchanged.
+The compiler now recognizes .ppc implementation files automatically alongside
+.c in both backends. It classifies .h/.pph as headers for includes and direct
+-E/-M processing; separate compilation requires an explicit -x c override.
+There is no PCH generation. Include lookup itself remains suffix-independent.
+Unknown implementation suffixes still require -x c; -x none restores detection.
+Native/stage2 and LLVM driver tests cover mixed .c/.ppc units, .pph/.h includes,
+dependencies, raw IR, header diagnostics and explicit overrides. CMake still
+needs LANGUAGE C for .ppc and HEADER_FILE_ONLY for headers; examples' CMake
+files are left for their separate maintenance step.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.
