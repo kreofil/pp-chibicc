@@ -89,6 +89,13 @@ Native/stage2 and LLVM driver tests cover mixed .c/.ppc units, .pph/.h includes,
 dependencies, raw IR, header diagnostics and explicit overrides. CMake still
 needs LANGUAGE C for .ppc and HEADER_FILE_ONLY for headers; examples' CMake
 files are left for their separate maintenance step.
+GitHub Actions now has separate native and LLVM 23 jobs on Ubuntu 24.04.
+The LLVM job runs stage1/stage2 O0/O2/ABI/driver checks plus optimization and
+dispatch demos. Python 3.12/CMake 3.31.6 and checksum-pinned LLVM 23.1.6
+packages provide a reproducible setup without system APT updates. Official
+LLVM packages are extracted without root and the compressed downloads are
+cached; tools verify the expected version. Failure artifacts preserve LLVM
+diagnostics. See docs/llvm-ci-ru.md. Stage2 itself is still built natively.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.
