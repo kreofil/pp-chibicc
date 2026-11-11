@@ -90,6 +90,24 @@ $code
 EOF
 done
 
+for type in 'void' 'int[2]' 'int[n]' 'struct Incomplete'; do
+    expect_fail "va_arg rejects $type" <<EOF
+#include <stdarg.h>
+struct Incomplete;
+int f(int n, ...) { va_list ap; va_start(ap, n); va_arg(ap, $type); return 0; }
+EOF
+done
+expect_fail 'va_start requires a variadic function' <<'EOF'
+#include <stdarg.h>
+int f(int n) { va_list ap; va_start(ap, n); return 0; }
+EOF
+for expression in '1' '(void *)0' 'bytes'; do
+    expect_fail "va_arg rejects invalid list $expression" <<EOF
+#include <stdarg.h>
+int f(int n, ...) { char bytes[24]; return va_arg($expression, int); }
+EOF
+done
+
 # Every nullptr constraint violation must produce a diagnostic, not a crash.
 expect_nullptr_fail() {
     name=$1

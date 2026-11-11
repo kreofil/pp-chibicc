@@ -810,6 +810,9 @@ static void gen_expr(Node *node) {
     gen_expr(node->lhs);
     gen_expr(node->rhs);
     return;
+  case ND_VA_ARG:
+    gen_expr(node->lhs);
+    return;
   case ND_CAST:
     gen_expr(node->lhs);
     cast(node->lhs->ty, node->ty);
@@ -1381,6 +1384,9 @@ static void assign_lvar_offsets(Obj *prog) {
       var->offset = -bottom;
     }
 
+    // Six GP slots and eight 16-byte SSE slots, separate from the va_list record.
+    if (fn->va_area)
+      bottom = align_to(bottom, 16) + 176;
     fn->stack_size = align_to(bottom, 16);
   }
 }
@@ -1506,38 +1512,41 @@ static void emit_text(Obj *prog) {
     // Save arg registers if function is variadic
     if (fn->va_area) {
       int gp = 0, fp = 0;
+      int overflow = 16;
       for (Obj *var = fn->params; var; var = var->next) {
-        if (is_flonum(var->ty))
+        Type *ty = var->ty;
+        if (var->offset > 0) {
+          overflow = MAX(overflow, var->offset + align_to(ty->size, 8));
+          continue;
+        }
+        if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+          for (int i = 0; i < ty->size; i += 8) {
+            if (has_flonum(ty, i, i + 8, 0)) fp++;
+            else gp++;
+          }
+        } else if (is_flonum(ty)) {
           fp++;
-        else
+        } else {
           gp++;
+        }
       }
 
       int off = fn->va_area->offset;
+      int reg_save = -fn->stack_size;
 
       // va_elem
-      println("  movl $%d, %d(%%rbp)", gp * 8, off);          // gp_offset
-      println("  movl $%d, %d(%%rbp)", fp * 8 + 48, off + 4); // fp_offset
-      println("  movq %%rbp, %d(%%rbp)", off + 8);            // overflow_arg_area
-      println("  addq $16, %d(%%rbp)", off + 8);
-      println("  movq %%rbp, %d(%%rbp)", off + 16);           // reg_save_area
-      println("  addq $%d, %d(%%rbp)", off + 24, off + 16);
+      println("  movl $%d, %d(%%rbp)", MIN(gp, GP_MAX) * 8, off);
+      println("  movl $%d, %d(%%rbp)", MIN(fp, FP_MAX) * 16 + 48, off + 4);
+      println("  lea %d(%%rbp), %%rax", overflow);
+      println("  movq %%rax, %d(%%rbp)", off + 8);
+      println("  lea %d(%%rbp), %%rax", reg_save);
+      println("  movq %%rax, %d(%%rbp)", off + 16);
 
       // __reg_save_area__
-      println("  movq %%rdi, %d(%%rbp)", off + 24);
-      println("  movq %%rsi, %d(%%rbp)", off + 32);
-      println("  movq %%rdx, %d(%%rbp)", off + 40);
-      println("  movq %%rcx, %d(%%rbp)", off + 48);
-      println("  movq %%r8, %d(%%rbp)", off + 56);
-      println("  movq %%r9, %d(%%rbp)", off + 64);
-      println("  movsd %%xmm0, %d(%%rbp)", off + 72);
-      println("  movsd %%xmm1, %d(%%rbp)", off + 80);
-      println("  movsd %%xmm2, %d(%%rbp)", off + 88);
-      println("  movsd %%xmm3, %d(%%rbp)", off + 96);
-      println("  movsd %%xmm4, %d(%%rbp)", off + 104);
-      println("  movsd %%xmm5, %d(%%rbp)", off + 112);
-      println("  movsd %%xmm6, %d(%%rbp)", off + 120);
-      println("  movsd %%xmm7, %d(%%rbp)", off + 128);
+      for (int i = 0; i < GP_MAX; i++)
+        println("  movq %s, %d(%%rbp)", argreg64[i], reg_save + i * 8);
+      for (int i = 0; i < FP_MAX; i++)
+        store_fp(i, reg_save + 48 + i * 16, 8);
     }
 
     // Save passed-by-register arguments to the stack

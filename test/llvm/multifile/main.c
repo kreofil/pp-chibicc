@@ -29,6 +29,10 @@ int main(void) {
       square_measure.id != 9 || square_measure.area != 1.75 ||
       zero_measure.id != 11 || zero_measure.area != 1.75 || extra.width != 0.5)
     return 4;
+  if (variable_sum<objects[0]>(12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12) != 757 ||
+      variable_sum<objects[1]>(12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12) != 659 ||
+      variable_sum<&zero>(0) != 11)
+    return 5;
   puts("PPC multifile OK");
   return 0;
 }

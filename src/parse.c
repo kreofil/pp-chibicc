@@ -225,6 +225,8 @@ static Node *postfix(Token **rest, Token *tok);
 static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
+static Obj *find_func(char *name);
+static Node *new_func_call_node(Obj *fn, Node *args, Token *tok);
 static Node *new_expr_stmt_node(Node *expr, Token *tok);
 static Node *ppc_tag_expr(Obj *var, Type *base_ty, Token *tok);
 static Node *ppc_extent_expr(Type *base, Token *tok);
@@ -4434,6 +4436,7 @@ static Node *generic_selection(Token **rest, Token *tok) {
 //         | "_Generic" generic-selection
 //         | "__builtin_types_compatible_p" "(" type-name, type-name, ")"
 //         | "__builtin_reg_class" "(" type-name ")"
+//         | "__builtin_va_arg" "(" assign "," type-name ")"
 //         | ident
 //         | str
 //         | num
@@ -4507,6 +4510,37 @@ static Node *primary(Token **rest, Token *tok) {
     Type *t2 = typename(&tok, tok);
     *rest = skip(tok, ")");
     return new_num(is_compatible(t1, t2), start);
+  }
+
+  if (equal(tok, "__builtin_va_arg")) {
+    tok = skip(tok->next, "(");
+    Node *ap = assign(&tok, tok);
+    tok = skip(tok, ",");
+    Type *ty = typename(&tok, tok);
+    *rest = skip(tok, ")");
+    if (ty->kind == TY_VOID || ty->kind == TY_FUNC || ty->kind == TY_ARRAY ||
+        ty->kind == TY_VLA || ty->size < 0)
+      error_tok(start, "va_arg requires a complete object type");
+    char *helper = "__va_arg_mem";
+    if (is_integer(ty) || ty->kind == TY_PTR || ty->kind == TY_NULLPTR)
+      helper = "__va_arg_gp";
+    if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE)
+      helper = "__va_arg_fp";
+    Obj *fn = find_func(helper);
+    if (!fn)
+      error_tok(start, "include <stdarg.h> before using va_arg");
+    add_type(ap);
+    if ((ap->ty->kind != TY_PTR && ap->ty->kind != TY_ARRAY && ap->ty->kind != TY_VLA) ||
+        !is_compatible(ap->ty->base, fn->ty->params->base))
+      error_tok(start, "va_arg requires a va_list argument");
+    if (current_fn)
+      strarray_push(&current_fn->refs, fn->name);
+    ap = new_cast(ap, fn->ty->params);
+    ap->next = new_num(ty->size, start);
+    ap->next->next = new_num(ty->align, start);
+    Node *call = new_func_call_node(fn, ap, start);
+    Node *value = new_unary(ND_DEREF, new_cast(call, pointer_to(ty)), start);
+    return new_unary(ND_VA_ARG, value, start);
   }
 
   if (equal(tok, "__builtin_reg_class")) {
@@ -4951,8 +4985,11 @@ static Token *finish_function(Token *tok, Obj *fn, Type *ty) {
 
   fn->params = locals;
 
-  if (ty->is_variadic)
-    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
+  if (ty->is_variadic) {
+    // The public System V va_list record; each backend owns its register save area.
+    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 24));
+    fn->va_area->align = 8;
+  }
   fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
 
   tok = skip(tok, "{");

@@ -119,8 +119,10 @@ done
 "$compiler" --backend=llvm -M "$extensions/main.ppc" >"$extensions/main.d"
 grep -q 'base.pph' "$extensions/main.d" || fail '.pph dependency missing'
 "$compiler" --backend=llvm -E "$extensions/base.pph" -o "$extensions/base.i"
+printf 'preserve header output\n' >"$extensions/header.o"
+cp "$extensions/header.o" "$extensions/header.expected"
 reject --backend=llvm -c "$extensions/base.pph" -o "$extensions/header.o"
-[ ! -e "$extensions/header.o" ] || fail 'header silently compiled'
+cmp "$extensions/header.expected" "$extensions/header.o" || fail 'header diagnostic overwrote output'
 "$compiler" --backend=llvm -x c -c "$extensions/base.pph" -o "$extensions/header.o"
 cp "$hello" "$extensions/hello.custom"
 reject --backend=llvm -c "$extensions/hello.custom" -o "$extensions/custom.o"

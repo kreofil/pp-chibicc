@@ -28,8 +28,8 @@ Floating-point constants use exact LLVM hexadecimal encodings. Scalar SSE
 arguments do not consume the GP register budget used for record ABI.
 External variadic calls accept integer/pointer and float/double arguments,
 including float-to-double default promotion and named aggregate parameters.
-Variadic definitions, long double (including record fields) and aggregates
-among unnamed variadic arguments are still diagnosed.
+Long double (including record fields) and aggregates among unnamed variadic
+arguments are still diagnosed by LLVM.
 Floating-point semantic and ABI tests use the system C compiler as an
 independent reference, including edge cases with existing native-backend
 limitations (NaN conditions and unsigned 64-bit conversions).
@@ -75,8 +75,8 @@ without replacing a known prototype with an unspecified list. Compatibility
 checks account for default promotions. Empty PPC ordinary lists are fixed
 zero-argument lists, interchangeable with (void), while procedural arguments
 remain explicit. LLVM emits fixed definitions and variadic-spelled C
-declarations/calls only where parameter types are unspecified. True variadic
-definitions and aggregate arguments without a prototype remain diagnosed.
+declarations/calls where parameter types are unspecified, and for actual
+ellipsis signatures. Aggregate arguments without a prototype remain diagnosed.
 Native/stage2 and LLVM 19/21/23 tests cover function pointers, type/refinement
 rules, scalar host ABI, small/large aggregate results, multimethods, strict
 enum dispatch, and mixed native/LLVM modules. PPC ABI is unchanged.
@@ -96,6 +96,21 @@ packages provide a reproducible setup without system APT updates. Official
 LLVM packages are extracted without root and the compressed downloads are
 cached; tools verify the expected version. Failure artifacts preserve LLVM
 diagnostics. See docs/llvm-ci-ru.md. Stage2 itself is still built natively.
+Variadic C and PPC definitions now support scalar va_start/va_arg/va_copy/va_end
+and forwarding va_list to libc or other GCC/Clang modules. LLVM initializes a
+private 24-byte va_list through llvm.va_start and ends it on each normal return
+or fallthrough. Typed ND_VA_ARG accesses retain diagnostics for aggregate or
+long-double retrieval while lowering scalar accesses through stdarg helpers.
+The native backend now uses the System V register-save layout: six 8-byte GP
+slots and eight 16-byte SSE slots. It reserves that area separately, accounts
+for named stack arguments and named register classes, and clamps the offsets.
+stdarg.h shares this ABI in both backends; long double uses memory natively.
+Existing native objects creating/reading/passing va_list need a clean rebuild
+because the earlier private SSE layout used 8-byte slots. PPC tags, tables and
+dispatch ABI are unchanged. Native/stage2 and LLVM 19/21/23 tests cover register
+exhaustion, interleaving, pointers, promotions, independent cursors/restarts,
+libc forwarding, named records and sret, strict/PPC multimethods, and mixed
+native/LLVM units. See docs/llvm-varargs-ru.md.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.

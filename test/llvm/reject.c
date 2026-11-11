@@ -10,9 +10,11 @@ int take(int n, ...);
 int main(void) { struct S s = {3}; return take(1, s); }
 #elif defined(REJECT_BITFIELD)
 int main(void) { struct S { unsigned int x : 3; } s = {3}; return s.x; }
-#elif defined(REJECT_VARIADIC)
-int pick(int x, ...) { return x; }
-int main(void) { return pick(1, 2); }
+#elif defined(REJECT_VA_ARG_AGGREGATE)
+#include <stdarg.h>
+struct S { int n; };
+int pick(int x, ...) { va_list ap; va_start(ap, x); return va_arg(ap, struct S).n; }
+int main(void) { return 0; }
 #elif defined(REJECT_AGGREGATE_LONG_DOUBLE_NESTED)
 struct S { struct { long double x[2]; } nested; };
 int take(struct S s) { return (int)s.nested.x[0]; }
@@ -28,10 +30,10 @@ int main(void) { return printf("%.1Lf", 1.0L); }
 struct S { int n; };
 int external();
 int main(void) { struct S s = {3}; return external(s); }
-#elif defined(REJECT_PPC_VARIADIC)
-typedef struct Item {} case {} Item;
-int pick<Item *p>(int n, ...) { return n; }
-int main(void) { Item item; return pick<&item>(1, 2); }
+#elif defined(REJECT_VA_ARG_LONG_DOUBLE)
+#include <stdarg.h>
+int pick(int x, ...) { va_list ap; va_start(ap, x); return (int)va_arg(ap, long double); }
+int main(void) { return 0; }
 #elif defined(REJECT_VLA)
 int main(void) { int n = 3; int a[n]; a[0] = 1; return a[0]; }
 #elif defined(REJECT_TLS)

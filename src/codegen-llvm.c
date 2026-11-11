@@ -45,6 +45,7 @@ static char *llvm_block;
 static bool llvm_terminated;
 static bool llvm_memset;
 static bool llvm_memmove;
+static bool llvm_varargs;
 static LlvmArgSlot *llvm_arg_slots;
 static int llvm_arg_slot_id;
 static LlvmAbi llvm_return_abi;
@@ -388,6 +389,11 @@ static char *llvm_addr_var(Obj *obj) {
   error("LLVM backend: local variable has no allocation");
 }
 
+static void llvm_end_varargs(void) {
+  if (llvm_fn->va_area)
+    llvm_print("  call void @llvm.va_end(ptr %s)", llvm_addr_var(llvm_fn->va_area));
+}
+
 static char *llvm_offset(char *addr, int offset) {
   if (!offset)
     return addr;
@@ -611,9 +617,7 @@ static char *llvm_conditional(Node *node) {
   return result;
 }
 
-static void llvm_check_signature(Type *ty, Token *tok, bool definition) {
-  if (ty->is_variadic && definition)
-    llvm_unsupported(tok, "variadic function definitions");
+static void llvm_check_signature(Type *ty, Token *tok) {
   llvm_check_abi_type(ty->return_ty, tok);
   for (Type *param = ty->params; param; param = param->next) {
     llvm_check_abi_type(param, tok);
@@ -623,7 +627,7 @@ static void llvm_check_signature(Type *ty, Token *tok, bool definition) {
 }
 
 static char *llvm_call(Node *node) {
-  llvm_check_signature(node->func_ty, node->tok, false);
+  llvm_check_signature(node->func_ty, node->tok);
   if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca"))
     llvm_unsupported(node->tok, "alloca");
   char *callee = llvm_expr(node->lhs);
@@ -840,6 +844,11 @@ static char *llvm_expr(Node *node) {
     return llvm_conditional(node);
   case ND_FUNCALL:
     return llvm_call(node);
+  case ND_VA_ARG:
+    if (llvm_aggregate(node->ty))
+      llvm_unsupported(node->tok, "aggregate va_arg values");
+    llvm_check_scalar(node->ty, node->tok);
+    return llvm_expr(node->lhs);
   case ND_MEMZERO:
     llvm_memset = true;
     llvm_print("  call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 %d, i1 false)",
@@ -905,8 +914,10 @@ static void llvm_stmt(Node *node) {
       char *source = llvm_expr(node->lhs);
       if (llvm_return_abi.memory) {
         llvm_copy("%sret", source, ty);
+        llvm_end_varargs();
         llvm_print("  ret void");
       } else if (!llvm_return_abi.count) {
+        llvm_end_varargs();
         llvm_print("  ret void");
       } else {
         char *result = NULL;
@@ -923,6 +934,7 @@ static void llvm_stmt(Node *node) {
             result = inserted;
           }
         }
+        llvm_end_varargs();
         llvm_print("  ret %s %s", ret_type, result);
       }
       llvm_terminated = true;
@@ -931,6 +943,7 @@ static void llvm_stmt(Node *node) {
     char *value = "0";
     if (node->lhs)
       value = llvm_cast(llvm_expr(node->lhs), node->lhs->ty, ty, node->tok);
+    llvm_end_varargs();
     if (ty->kind == TY_VOID)
       llvm_print("  ret void");
     else
@@ -1111,7 +1124,7 @@ static void llvm_global(Obj *obj) {
 }
 
 static void llvm_function(Obj *fn) {
-  llvm_check_signature(fn->ty, fn->tok, true);
+  llvm_check_signature(fn->ty, fn->tok);
   llvm_reference(fn);
   for (LlvmRef *ref = llvm_refs; ref; ref = ref->next)
     if (!strcmp(ref->obj->name, fn->name))
@@ -1178,8 +1191,13 @@ static void llvm_function(Obj *fn) {
     if (param)
       param = param->next;
   }
+  if (fn->va_area) {
+    llvm_varargs = true;
+    llvm_print("  call void @llvm.va_start(ptr %s)", llvm_addr_var(fn->va_area));
+  }
   llvm_stmt(fn->body);
   if (!llvm_terminated) {
+    llvm_end_varargs();
     Type *ret = fn->ty->return_ty;
     if (ret->kind == TY_VOID || (llvm_aggregate(ret) &&
         (llvm_return_abi.memory || !llvm_return_abi.count)))
@@ -1222,6 +1240,7 @@ void codegen_llvm(Obj *prog, FILE *out) {
   llvm_refs = NULL;
   llvm_memset = false;
   llvm_memmove = false;
+  llvm_varargs = false;
   llvm_print("; ppchibicc experimental LLVM IR backend (LLVM 19+, Linux x86-64)");
   // Keep the source name stable when the driver writes IR to a temporary
   // file. Hex escapes cover quotes, backslashes and non-ASCII file names.
@@ -1268,7 +1287,7 @@ void codegen_llvm(Obj *prog, FILE *out) {
                  MAX(0, obj->ty->size));
       continue;
     }
-    llvm_check_signature(obj->ty, obj->tok, false);
+    llvm_check_signature(obj->ty, obj->tok);
     llvm_print("declare %s%s %s(%s)", llvm_abi_attr(obj->ty->return_ty),
                llvm_return_type(obj->ty->return_ty), llvm_global_name(obj->name),
                llvm_parameters(obj->ty, false, true));
@@ -1277,4 +1296,8 @@ void codegen_llvm(Obj *prog, FILE *out) {
     llvm_print("declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)");
   if (llvm_memmove)
     llvm_print("declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)");
+  if (llvm_varargs) {
+    llvm_print("declare void @llvm.va_start(ptr)");
+    llvm_print("declare void @llvm.va_end(ptr)");
+  }
 }

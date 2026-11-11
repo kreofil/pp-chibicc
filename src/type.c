@@ -360,6 +360,9 @@ void add_type(Node *node) {
   case ND_FUNCALL:
     node->ty = node->func_ty->return_ty;
     return;
+  case ND_VA_ARG:
+    node->ty = node->lhs->ty;
+    return;
   case ND_NOT:
   case ND_LOGOR:
   case ND_LOGAND:
