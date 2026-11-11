@@ -46,6 +46,7 @@ cp "$expected" "$result_dir/expected.txt"
   echo "opt: $llvm_opt"
   echo "llc: $llvm_llc"
   echo 'Target: x86_64-pc-linux-gnu; CPU: x86-64; llc: -O=2; relocation: pic'
+  echo 'Outputs: llc -filetype=asm for inspection; llc -filetype=obj for execution; host CC links objects'
   echo 'Inputs: 0 1 4 7 31; default: 4; rejected inputs: -1 33 (exit 2)'
   echo 'Host:'
   uname -srmo
@@ -124,7 +125,10 @@ for variant in raw mem2reg sroa O2; do
     "$prefix/program.bc" >"$prefix/properties.stdout" 2>"$prefix/properties.txt"
   "$llvm_llc" -O=2 -mcpu=x86-64 -relocation-model=pic -filetype=asm \
     "$prefix/program.bc" -o "$prefix/program.s"
-  "$host_cc" -c "$prefix/program.s" -o "$prefix/program.o"
+  # A newer LLVM may print directives (e.g. .prefalign) that an older GNU as
+  # cannot assemble. Use LLVM's object writer; keep .s as an inspection aid.
+  "$llvm_llc" -O=2 -mcpu=x86-64 -relocation-model=pic -filetype=obj \
+    "$prefix/program.bc" -o "$prefix/program.o"
   "$host_cc" "$prefix/program.o" -o "$prefix/program.exe"
   check_execution "$prefix/program.exe" "$prefix/result"
   awk -v pipeline="$variant" -f "$source_dir/cmake/llvm-ir-metrics.awk" \
