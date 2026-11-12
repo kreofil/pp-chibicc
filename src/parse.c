@@ -83,6 +83,7 @@ struct PpcFunc {
   Obj **targets;
   int target_count;
   PpcHandler *handlers;
+  PpcDispatchRuntimeInfo *runtime;
 };
 
 typedef struct PpcCall PpcCall;
@@ -5588,7 +5589,9 @@ static Obj *ppc_default_handler(PpcFunc *ppc_fn, Token *tok) {
 }
 
 static Node *ppc_table_slot(Obj *table, Node *idx, Token *tok) {
-  return new_unary(ND_DEREF, new_add(new_var_node(table, tok), idx, tok), tok);
+  Node *addr = new_add(new_var_node(table, tok), idx, tok);
+  addr->is_ppc_table_access = true;
+  return new_unary(ND_DEREF, addr, tok);
 }
 
 static Node *ppc_cast_fnptr(Node *fn, Type *fnptr_ty) {
@@ -5790,7 +5793,7 @@ static void ppc_make_spec_ptr_tags_dtor(PpcGen *gen) {
   add_type(fn->body);
 }
 
-static void ppc_make_table_ctor(PpcFunc *ppc_fn) {
+static Obj *ppc_make_table_ctor(PpcFunc *ppc_fn) {
   static int id = 0;
   Token *tok = ppc_fn->name_tok;
   Obj *fn = new_generated_func(format("__ppc_ctor_201_table_%d", id++),
@@ -5810,9 +5813,10 @@ static void ppc_make_table_ctor(PpcFunc *ppc_fn) {
   fn->body = new_block_node(if_node, tok);
   fn->locals = locals;
   add_type(fn->body);
+  return fn;
 }
 
-static void ppc_make_fill_ctor(PpcFunc *ppc_fn, Obj *target, int priority) {
+static Obj *ppc_make_fill_ctor(PpcFunc *ppc_fn, Obj *target, int priority) {
   static int id = 0;
   Token *tok = ppc_fn->name_tok;
   Obj *fn = new_generated_func(format("__ppc_ctor_%d_fill_%d", priority, id++),
@@ -5839,11 +5843,12 @@ static void ppc_make_fill_ctor(PpcFunc *ppc_fn, Obj *target, int priority) {
   fn->locals = locals;
   target->is_root = true;
   add_type(fn->body);
+  return fn;
 }
 
-static void ppc_make_exhaustive_check_ctor(PpcFunc *ppc_fn) {
+static Obj *ppc_make_exhaustive_check_ctor(PpcFunc *ppc_fn) {
   if (!ppc_needs_exhaustive_check(ppc_fn))
-    return;
+    return NULL;
 
   static int id = 0;
   Token *tok = ppc_fn->name_tok;
@@ -5894,9 +5899,10 @@ static void ppc_make_exhaustive_check_ctor(PpcFunc *ppc_fn) {
   fn->body = new_block_node(loop, tok);
   fn->locals = locals;
   add_type(fn->body);
+  return fn;
 }
 
-static void ppc_make_table_dtor(PpcFunc *ppc_fn) {
+static Obj *ppc_make_table_dtor(PpcFunc *ppc_fn) {
   static int id = 0;
   Token *tok = ppc_fn->name_tok;
 
@@ -5926,11 +5932,12 @@ static void ppc_make_table_dtor(PpcFunc *ppc_fn) {
   fn->body = new_block_node(if_node, tok);
   fn->locals = locals;
   add_type(fn->body);
+  return fn;
 }
 
-static void ppc_make_handler_ctor(PpcFunc *ppc_fn, PpcHandler *handler) {
+static Obj *ppc_make_handler_ctor(PpcFunc *ppc_fn, PpcHandler *handler) {
   if (handler->is_default || handler->is_abstract || !handler->fn)
-    return;
+    return NULL;
 
   static int id = 0;
   Token *tok = handler->param_tys && handler->param_tys->name ?
@@ -5951,6 +5958,7 @@ static void ppc_make_handler_ctor(PpcFunc *ppc_fn, PpcHandler *handler) {
   fn->body = new_block_node(stmt, tok);
   fn->locals = locals;
   add_type(fn->body);
+  return fn;
 }
 
 static void ppc_make_spec_ctors(Type *base, Member *spec) {
@@ -6131,6 +6139,7 @@ PpcDispatchInfo *ppc_dispatch_info(void) {
     tail->function_ty = ppc_generic_func_type(family);
     tail->bases = family->base_tys;
     tail->arity = family->ppc_param_count;
+    tail->runtime = family->runtime;
     for (PpcHandler *h = family->handlers; h; h = h->next) {
       if (h->is_abstract || !h->fn)
         continue;
@@ -6145,6 +6154,16 @@ PpcDispatchInfo *ppc_dispatch_info(void) {
   return head.next;
 }
 
+static void ppc_describe_runtime(PpcFunc *family, char *role, Obj *fn) {
+  if (!fn)
+    return;
+  PpcDispatchRuntimeInfo *info = calloc(1, sizeof(PpcDispatchRuntimeInfo));
+  info->role = role;
+  info->fn = fn;
+  info->next = family->runtime;
+  family->runtime = info;
+}
+
 static void finalize_ppc_runtime(void) {
   for (PpcGen *gen = ppc_gens; gen; gen = gen->next) {
     ppc_make_spec_ctors(gen->ty, gen->ty->ppc_specs);
@@ -6154,17 +6173,17 @@ static void finalize_ppc_runtime(void) {
 
   for (PpcFunc *fn = ppc_funcs; fn; fn = fn->next) {
     ppc_make_candidates(fn);
-    ppc_make_table_ctor(fn);
-    ppc_make_table_dtor(fn);
+    ppc_describe_runtime(fn, "allocate", ppc_make_table_ctor(fn));
+    ppc_describe_runtime(fn, "release", ppc_make_table_dtor(fn));
     for (PpcHandler *handler = fn->handlers; handler; handler = handler->next)
-      ppc_make_handler_ctor(fn, handler);
+      ppc_describe_runtime(fn, "handler", ppc_make_handler_ctor(fn, handler));
     if (ppc_has_concrete_default_handler(fn))
-      ppc_make_fill_ctor(fn, ppc_default_handler(fn, fn->name_tok), 301);
-    ppc_make_exhaustive_check_ctor(fn);
+      ppc_describe_runtime(fn, "default", ppc_make_fill_ctor(fn, ppc_default_handler(fn, fn->name_tok), 301));
+    ppc_describe_runtime(fn, "check", ppc_make_exhaustive_check_ctor(fn));
     // Error stubs must not mask a closed-family completeness check or
     // block a real default coming from another (possibly opaque) unit.
     if (!ppc_needs_exhaustive_check(fn) && !ppc_has_concrete_default_handler(fn))
-      ppc_make_fill_ctor(fn, ppc_default_handler(fn, fn->name_tok), 361);
+      ppc_describe_runtime(fn, "stub", ppc_make_fill_ctor(fn, ppc_default_handler(fn, fn->name_tok), 361));
   }
   for (PpcCall *site = ppc_calls; site; site = site->next)
     ppc_optimize_call(site);

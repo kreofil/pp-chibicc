@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect ppchibicc.dispatch.v1 named metadata in textual LLVM modules.
+"""Inspect ppchibicc dispatch named metadata in textual LLVM modules.
 
 This is an analysis tool, not an LLVM optimizer or a proof that the supplied
 modules form a whole program. No source text or metadata is executed.
@@ -16,6 +16,7 @@ import sys
 
 
 SCHEMA = "ppchibicc.dispatch.v1"
+SCHEMAS = (SCHEMA, "ppchibicc.dispatch.v2")
 STRING = r'"((?:\\[0-9A-Fa-f]{2}|[^"\\])*)"'
 FIELD = re.compile(
     r'\s*(?:!'+STRING+r'|ptr\s+@(?:'+STRING+r'|([-a-zA-Z$._0-9]+))'
@@ -82,7 +83,7 @@ def read_module(path):
         if ident not in nodes:
             raise ValueError(f"{path}: missing metadata node !{ident}")
         record = fields(nodes[ident])
-        if len(record) < 3 or record[0] != ("string", SCHEMA):
+        if len(record) < 3 or record[0][0] != "string" or record[0][1] not in SCHEMAS:
             raise ValueError(f"{path}: unsupported dispatch metadata schema")
         records.append(record)
     units = set()
@@ -107,7 +108,7 @@ def read_module(path):
         name = record[3][1]
         family = families.setdefault((source, name), dict(
             source=source, name=name, axes={}, handlers=[], signature=None,
-            table=None, excluded=False, arity=None))
+            table=None, excluded=False, arity=None, runtime=[]))
         if kind == "excluded":
             values(record, "string string string string string")
             if record[4][1] != "open-or-opaque" or family["excluded"]:
@@ -131,6 +132,11 @@ def read_module(path):
                 raise ValueError(f"{path}: invalid closed axis for {name}")
             family["axes"][index] = dict(type=type_name, form=form, extent=extent,
                 size=size, align=align, alternatives=[label.split(":", 1)[1] for label in alternatives])
+        elif kind == "runtime":
+            _, _, _, _, role, symbol = values(record, "string string string string string ptr")
+            if record[0][1] != "ppchibicc.dispatch.v2" or role not in ("allocate", "release", "handler", "default", "check", "stub"):
+                raise ValueError(f"{path}: invalid runtime metadata")
+            family["runtime"].append(dict(role=role, symbol=symbol, source=source))
         elif kind == "handler":
             _, _, _, _, coordinate, symbol, definition, private = values(
                 record, "string string string string string ptr i1 i1")
@@ -144,7 +150,7 @@ def read_module(path):
             raise ValueError(f"{path}: unknown dispatch record {kind}")
     for family in families.values():
         if family["excluded"]:
-            if family["signature"] is not None or family["axes"] or family["handlers"]:
+            if family["signature"] is not None or family["axes"] or family["handlers"] or family["runtime"]:
                 raise ValueError(f"{path}: exclusion mixed with closed data")
             continue
         arity = family["arity"]

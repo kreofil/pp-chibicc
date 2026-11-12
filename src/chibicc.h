@@ -175,6 +175,13 @@ struct PpcDispatchHandlerInfo {
   bool is_default;
 };
 
+typedef struct PpcDispatchRuntimeInfo PpcDispatchRuntimeInfo;
+struct PpcDispatchRuntimeInfo {
+  PpcDispatchRuntimeInfo *next;
+  char *role;
+  Obj *fn;
+};
+
 typedef struct PpcDispatchInfo PpcDispatchInfo;
 struct PpcDispatchInfo {
   PpcDispatchInfo *next;
@@ -185,6 +192,7 @@ struct PpcDispatchInfo {
   int arity;
   bool all_closed;
   PpcDispatchHandlerInfo *handlers;
+  PpcDispatchRuntimeInfo *runtime;
 };
 
 PpcDispatchInfo *ppc_dispatch_info(void);
@@ -256,6 +264,7 @@ typedef enum {
 // AST node type
 struct Node {
   NodeKind kind; // Node kind
+  bool is_ppc_table_access; // Compiler-owned byte offset, suitable for LLVM GEP
   Node *next;    // Next node
   Type *ty;      // Type, e.g. int or pointer to int
   Token *tok;    // Representative token

@@ -773,6 +773,15 @@ static char *llvm_binary(Node *node) {
   bool pointer_arith = (node->kind == ND_ADD || node->kind == ND_SUB) &&
                        (llvm_pointer(ty) || llvm_pointer(node->rhs->ty));
   if (pointer_arith) {
+    if (node->is_ppc_table_access) {
+      // The frontend already scaled this compiler-owned table offset. A
+      // non-inbounds byte GEP exposes constant entries to LLVM without
+      // imposing extra assumptions on ordinary C pointer/integer arithmetic.
+      right = llvm_cast(right, node->rhs->ty, ty_ulong, node->tok);
+      char *result = llvm_reg();
+      llvm_print("  %s = getelementptr i8, ptr %s, i64 %s", result, left, right);
+      return result;
+    }
     left = llvm_cast(left, ty, ty_ulong, node->tok);
     right = llvm_cast(right, node->rhs->ty, ty_ulong, node->tok);
     char *result = llvm_reg();
@@ -1319,18 +1328,18 @@ static void llvm_dispatch_metadata(void) {
   FILE *out = open_memstream(&buf, &len);
   int id = 0;
   char *source = llvm_metadata_string(base_file);
-  fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"unit\", %s}\n", id++, source);
+  fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v2\", !\"unit\", %s}\n", id++, source);
   for (PpcDispatchInfo *info = ppc_dispatch_info(); info; info = info->next) {
     char *name = llvm_metadata_string(info->name);
     if (!info->all_closed) {
-      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"excluded\", %s, %s, !\"open-or-opaque\"}\n",
+      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v2\", !\"excluded\", %s, %s, !\"open-or-opaque\"}\n",
               id++, source, name);
       continue;
     }
     Type *ty = info->function_ty;
     char *signature = format("%s%s (%s)", llvm_abi_attr(ty->return_ty),
                             llvm_return_type(ty->return_ty), llvm_parameters(ty, false, true));
-    fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"family\", %s, %s, %s, i32 %d, ptr %s}\n",
+    fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v2\", !\"family\", %s, %s, %s, i32 %d, ptr %s}\n",
             id++, source, name, llvm_metadata_string(signature), info->arity,
             llvm_global_name(info->table->name));
     for (int i = 0; i < info->arity; i++) {
@@ -1347,16 +1356,19 @@ static void llvm_dispatch_metadata(void) {
         labels = format("%s;%d:%.*s", labels, m->idx, m->name->len, m->name->loc);
         extent = MAX(extent, m->idx + 1);
       }
-      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"axis\", %s, %s, i32 %d, %s, !\"%s\", i32 %d, i32 %d, i32 %d, %s}\n",
+      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v2\", !\"axis\", %s, %s, i32 %d, %s, !\"%s\", i32 %d, i32 %d, i32 %d, %s}\n",
               id++, source, name, i, llvm_metadata_string(base->ppc_name), kind,
               extent, base->size, base->align, llvm_metadata_string(labels));
     }
+    for (PpcDispatchRuntimeInfo *r = info->runtime; r; r = r->next)
+      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v2\", !\"runtime\", %s, %s, !\"%s\", ptr %s}\n",
+              id++, source, name, r->role, llvm_global_name(r->fn->name));
     for (PpcDispatchHandlerInfo *h = info->handlers; h; h = h->next) {
       char *coordinate = h->is_default ? "*" : "";
       if (!h->is_default)
         for (int i = 0; i < info->arity; i++)
           coordinate = format("%s%s%d", coordinate, i ? "," : "", h->indices[i]);
-      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"handler\", %s, %s, %s, ptr %s, i1 %s, i1 %s}\n",
+      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v2\", !\"handler\", %s, %s, %s, ptr %s, i1 %s, i1 %s}\n",
               id++, source, name, llvm_metadata_string(coordinate),
               llvm_global_name(h->fn->name), h->fn->is_definition ? "true" : "false",
               h->fn->is_static ? "true" : "false");

@@ -196,7 +196,8 @@ this protocol; ordinary C libraries require no rebuild. Closed tag numbers,
 object layouts and function calling conventions are unchanged. See
 `docs/ppc-closed-dispatch-ru.md`.
 LLVM modules now carry descriptive !ppchibicc.dispatch named metadata with
-the ppchibicc.dispatch.v1 schema. A frontend snapshot exposes each family;
+the ppchibicc.dispatch.v2 schema (the report reader also accepts v1).
+A frontend snapshot exposes each family;
 fixed axes, alternative names/order, type size/alignment, lowered ABI and
 handler coordinates are emitted only for all-closed procedural arguments.
 Open/opaque participants contribute exclusion records. Unit markers include
@@ -223,6 +224,41 @@ example verifies all six object orders; regression cases cover all four type
 forms, external bodies, private overrides/defaults, incomplete/inconsistent
 metadata, bitcode and O2, quoted UTF-8 paths and input-error preservation.
 Both targets are included in LLVM CI. See docs/ppc-dispatch-report-ru.md.
+
+The separate ppc-static-dispatch.py executable mode now accepts an explicitly
+complete set of raw ppchibicc v2 LLVM units and --closed-program. Resolved
+all-closed families can be frozen into private immutable pointer arrays and
+internal constant table cells. The frontend describes allocate/release,
+concrete/default registration and completeness-check functions as real LLVM
+references. The tool checks counts, definitions, ownership and actual startup
+priorities, audits table loads and derived addresses for writes/escapes, and
+rejects unknown application dependencies (only the supported C/POSIX runtime
+and LLVM intrinsics may remain external). Open/opaque participants, missing
+cells/definitions, conflicting registrations and inconsistent axes/ABI exclude
+a family; explicitly requesting it fails. Native application objects, merged
+or preoptimized inputs and old metadata cannot establish this contract.
+
+After validation, the selected table lifecycle entries/bodies are removed,
+actual handler definitions are internalized, and the output is assembled and
+verified before atomic publication. Input SHA256s, selected matrices, removed
+functions and output SHA256 are recorded; an explicit-input-set manifest hash
+is also embedded in !ppchibicc.closed_program. This is an explicit complete-
+input contract, not automatic discovery of every possible library. Adding a
+handler module requires rebuilding the closed program. Unselected/open tables
+and required tag/carrier/global initialization retain their runtime behavior.
+
+Compiler-owned table-slot additions now carry a Node marker and use byte GEP
+without inbounds in LLVM. This exposes constant entries without changing
+ordinary C pointer/integer lowering or native code generation. The 2x3 example
+removes 11 lifecycle functions and LLVM O2 reduces registry_known to ret i32
+507, while runtime dispatch retains an indirect call. Current LLVM 23 dispatch
+demo raw/O2 counts are 99/45 (known), 137/64 (closed), 197/87 (multi), and
+99/43 (open); these are static metrics, not speed measurements. ABI/tag values
+are unchanged. Static-dispatch stage1/stage2 CI tests cover all three modes,
+six module orders, records/sret/varargs, all four closed forms, a private handler
+that overrides a locally known default, adjacent open/opaque runtime families,
+metadata/priority completeness, unknown dependencies and table address escapes.
+See docs/ppc-static-dispatch-ru.md.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.

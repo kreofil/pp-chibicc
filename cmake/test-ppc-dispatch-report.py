@@ -222,13 +222,26 @@ class DispatchReportTests(unittest.TestCase):
         output.write_text("preserved\n", encoding="utf-8")
         invalid = self.out / "invalid.ll"
         variants = ["source_filename = \"foreign.c\"\n",
-                    self.inputs[0].read_text().replace("ppchibicc.dispatch.v1", "ppchibicc.dispatch.v999")]
+                    re.sub(r'ppchibicc\.dispatch\.v[12]', 'ppchibicc.dispatch.v999', self.inputs[0].read_text())]
         for text in variants:
             invalid.write_text(text)
             run(sys.executable, self.tool, invalid, "--json", output, expected=2)
             self.assertEqual("preserved\n", output.read_text())
         run(sys.executable, self.tool, self.inputs[0], self.inputs[0], expected=2)
         run(sys.executable, self.tool, self.inputs[0], "--json", self.inputs[0], expected=2)
+
+    def test_legacy_closed_metadata_remains_readable(self):
+        text = self.inputs[2].read_text()
+        runtime_ids = set(re.findall(r'^!(\d+) = [^\n]*, !"runtime",', text, re.M))
+        root = re.search(r'^!ppchibicc.dispatch = !\{([^\n]*)\}', text, re.M)
+        kept = [i for i in re.findall(r'!(\d+)', root[1]) if i not in runtime_ids]
+        text = text[:root.start()]+'!ppchibicc.dispatch = !{'+', '.join('!'+i for i in kept)+'}'+text[root.end():]
+        for ident in runtime_ids:
+            text = re.sub('^!'+ident+r' = [^\n]*\n', '', text, flags=re.M)
+        legacy = self.out/'legacy-closed.ll'
+        legacy.write_text(text.replace('ppchibicc.dispatch.v2', 'ppchibicc.dispatch.v1'))
+        run(options.llvm_as, legacy, '-o', legacy.with_suffix('.bc'))
+        self.assertEqual('resolved', self.family(self.report([legacy], require=True))['status'])
 
 
 if __name__ == "__main__":
