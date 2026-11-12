@@ -6,7 +6,7 @@ Workflow `.github/workflows/test.yml` запускается при push и pull
 | Job | Проверки |
 | --- | --- |
 | `cmake-test-all` | Обычный `test-all`: native stage1, самокомпиляция stage2, тесты C/4П и примеры |
-| `llvm-23` | `test-llvm`, `test-llvm-stage2`, `llvm-opt-demo`, `llvm-dispatch-demo`, `llvm-dispatch-report`, `test-llvm-dispatch-report-stage2`, `llvm-static-dispatch-demo`, `test-llvm-static-dispatch-stage2` |
+| `llvm-23` | `test-llvm`, `test-llvm-stage2`, `llvm-opt-demo`, `llvm-dispatch-demo`, `llvm-dispatch-report`, `test-llvm-dispatch-report-stage2`, `llvm-static-dispatch-demo`, `test-llvm-static-dispatch-stage2`, `test-llvm-static-dispatch-bench`, `test-llvm-static-dispatch-bench-stage2` |
 
 LLVM-набор проверяет IR, выполнение при O0/O2, ABI с системным GCC,
 смешанные native/LLVM-объекты, регистрацию 4П, команды компилятора и
@@ -62,6 +62,9 @@ bitcode/O2 и все шесть порядков модулей исполняе
 порядках модулей, включая структуры/varargs, соседние открытые семьи,
 свёртку известного вызова и отказ при записи/утечке адреса таблицы,
 неполных метаданных или неизвестной пользовательской зависимости.
+Для бенчмарка CI собирает четыре варианта и проверяет 256 результатов
+по независимому Python-эталону и неправильные аргументы. Оба компилятора
+проверяются без калибровки и сбора статистики; порогов быстродействия нет.
 
 ## Повторение LLVM-проверок
 
@@ -78,7 +81,8 @@ cmake -S . -B build-llvm-ci \
 cmake --build build-llvm-ci --target \
   test-llvm test-llvm-stage2 llvm-opt-demo llvm-dispatch-demo \
   llvm-dispatch-report test-llvm-dispatch-report-stage2 \
-  llvm-static-dispatch-demo test-llvm-static-dispatch-stage2
+  llvm-static-dispatch-demo test-llvm-static-dispatch-stage2 \
+  test-llvm-static-dispatch-bench test-llvm-static-dispatch-bench-stage2
 ```
 
 Для установочного скрипта нужны Python 3.11+, `curl`, `dpkg-deb` и системные

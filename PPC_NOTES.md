@@ -259,6 +259,27 @@ six module orders, records/sret/varargs, all four closed forms, a private handle
 that overrides a locally known default, adjacent open/opaque runtime families,
 metadata/priority completeness, unknown dependencies and table address escapes.
 See docs/ppc-static-dispatch-ru.md.
+The optional llvm-static-dispatch-bench compares runtime, guarded switch,
+static-table and static-switch with all-closed 2x3/2x3x2 families, short and
+six-step unsigned-mixing handlers, and shuffled uniform/hot90 records.
+Checksums and default/concrete counters are independently checked in scalar
+C and Python: 256 cases include empty/single/small/full batches and boundary
+seeds, plus 52 invalid argument cases. Every calibration/timing sample is also
+checked. Existing llvm_bench.py supplies affinity, equal work per workload,
+shuffled repeats, calibration and median/MAD/CPU statistics.
+
+The timer's raw LLVM unit participates in the complete input set at closure.
+Code generation then partitions that same registry-free unit into one shared
+timer object and lowers the remaining core into four objects, without linker
+LTO. Four noinline batch kernels preserve a common boundary while handlers
+remain available for inlining. Catalogs, timer clock/call boundaries, closure
+lifecycle removal and retained batch calls are checked. This respects the
+complete-input contract without adding an unknown native application module.
+Commands/versions, source SHA256s, input histograms/snapshots, IR metrics,
+assembler and per-kernel/whole-core code sizes are retained. Compiler
+internals, ABI and tag semantics are unchanged. Default timing runs 224 samples;
+stage1/stage2 CI uses check-only without performance gates. See
+docs/llvm-static-dispatch-benchmark-ru.md.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.

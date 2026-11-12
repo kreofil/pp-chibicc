@@ -313,6 +313,15 @@ add_llvm_target(llvm-static-dispatch-demo cmake/run-llvm-static-dispatch.sh "$<T
 add_llvm_target(test-llvm-static-dispatch-stage2 cmake/run-llvm-static-dispatch.sh "${PPCHIBICC_STAGE2_COMPILER}"
   ppchibicc_stage2 llvm-static-dispatch-stage2 "Checking self-hosted static PPC dispatch"
   "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}")
+add_llvm_target(llvm-static-dispatch-bench cmake/run-llvm-static-dispatch-bench.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-static-dispatch-bench "Measuring closed LLVM dispatch pipelines"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}")
+add_llvm_target(test-llvm-static-dispatch-bench cmake/run-llvm-static-dispatch-bench.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-static-dispatch-bench-check "Checking closed dispatch benchmark results"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}" "--check-only")
+add_llvm_target(test-llvm-static-dispatch-bench-stage2 cmake/run-llvm-static-dispatch-bench.sh "${PPCHIBICC_STAGE2_COMPILER}"
+  ppchibicc_stage2 llvm-static-dispatch-bench-check-stage2 "Checking self-hosted closed dispatch benchmark"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}" "--check-only")
 add_llvm_target(llvm-pgo-demo cmake/run-llvm-pgo-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-pgo-demo "Profiling PPC dispatch and testing indirect-call promotion"
   "${PPCHIBICC_LLVM_LINK}" "${PPCHIBICC_LLVM_PROFDATA}" "${PPCHIBICC_LLVM_CLANG}")
