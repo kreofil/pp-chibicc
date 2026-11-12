@@ -1420,6 +1420,8 @@ static void emit_data(Obj *prog) {
     if (var->init_data) {
       if (var->is_tls)
         println("  .section .tdata,\"awT\",@progbits");
+      else if (var->is_readonly)
+        println("  .section .data.rel.ro,\"aw\",@progbits");
       else
         println("  .data");
 

@@ -23,6 +23,8 @@ for tool in "$llvm_opt" "$llvm_llc" "$llvm_link"; do
     fail "llvm-as, opt, llc and llvm-link must have the same major version"
 done
 opt_version=$("$llvm_opt" --version | sed -n 's/.*LLVM version \([^[:space:]]*\).*/\1/p' | head -n 1)
+dispatch=${PPCHIBICC_PPC_DISPATCH:-auto}
+case "$dispatch" in auto|runtime|table|switch) ;; *) fail "unknown PPC dispatch mode: $dispatch" ;; esac
 demo=$source_dir/examples/llvm/dispatch
 roots=main,probe_known,probe_closed,probe_open,probe_control,extra_probe
 mkdir -p "$result_dir/source" "$result_dir/input" "$result_dir/native"
@@ -65,8 +67,8 @@ emit_module() {
 # Compile each unit once. The extension later replaces only empty.o; the five
 # core objects, including callers and the base generic handler, are reused.
 for unit in local base rectangle square main empty extension; do
-  "$compiler" -c "$demo/$unit.c" -o "$result_dir/native/$unit.o"
-  "$compiler" -S -emit-llvm "$demo/$unit.c" -o "$result_dir/input/$unit.ll"
+  "$compiler" "--ppc-dispatch=$dispatch" -c "$demo/$unit.c" -o "$result_dir/native/$unit.o"
+  "$compiler" "--ppc-dispatch=$dispatch" -S -emit-llvm "$demo/$unit.c" -o "$result_dir/input/$unit.ll"
   "$llvm_as" "$result_dir/input/$unit.ll" -o "$result_dir/input/$unit.bc"
   "$llvm_opt" -passes=verify -disable-output "$result_dir/input/$unit.bc"
   for mode in raw unit-O2; do
@@ -178,6 +180,7 @@ done
   echo 'Versions:'
   "$host_cc" --version | head -n 1
   for tool in "$llvm_as" "$llvm_opt" "$llvm_llc" "$llvm_link"; do "$tool" --version; done
+  echo "PPC dispatch mode: $dispatch"
   echo 'Checksums (compiler, source files, original IR and reused native/LLVM objects):'
   sha256sum "$compiler" "$demo"/* "$result_dir"/input/*.ll "$result_dir"/native/*.o \
     "$result_dir"/units/raw/*.o "$result_dir"/units/unit-O2/*.o
@@ -187,6 +190,7 @@ done
   echo '# Диспетчеризация 4П и оптимизации LLVM'
   echo
   echo "LLVM (opt): $opt_version. Все проверки выполнения пройдены."
+  echo "Стратегия PPC: $dispatch (auto: runtime для native, switch для LLVM)."
   echo 'Сравниваются известная специализация, закрытое обобщение, открытый межмодульный набор и обычный C-указатель на функцию.'
   echo 'В extended только модуль empty заменяется модулем extension; остальные объектные файлы переиспользуются.'
   echo

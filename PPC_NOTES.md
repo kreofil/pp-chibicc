@@ -144,13 +144,36 @@ closed registration writes fixed values instead of startup-order increments.
 All objects/libraries exchanging closed PPC types must be clean rebuilt.
 Open-family nonzero tags/extents remain runtime values. Dispatch tables and
 handler registration remain dynamic at this stage, including mixed open/closed
-multimethods. Future immutable-table/switch dispatch is restricted to functions
-whose procedural argument families are all closed and whose handler set is
-known; no automatic macros or source-closing utility are introduced. Native,
+multimethods. The guarded local stage below builds on these constants; future multimethod
+optimization is restricted to functions whose procedural families are all
+closed and whose handler set is known; no automatic macros or source-closing utility are introduced. Native,
 stage2, LLVM and independent host startup tests cover all four forms, empty and
 named zero cases, static data, nesting, mutable enum tags, side effects, strict
 completeness, opaque declarations and mixed native/LLVM modules. See
 `docs/ppc-closed-indices-ru.md`.
+Closed single-parameter dispatch now has a guarded local optimization. After
+parsing the unit, a complete explicit set of concrete handlers (including zero,
+up to 16 alternatives) produces a private immutable pointer-array catalog.
+Bodies can be in other units, and declarations after a call are considered.
+Each optimized call snapshots the object tag and active runtime handler once,
+then checks that handler against the catalog. A match uses the catalog/table
+call or an explicit switch of direct calls; a mismatch retains the active
+indirect call. Runtime tables/constructors and ABI remain available for other
+units, including private handlers registered from native/LLVM modules. Closed
+types do not imply a closed handler registry. Partial sets, open/opaque types
+and all multimethods retain the original runtime path and completeness checks.
+--ppc-dispatch=auto|runtime|table|switch selects the representation; auto uses
+switch for LLVM and runtime natively. Existing LLVM opt can inline known switch
+branches while retaining the guard/fallback. Generic typed AST lowering covers
+void/scalars, records/sret and varargs. Arguments are snapshotted before
+branching so nested dispatch labels are emitted once; array/function arguments
+decay to pointers and records are copied without aggregate casts. Catalogs
+use LLVM internal constant pointer arrays and native .data.rel.ro; function
+roots referenced by them are retained. Native/stage2 and LLVM tests cover all
+modes, late definitions, all four families, tag mutation, argument side effects,
+record/variadic ABI and separately registered overriding handlers in both link
+orders and mixed backends. Multimethod optimization remains restricted to all-
+closed families for a future step. See `docs/ppc-closed-dispatch-ru.md`.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.

@@ -9,6 +9,7 @@ typedef enum { BACKEND_X86_64, BACKEND_LLVM } Backend;
 StringArray include_paths;
 bool opt_fcommon = true;
 bool opt_fpic;
+PpcDispatchMode opt_ppc_dispatch;
 
 static FileType opt_x;
 static StringArray opt_include;
@@ -45,6 +46,7 @@ static void usage(int status) {
   fprintf(stderr, "  -S -emit-llvm  emit raw experimental LLVM IR (.ll), without LLVM tools\n");
   fprintf(stderr, "  --backend=llvm  compile C or .ll/.bc using external opt and llc\n");
   fprintf(stderr, "  --backend=x86-64  use the original backend (default)\n");
+  fprintf(stderr, "  --ppc-dispatch=auto|runtime|table|switch  guarded closed-family dispatch\n");
   fprintf(stderr, "  -O0/-O1/-O2/-O3/-Os/-Oz  LLVM optimization level (default: -O0)\n");
   fprintf(stderr, "  PPCHIBICC_LLVM_OPT / PPCHIBICC_LLVM_LLC override tool paths\n");
   fprintf(stderr, "  .c/.ppc are source files; .h/.pph are headers (-E/-M, or explicit -x c)\n");
@@ -173,6 +175,16 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-emit-llvm")) {
       opt_emit_llvm = true;
+      continue;
+    }
+
+    if (!strncmp(argv[i], "--ppc-dispatch=", 15)) {
+      char *mode = argv[i] + 15;
+      if (!strcmp(mode, "auto")) opt_ppc_dispatch = PPC_DISPATCH_AUTO;
+      else if (!strcmp(mode, "runtime")) opt_ppc_dispatch = PPC_DISPATCH_RUNTIME;
+      else if (!strcmp(mode, "table")) opt_ppc_dispatch = PPC_DISPATCH_TABLE;
+      else if (!strcmp(mode, "switch")) opt_ppc_dispatch = PPC_DISPATCH_SWITCH;
+      else error("unknown PPC dispatch mode: %s (expected auto, runtime, table or switch)", mode);
       continue;
     }
 
@@ -600,6 +612,9 @@ static void cc1(void) {
     return;
   }
 
+  if (opt_ppc_dispatch == PPC_DISPATCH_AUTO)
+    opt_ppc_dispatch = opt_emit_llvm || opt_backend == BACKEND_LLVM ?
+                       PPC_DISPATCH_SWITCH : PPC_DISPATCH_RUNTIME;
   Obj *prog = parse(tok);
 
   // Open a temporary output buffer.

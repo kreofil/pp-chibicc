@@ -1123,6 +1123,19 @@ static void llvm_global(Obj *obj) {
   char *name = llvm_global_name(obj->name);
   char *linkage = obj->is_static ? "internal " :
                   (opt_fcommon && obj->is_tentative ? "common " : "");
+  if (obj->is_readonly) {
+    // Preserve the natural pointer-array type of compiler-owned catalogs;
+    // generic relocation storage uses a packed struct.
+    fprintf(llvm_out, "%s = %sconstant [%d x ptr] [", name, linkage, obj->ty->array_len);
+    int index = 0;
+    for (Relocation *rel = obj->rel; rel; rel = rel->next, index++) {
+      Obj *target = llvm_find_global(*rel->label);
+      llvm_reference(target);
+      fprintf(llvm_out, "%sptr %s", index ? ", " : "", llvm_global_name(target->name));
+    }
+    llvm_print("], align %d", obj->align);
+    return;
+  }
   fprintf(llvm_out, "%s = %sglobal ", name, linkage);
   if (!obj->rel) {
     fprintf(llvm_out, "[%d x i8] ", size);

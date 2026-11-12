@@ -87,6 +87,10 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/stdarg-abi-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
+  elif [ "$name" = ppc-closed-dispatch ]; then
+    "$compiler" --ppc-dispatch=runtime -c "$source_dir/test/llvm/support/closed-dispatch-override.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
   elif [ "$name" = ppc-closed-indices ]; then
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/closed-init-host.c" \
       -o "$prefix.host.o"
@@ -283,4 +287,6 @@ done
 
 "$source_dir/cmake/run-llvm-driver-tests.sh" "$source_dir" "$compiler" "$host_cc" \
   "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/driver-pipeline"
+"$source_dir/cmake/run-llvm-closed-dispatch-tests.sh" "$source_dir" "$compiler" "$host_cc" \
+  "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/closed-dispatch"
 echo "LLVM tests passed"

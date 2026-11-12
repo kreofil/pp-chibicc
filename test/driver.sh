@@ -982,4 +982,11 @@ typedef struct Closed {} enum { first } const Closed;
 _Thread_local Closed value = Closed.first;
 EOF
 
+if $chibicc --ppc-dispatch=unknown -c "$tmp/empty.c" -o "$tmp/dispatch.o" >"$tmp/dispatch.stdout" 2>"$tmp/dispatch.stderr"; then
+  echo 'invalid PPC dispatch mode was accepted'
+  exit 1
+fi
+grep -q 'unknown PPC dispatch mode' "$tmp/dispatch.stderr"
+check 'PPC dispatch mode diagnostic'
+
 echo OK

@@ -79,8 +79,24 @@ struct PpcFunc {
   Type *fnptr_ty;
   Obj *table_var;
   Obj *default_fn;
+  Obj *candidates;
+  Obj **targets;
+  int target_count;
   PpcHandler *handlers;
 };
+
+typedef struct PpcCall PpcCall;
+struct PpcCall {
+  PpcCall *next;
+  PpcFunc *family;
+  Obj *owner;
+  Node *call;
+  Obj *tag;
+  Obj *active;
+  Node *prefix;
+  Node *runtime_callee;
+};
+static PpcCall *ppc_calls;
 
 struct PpcGen {
   PpcGen *next;
@@ -5950,6 +5966,136 @@ static void ppc_make_spec_ctors(Type *base, Member *spec) {
   ppc_make_spec_ctor(base, spec);
 }
 
+// Closed types do not close the registry of handlers. The local catalog is
+// immutable, but every optimized call guards it against the active runtime
+// slot. Another module (including native code) may still register a handler.
+static void ppc_make_candidates(PpcFunc *family) {
+  if (opt_ppc_dispatch == PPC_DISPATCH_RUNTIME || family->ppc_param_count != 1 ||
+      !family->base_tys[0]->is_ppc_const_generalization)
+    return;
+  int count = ppc_next_spec_index(family->base_tys[0]);
+  // Bound both code growth and catalog construction for this first stage.
+  if (count > 16)
+    return;
+  bool used = false;
+  for (PpcCall *site = ppc_calls; site; site = site->next)
+    if (site->family == family)
+      used = true;
+  if (!used)
+    return;
+  Obj **targets = calloc(count, sizeof(Obj *));
+  for (PpcHandler *h = family->handlers; h; h = h->next)
+    if (!h->is_default && !h->is_abstract && h->fn)
+      targets[h->indices[0]] = h->fn;
+  for (int i = 0; i < count; i++)
+    if (!targets[i])
+      return;
+
+  Obj *table = new_gvar(format(".L.ppc_candidates.%s", family->name),
+                        array_of(family->fnptr_ty, count));
+  table->is_readonly = true;
+  table->init_data = calloc(count, 8);
+  Relocation head = {};
+  Relocation *last = &head;
+  for (int i = 0; i < count; i++) {
+    Relocation *r = calloc(1, sizeof(Relocation));
+    r->offset = i * 8;
+    r->label = &targets[i]->name;
+    last = last->next = r;
+    targets[i]->is_root = true;
+  }
+  table->rel = head.next;
+  family->candidates = table;
+  family->targets = targets;
+  family->target_count = count;
+}
+
+static Node *ppc_call_result(Node *call, Obj *result, Token *tok) {
+  return new_expr_stmt_node(result ?
+    new_binary(ND_ASSIGN, new_var_node(result, tok), call, tok) : call, tok);
+}
+
+static void ppc_optimize_call(PpcCall *site) {
+  PpcFunc *family = site->family;
+  if (!family->candidates) {
+    // No complete local catalog: retain the original callee/argument order.
+    site->prefix->next = site->prefix->next->next->next;
+    site->call->lhs = site->runtime_callee;
+    add_type(site->call->lhs);
+    return;
+  }
+  Node *original = site->call;
+  Token *tok = original->tok;
+  Obj *result = original->ty->kind == TY_VOID ? NULL :
+                new_generated_lvar(&site->owner->locals, original->ty);
+  // Evaluate arguments before copying the call into alternatives. In
+  // particular a nested PPC call owns labels that cannot be emitted again
+  // in each outer switch branch. Snapshot records and decay array/functions.
+  Node prefix = {};
+  Node *last = &prefix;
+  Node arguments = {};
+  Node *arg_last = &arguments;
+  for (Node *arg = original->args; arg; arg = arg->next) {
+    Type *ty = arg->ty;
+    if (ty->kind == TY_ARRAY)
+      ty = pointer_to(ty->base);
+    else if (ty->kind == TY_FUNC)
+      ty = pointer_to(ty);
+    Obj *saved = new_generated_lvar(&site->owner->locals, ty);
+    last = last->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+      new_var_node(saved, tok), ty == arg->ty ? arg : new_cast(arg, ty), tok), tok);
+    arg_last = arg_last->next = new_var_node(saved, tok);
+    add_type(arg_last);
+  }
+  original->args = arguments.next;
+  Node *known = ppc_table_slot(family->candidates, new_var_node(site->tag, tok), tok);
+  Node *active = new_var_node(site->active, tok);
+  Node *slow = clone_node(original);
+  Node *guard = new_node(ND_IF, tok);
+  guard->cond = new_binary(ND_EQ, active, known, tok);
+  guard->els = ppc_call_result(slow, result, tok);
+
+  if (opt_ppc_dispatch == PPC_DISPATCH_TABLE) {
+    Node *fast = clone_node(original);
+    fast->lhs = known;
+    add_type(fast->lhs);
+    guard->then = ppc_call_result(fast, result, tok);
+  } else {
+    Node *sw = new_node(ND_SWITCH, tok);
+    sw->cond = new_var_node(site->tag, tok);
+    sw->brk_label = new_unique_name();
+    Node head = {};
+    Node *last = &head;
+    for (int i = 0; i < family->target_count; i++) {
+      Node *fast = clone_node(original);
+      fast->lhs = new_var_node(family->targets[i], tok);
+      add_type(fast->lhs);
+      Node *stmt = ppc_call_result(fast, result, tok);
+      Node *jump = new_node(ND_GOTO, tok);
+      jump->unique_label = sw->brk_label;
+      stmt->next = jump;
+      Node *c = new_node(ND_CASE, tok);
+      c->begin = c->end = i;
+      c->label = new_unique_name();
+      c->lhs = new_block_node(stmt, tok);
+      c->case_next = sw->case_next;
+      sw->case_next = c;
+      last = last->next = c;
+    }
+    sw->then = new_block_node(head.next, tok);
+    guard->then = sw;
+  }
+  guard->next = new_expr_stmt_node(result ? new_var_node(result, tok) :
+                                  new_cast(new_num(0, tok), ty_void), tok);
+  Node *replacement = new_node(ND_STMT_EXPR, tok);
+  last->next = guard;
+  replacement->body = prefix.next;
+  add_type(replacement);
+  Node *next = original->next;
+  *original = *replacement;
+  original->next = next;
+}
+
 static void finalize_ppc_runtime(void) {
   for (PpcGen *gen = ppc_gens; gen; gen = gen->next) {
     ppc_make_spec_ctors(gen->ty, gen->ty->ppc_specs);
@@ -5958,12 +6104,15 @@ static void finalize_ppc_runtime(void) {
   }
 
   for (PpcFunc *fn = ppc_funcs; fn; fn = fn->next) {
+    ppc_make_candidates(fn);
     ppc_make_table_ctor(fn);
     ppc_make_table_dtor(fn);
     for (PpcHandler *handler = fn->handlers; handler; handler = handler->next)
       ppc_make_handler_ctor(fn, handler);
     ppc_make_exhaustive_check_ctor(fn);
   }
+  for (PpcCall *site = ppc_calls; site; site = site->next)
+    ppc_optimize_call(site);
 }
 
 static bool is_ppc_function(Token *tok) {
@@ -6149,6 +6298,26 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
   }
 
   Node *fn = ppc_table_slot(ppc_fn->table_var, ppc_mixed_index_expr(ppc_fn, tags, tok), tok);
+  PpcCall *site = NULL;
+  if (opt_ppc_dispatch != PPC_DISPATCH_RUNTIME && ppc_fn->ppc_param_count == 1 &&
+      ppc_fn->base_tys[0]->is_ppc_const_generalization &&
+      ppc_next_spec_index(ppc_fn->base_tys[0]) <= 16 && current_fn) {
+    site = calloc(1, sizeof(PpcCall));
+    site->family = ppc_fn;
+    site->owner = current_fn;
+    site->prefix = cur;
+    site->runtime_callee = fn;
+    site->tag = new_lvar("", ty_int);
+    site->active = new_lvar("", ppc_fn->fnptr_ty);
+    cur = cur->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+      new_var_node(site->tag, tok), tags[0], tok), tok);
+    cur = cur->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+      new_var_node(site->active, tok),
+      ppc_table_slot(ppc_fn->table_var, new_var_node(site->tag, tok), tok), tok), tok);
+    fn = new_var_node(site->active, tok);
+    site->next = ppc_calls;
+    ppc_calls = site;
+  }
 
   Type *fn_ty = ppc_generic_func_type(ppc_fn);
   Type *param_ty = fn_ty->params;
@@ -6187,6 +6356,8 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
   Node *call = new_unary(ND_FUNCALL, fn, tok);
   call->func_ty = fn_ty;
   call->args = arg_head.next;
+  if (site)
+    site->call = call;
 
   if (fn_ty->return_ty->kind == TY_STRUCT || fn_ty->return_ty->kind == TY_UNION)
     call->ret_buffer = new_lvar("", fn_ty->return_ty);
@@ -6373,6 +6544,7 @@ Obj *parse(Token *tok) {
   ppc_funcs = NULL;
   ppc_gens = NULL;
   ppc_nested_types = NULL;
+  ppc_calls = NULL;
 
   while (tok->kind != TK_EOF) {
     if (equal(tok, "struct") && tok->next->kind == TK_IDENT &&

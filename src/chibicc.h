@@ -145,6 +145,7 @@ struct Obj {
   // Global variable
   bool is_tentative;
   bool is_tls;
+  bool is_readonly; // Compiler-owned immutable dispatch catalogs
   char *init_data;
   Relocation *rel;
 
@@ -502,4 +503,7 @@ bool file_exists(char *path);
 extern StringArray include_paths;
 extern bool opt_fpic;
 extern bool opt_fcommon;
+typedef enum { PPC_DISPATCH_AUTO, PPC_DISPATCH_RUNTIME,
+               PPC_DISPATCH_TABLE, PPC_DISPATCH_SWITCH } PpcDispatchMode;
+extern PpcDispatchMode opt_ppc_dispatch;
 extern char *base_file;
