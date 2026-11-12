@@ -65,7 +65,8 @@ jobs:
           cmake -S . -B build-llvm-ci \
             -DCMAKE_C_COMPILER=gcc -DPPCHIBICC_LLVM_VERSION=23
           cmake --build build-llvm-ci --target \
-            test-llvm test-llvm-stage2 llvm-opt-demo llvm-dispatch-demo
+            test-llvm test-llvm-stage2 llvm-opt-demo llvm-dispatch-demo \
+            llvm-dispatch-report test-llvm-dispatch-report-stage2
 
       - name: Preserve LLVM diagnostics on failure
         if: failure()

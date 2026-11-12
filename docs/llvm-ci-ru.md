@@ -6,7 +6,7 @@ Workflow `.github/workflows/test.yml` запускается при push и pull
 | Job | Проверки |
 | --- | --- |
 | `cmake-test-all` | Обычный `test-all`: native stage1, самокомпиляция stage2, тесты C/4П и примеры |
-| `llvm-23` | `test-llvm`, `test-llvm-stage2`, `llvm-opt-demo`, `llvm-dispatch-demo` |
+| `llvm-23` | `test-llvm`, `test-llvm-stage2`, `llvm-opt-demo`, `llvm-dispatch-demo`, `llvm-dispatch-report`, `test-llvm-dispatch-report-stage2` |
 
 LLVM-набор проверяет IR, выполнение при O0/O2, ABI с системным GCC,
 смешанные native/LLVM-объекты, регистрацию 4П, команды компилятора и
@@ -54,6 +54,11 @@ runtime-вызов при регистрации другого обработч
 большая матрица сохраняют runtime-путь. Native-набор отдельно проверяет
 преобразование VLA в указатель среди вариадических аргументов мультиметода.
 
+Метаданные и межмодульный отчёт проверяются stage1 и stage2: сбор всей
+матрицы, пропуски и внешние объявления, частные обработчики и переименование
+LLVM, открытые/непрозрачные аргументы, несовместимые описания типов/ABI,
+bitcode/O2 и все шесть порядков модулей исполняемого примера.
+
 ## Повторение LLVM-проверок
 
 С обычной установленной версией LLVM 23 достаточно команд из
@@ -67,7 +72,8 @@ export PATH="$PWD/build-llvm-tools/bin:$PATH"
 cmake -S . -B build-llvm-ci \
   -DCMAKE_C_COMPILER=gcc -DPPCHIBICC_LLVM_VERSION=23
 cmake --build build-llvm-ci --target \
-  test-llvm test-llvm-stage2 llvm-opt-demo llvm-dispatch-demo
+  test-llvm test-llvm-stage2 llvm-opt-demo llvm-dispatch-demo \
+  llvm-dispatch-report test-llvm-dispatch-report-stage2
 ```
 
 Для установочного скрипта нужны Python 3.11+, `curl`, `dpkg-deb` и системные

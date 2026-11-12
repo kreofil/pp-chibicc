@@ -1,7 +1,7 @@
 BUILD_DIR ?= build
 CMAKE ?= cmake
 
-.PHONY: all configure build test test-stage2 test-examples test-llvm test-llvm-driver llvm-opt-demo llvm-dispatch-demo llvm-pgo-demo llvm-pgo-bench llvm-figures-bench test-all clean distclean rebuild
+.PHONY: all configure build test test-stage2 test-examples test-llvm test-llvm-driver llvm-opt-demo llvm-dispatch-demo llvm-dispatch-report llvm-pgo-demo llvm-pgo-bench llvm-figures-bench test-all clean distclean rebuild
 
 all: build
 
@@ -31,6 +31,9 @@ llvm-opt-demo: configure
 
 llvm-dispatch-demo: configure
 	$(CMAKE) --build $(BUILD_DIR) --target llvm-dispatch-demo
+
+llvm-dispatch-report: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-dispatch-report
 
 llvm-pgo-demo: configure
 	$(CMAKE) --build $(BUILD_DIR) --target llvm-pgo-demo

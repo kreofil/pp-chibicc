@@ -195,6 +195,34 @@ rebuilt together. Old constructors prefill tables and must not be mixed with
 this protocol; ordinary C libraries require no rebuild. Closed tag numbers,
 object layouts and function calling conventions are unchanged. See
 `docs/ppc-closed-dispatch-ru.md`.
+LLVM modules now carry descriptive !ppchibicc.dispatch named metadata with
+the ppchibicc.dispatch.v1 schema. A frontend snapshot exposes each family;
+fixed axes, alternative names/order, type size/alignment, lowered ABI and
+handler coordinates are emitted only for all-closed procedural arguments.
+Open/opaque participants contribute exclusion records. Unit markers include
+ordinary C units. Handler/table operands are real LLVM pointer references,
+preserving internal symbol renaming across llvm-as/opt/llvm-link. Definition
+and original linkage flags distinguish declarations and private registrations.
+This adds no runtime ABI or registration changes.
+
+cmake/ppc-dispatch-report.py collects raw or linked textual IR into JSON and
+Markdown matrices. Concrete coordinates override generic defaults; repeated
+external declarations resolve to definitions, while different private
+registrations stay distinct and order-dependent. Missing definitions/IR
+bodies, removed pointers, opaque participants, inconsistent axes/ABI and
+duplicate definitions prevent a resolved conclusion. Matrix expansion is
+bounded separately from local switch optimization (4096 report cells by
+default). The report explicitly does not establish whole-program completeness
+and does not apply optimization. Supplied modules may still omit other native
+objects, archives or registrations. Runtime allocation, constructors and guards
+remain necessary until a later whole-program validation stage.
+
+llvm-dispatch-report and test-llvm-dispatch-report-stage2 require Python 3.8+
+and matching LLVM tools including llvm-link. The three-unit closed-registry
+example verifies all six object orders; regression cases cover all four type
+forms, external bodies, private overrides/defaults, incomplete/inconsistent
+metadata, bitcode and O2, quoted UTF-8 paths and input-error preservation.
+Both targets are included in LLVM CI. See docs/ppc-dispatch-report-ru.md.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.

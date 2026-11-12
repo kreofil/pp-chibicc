@@ -1298,6 +1298,77 @@ static void llvm_initializers(Obj *prog, bool destructors) {
   llvm_print("]");
 }
 
+// Named metadata survives llvm-as/dis/link. Function/table operands are real
+// references, not symbol-name strings, so llvm-link can rename private names.
+// This is descriptive only: runtime registration and guards are unchanged.
+static char *llvm_metadata_string(char *s) {
+  char *buf;
+  size_t len;
+  FILE *out = open_memstream(&buf, &len);
+  fputs("!\"", out);
+  for (char *p = s; *p; p++)
+    fprintf(out, "\\%02X", (unsigned char)*p);
+  fputc('"', out);
+  fclose(out);
+  return buf;
+}
+
+static void llvm_dispatch_metadata(void) {
+  char *buf;
+  size_t len;
+  FILE *out = open_memstream(&buf, &len);
+  int id = 0;
+  char *source = llvm_metadata_string(base_file);
+  fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"unit\", %s}\n", id++, source);
+  for (PpcDispatchInfo *info = ppc_dispatch_info(); info; info = info->next) {
+    char *name = llvm_metadata_string(info->name);
+    if (!info->all_closed) {
+      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"excluded\", %s, %s, !\"open-or-opaque\"}\n",
+              id++, source, name);
+      continue;
+    }
+    Type *ty = info->function_ty;
+    char *signature = format("%s%s (%s)", llvm_abi_attr(ty->return_ty),
+                            llvm_return_type(ty->return_ty), llvm_parameters(ty, false, true));
+    fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"family\", %s, %s, %s, i32 %d, ptr %s}\n",
+            id++, source, name, llvm_metadata_string(signature), info->arity,
+            llvm_global_name(info->table->name));
+    for (int i = 0; i < info->arity; i++) {
+      Type *base = info->bases[i];
+      char *kind = base->is_ppc_enum_generalization ? "enum" :
+                   base->is_ppc_pointer_generalization ? "nullptr" :
+                   base->is_ppc_union_generalization ? "union" : "case";
+      Member *zero = base->ppc_default_spec;
+      char *labels = zero ? format("0:%.*s", zero->name->len, zero->name->loc) : "0:void";
+      int extent = 1;
+      for (Member *m = base->ppc_specs; m; m = m->next) {
+        if (!m->idx)
+          continue;
+        labels = format("%s;%d:%.*s", labels, m->idx, m->name->len, m->name->loc);
+        extent = MAX(extent, m->idx + 1);
+      }
+      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"axis\", %s, %s, i32 %d, %s, !\"%s\", i32 %d, i32 %d, i32 %d, %s}\n",
+              id++, source, name, i, llvm_metadata_string(base->ppc_name), kind,
+              extent, base->size, base->align, llvm_metadata_string(labels));
+    }
+    for (PpcDispatchHandlerInfo *h = info->handlers; h; h = h->next) {
+      char *coordinate = h->is_default ? "*" : "";
+      if (!h->is_default)
+        for (int i = 0; i < info->arity; i++)
+          coordinate = format("%s%s%d", coordinate, i ? "," : "", h->indices[i]);
+      fprintf(out, "!%d = !{!\"ppchibicc.dispatch.v1\", !\"handler\", %s, %s, %s, ptr %s, i1 %s, i1 %s}\n",
+              id++, source, name, llvm_metadata_string(coordinate),
+              llvm_global_name(h->fn->name), h->fn->is_definition ? "true" : "false",
+              h->fn->is_static ? "true" : "false");
+    }
+  }
+  fclose(out);
+  fprintf(llvm_out, "!ppchibicc.dispatch = !{");
+  for (int i = 0; i < id; i++)
+    fprintf(llvm_out, "%s!%d", i ? ", " : "", i);
+  fprintf(llvm_out, "}\n%s", buf);
+}
+
 void codegen_llvm(Obj *prog, FILE *out) {
   llvm_out = out;
   llvm_prog = prog;
@@ -1364,4 +1435,5 @@ void codegen_llvm(Obj *prog, FILE *out) {
     llvm_print("declare void @llvm.va_start(ptr)");
     llvm_print("declare void @llvm.va_end(ptr)");
   }
+  llvm_dispatch_metadata();
 }

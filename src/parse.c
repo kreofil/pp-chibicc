@@ -6115,6 +6115,36 @@ static void ppc_optimize_call(PpcCall *site) {
   original->next = next;
 }
 
+PpcDispatchInfo *ppc_dispatch_info(void) {
+  PpcDispatchInfo head = {};
+  PpcDispatchInfo *tail = &head;
+  for (PpcFunc *family = ppc_funcs; family; family = family->next) {
+    tail = tail->next = calloc(1, sizeof(PpcDispatchInfo));
+    tail->name = family->name;
+    tail->all_closed = true;
+    for (int i = 0; i < family->ppc_param_count; i++)
+      if (!family->base_tys[i]->is_ppc_const_generalization)
+        tail->all_closed = false;
+    if (!tail->all_closed)
+      continue;
+    tail->table = family->table_var;
+    tail->function_ty = ppc_generic_func_type(family);
+    tail->bases = family->base_tys;
+    tail->arity = family->ppc_param_count;
+    for (PpcHandler *h = family->handlers; h; h = h->next) {
+      if (h->is_abstract || !h->fn)
+        continue;
+      PpcDispatchHandlerInfo *info = calloc(1, sizeof(PpcDispatchHandlerInfo));
+      info->fn = h->fn;
+      info->indices = h->indices;
+      info->is_default = h->is_default;
+      info->next = tail->handlers;
+      tail->handlers = info;
+    }
+  }
+  return head.next;
+}
+
 static void finalize_ppc_runtime(void) {
   for (PpcGen *gen = ppc_gens; gen; gen = gen->next) {
     ppc_make_spec_ctors(gen->ty, gen->ty->ppc_specs);

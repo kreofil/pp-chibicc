@@ -165,6 +165,30 @@ struct Obj {
   StringArray refs;
 };
 
+// A read-only snapshot for LLVM dispatch metadata. An open/opaque family
+// contributes only its name and all_closed=false, never fixed coordinates.
+typedef struct PpcDispatchHandlerInfo PpcDispatchHandlerInfo;
+struct PpcDispatchHandlerInfo {
+  PpcDispatchHandlerInfo *next;
+  Obj *fn;
+  int *indices;
+  bool is_default;
+};
+
+typedef struct PpcDispatchInfo PpcDispatchInfo;
+struct PpcDispatchInfo {
+  PpcDispatchInfo *next;
+  char *name;
+  Obj *table;
+  Type *function_ty;
+  Type **bases;
+  int arity;
+  bool all_closed;
+  PpcDispatchHandlerInfo *handlers;
+};
+
+PpcDispatchInfo *ppc_dispatch_info(void);
+
 // Global variable can be initialized either by a constant expression
 // or a pointer to another global variable. This struct represents the
 // latter.

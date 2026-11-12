@@ -283,7 +283,7 @@ function(add_llvm_target target script compiler dependency output_name descripti
   else()
     add_custom_target(${target}
       COMMAND "${CMAKE_COMMAND}" -E echo
-              "LLVM target ${target}: required tools are missing. Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC. llvm-dispatch-demo also needs PPCHIBICC_LLVM_LINK. PGO targets (llvm-pgo-demo, llvm-pgo-bench, llvm-figures-bench) need LLVM/Clang 23+, PPCHIBICC_LLVM_LINK, PPCHIBICC_LLVM_PROFDATA, PPCHIBICC_LLVM_CLANG and the compiler-rt profile runtime. Benchmark targets also need Python 3.8+ (Python3_EXECUTABLE)."
+              "LLVM target ${target}: required tools are missing. Set PPCHIBICC_LLVM_AS, PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC. Dispatch demos/reports also need PPCHIBICC_LLVM_LINK; reports need Python 3.8+ (Python3_EXECUTABLE). PGO targets (llvm-pgo-demo, llvm-pgo-bench, llvm-figures-bench) need LLVM/Clang 23+, PPCHIBICC_LLVM_LINK, PPCHIBICC_LLVM_PROFDATA, PPCHIBICC_LLVM_CLANG and the compiler-rt profile runtime. Benchmark targets also need Python 3.8+ (Python3_EXECUTABLE)."
       COMMAND "${CMAKE_COMMAND}" -E false
       VERBATIM
     )
@@ -301,6 +301,12 @@ add_llvm_target(llvm-opt-demo cmake/run-llvm-opt-demo.sh "$<TARGET_FILE:ppchibic
 add_llvm_target(llvm-dispatch-demo cmake/run-llvm-dispatch-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-dispatch-demo "Comparing PPC dispatch and module visibility"
   "${PPCHIBICC_LLVM_LINK}")
+add_llvm_target(llvm-dispatch-report cmake/run-llvm-dispatch-report.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-dispatch-report "Inspecting closed PPC dispatch across LLVM modules"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}")
+add_llvm_target(test-llvm-dispatch-report-stage2 cmake/run-llvm-dispatch-report.sh "${PPCHIBICC_STAGE2_COMPILER}"
+  ppchibicc_stage2 llvm-dispatch-report-stage2 "Checking self-hosted PPC dispatch metadata"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}")
 add_llvm_target(llvm-pgo-demo cmake/run-llvm-pgo-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-pgo-demo "Profiling PPC dispatch and testing indirect-call promotion"
   "${PPCHIBICC_LLVM_LINK}" "${PPCHIBICC_LLVM_PROFDATA}" "${PPCHIBICC_LLVM_CLANG}")
