@@ -48,6 +48,7 @@ sqrt sqrtf sqrtl sin cos tan exp log pow fabs fabsf fabsl floor ceil fmod
 C_DATA = {"stdin", "stdout", "stderr", "environ"}
 TARGET = 'x86_64-pc-linux-gnu'
 LAYOUT = 'e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128'
+CLOSED_OBJECT_HEADER = b'; ppchibicc closed-program object v1\n'
 
 
 def symbol(token):
@@ -311,6 +312,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('modules', nargs='+', type=Path)
     parser.add_argument('--closed-program', action='store_true', help='assert these are all user program modules')
+    parser.add_argument('--allow-empty', action='store_true', help='permit a complete program without eligible tables')
+    parser.add_argument('--quiet', action='store_true')
     parser.add_argument('--family', action='append', default=[], help='require transformation of this family')
     parser.add_argument('--entry', default='main')
     parser.add_argument('-o', '--output', required=True, type=Path)
@@ -318,6 +321,7 @@ def main():
     parser.add_argument('--max-cells', type=int, default=4096)
     for name in ('as', 'opt', 'link'):
         parser.add_argument('--llvm-'+name, default=os.environ.get('PPCHIBICC_LLVM_'+name.upper(), 'llvm-'+name if name != 'opt' else 'opt'))
+    parser.add_argument('--llvm-llc', help='also check the machine-code tool version when supplied by the compiler')
     args = parser.parse_args()
     try:
         if not args.closed_program:
@@ -330,7 +334,7 @@ def main():
         if len(set(paths)) != len(paths) or len(set(outputs)) != 2 or set(paths) & set(outputs):
             raise ValueError('inputs and outputs must be distinct')
         versions = []
-        for tool in (args.llvm_as, args.llvm_opt, args.llvm_link):
+        for tool in [args.llvm_as, args.llvm_opt, args.llvm_link]+([args.llvm_llc] if args.llvm_llc else []):
             match = re.search(r'LLVM version (\d+)\.', run(tool, '--version'))
             if not match:
                 raise ValueError('cannot determine LLVM version: '+tool)
@@ -339,11 +343,12 @@ def main():
             raise ValueError('LLVM tools must have the same major version, at least 19')
         inputs = []
         for path in paths:
-            if path.suffix != '.ll':
-                raise ValueError('only raw ppchibicc .ll translation units are supported: '+str(path))
             raw = path.read_bytes()
+            closed_object = raw.startswith(CLOSED_OBJECT_HEADER)
+            if path.suffix != '.ll' and not (path.suffix == '.o' and closed_object):
+                raise ValueError('only raw .ll units or ppchibicc closed-program .o objects are supported: '+str(path))
             text = raw.decode('utf-8')
-            if not text.startswith('; ppchibicc experimental LLVM IR backend '):
+            if not closed_object and not text.startswith('; ppchibicc experimental LLVM IR backend '):
                 raise ValueError('input must be raw ppchibicc IR before optimization/linking: '+str(path))
             if ('target triple = "'+TARGET+'"\n' not in text or
                     'target datalayout = "'+LAYOUT+'"\n' not in text):
@@ -364,7 +369,7 @@ def main():
             raise ValueError('requested families are not fully closed and resolved: '+', '.join(
                 name+' ('+statuses.get(name, 'absent')+')' for name in sorted(requested - eligible)))
         chosen = requested or eligible
-        if not chosen:
+        if not chosen and not args.allow_empty:
             raise ValueError('no fully closed resolved tables to transform')
         with tempfile.TemporaryDirectory(prefix='ppc-static-') as temporary:
             work = Path(temporary)
@@ -391,12 +396,15 @@ def main():
             transformed.write_text(text)
             run(args.llvm_as, transformed, '-o', work / 'static.bc')
             run(args.llvm_opt, '-passes=verify', '-disable-output', work / 'static.bc')
-            result = dict(manifest, optimization_applied=True, program_completeness='explicit-input-set',
+            result = dict(manifest, optimization_applied=bool(families), program_completeness='explicit-input-set',
                           manifest_sha256=manifest_sha, output_sha256=hashlib.sha256(text.encode()).hexdigest(),
-                          llvm_major=versions[0], functions=families, audit=audit)
+                          llvm_major=versions[0], functions=families, audit=audit,
+                          unselected_families=[dict(name=f['name'], status=f['status'], issues=f['issues'])
+                              for f in raw_report['functions'] if f['name'] not in chosen])
             data = json.dumps(result, ensure_ascii=False, indent=2)+'\n'
             atomic_outputs([(args.output, text), (report_path, data)])
-        print('Static PPC dispatch: '+', '.join(sorted(chosen))+'; '+str(len(audit['removed_runtime']))+' runtime functions removed')
+        if not args.quiet:
+            print('Static PPC dispatch: '+(', '.join(sorted(chosen)) or 'no eligible tables')+'; '+str(len(audit['removed_runtime']))+' runtime functions removed')
         return 0
     except (OSError, UnicodeError, ValueError) as error:
         print('PPC static dispatch: '+str(error), file=sys.stderr)

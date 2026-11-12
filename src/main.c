@@ -1,3 +1,4 @@
+#define _XOPEN_SOURCE 700
 #include "chibicc.h"
 
 typedef enum {
@@ -20,6 +21,9 @@ static bool opt_MMD;
 static bool opt_MP;
 static bool opt_S;
 static bool opt_emit_llvm;
+static bool opt_closed_program;
+static StringArray opt_closed_families;
+static char *opt_closed_report;
 static Backend opt_backend;
 static bool opt_backend_explicit;
 static char *opt_optimization = "0";
@@ -40,6 +44,9 @@ static char *output_file;
 
 static StringArray input_paths;
 static StringArray tmpfiles;
+static char *closed_tmpdir;
+
+static char *closed_object_header = "; ppchibicc closed-program object v1\n";
 
 static void usage(int status) {
   fprintf(stderr, "ppchibicc [ -o <path> ] <file>\n");
@@ -47,6 +54,9 @@ static void usage(int status) {
   fprintf(stderr, "  --backend=llvm  compile C or .ll/.bc using external opt and llc\n");
   fprintf(stderr, "  --backend=x86-64  use the original backend (default)\n");
   fprintf(stderr, "  --ppc-dispatch=auto|runtime|table|switch  guarded closed-family dispatch\n");
+  fprintf(stderr, "  --closed-program  build a complete LLVM program; -c stores raw IR objects\n");
+  fprintf(stderr, "  --closed-family=NAME  require a resolved closed family (repeatable)\n");
+  fprintf(stderr, "  --closed-report=PATH  final closure manifest (default: OUTPUT.closed.json)\n");
   fprintf(stderr, "  -O0/-O1/-O2/-O3/-Os/-Oz  LLVM optimization level (default: -O0)\n");
   fprintf(stderr, "  PPCHIBICC_LLVM_OPT / PPCHIBICC_LLVM_LLC override tool paths\n");
   fprintf(stderr, "  .c/.ppc are source files; .h/.pph are headers (-E/-M, or explicit -x c)\n");
@@ -175,6 +185,21 @@ static void parse_args(int argc, char **argv) {
 
     if (!strcmp(argv[i], "-emit-llvm")) {
       opt_emit_llvm = true;
+      continue;
+    }
+
+    if (!strcmp(argv[i], "--closed-program")) {
+      opt_closed_program = true;
+      continue;
+    }
+    if (!strncmp(argv[i], "--closed-family=", 16)) {
+      if (!argv[i][16]) error("empty --closed-family");
+      strarray_push(&opt_closed_families, argv[i] + 16);
+      continue;
+    }
+    if (!strncmp(argv[i], "--closed-report=", 16)) {
+      opt_closed_report = argv[i] + 16;
+      if (!*opt_closed_report) error("empty --closed-report");
       continue;
     }
 
@@ -396,6 +421,18 @@ static void parse_args(int argc, char **argv) {
   if (input_paths.len == 0)
     error("no input files");
 
+  if (opt_closed_program) {
+    if (opt_backend_explicit && opt_backend != BACKEND_LLVM)
+      error("--closed-program requires the LLVM backend");
+    if (opt_shared)
+      error("--closed-program builds executables, not shared libraries");
+    if (opt_c && (opt_closed_families.len || opt_closed_report))
+      error("--closed-family and --closed-report are link-stage options");
+    opt_backend = BACKEND_LLVM;
+  } else if (opt_closed_families.len || opt_closed_report) {
+    error("--closed-family and --closed-report require --closed-program");
+  }
+
   if (opt_emit_llvm && (!opt_S || opt_c || opt_E || opt_M))
     error("-emit-llvm requires -S and cannot be combined with -c, -E or -M");
   if (opt_emit_llvm && opt_backend_explicit && opt_backend != BACKEND_LLVM)
@@ -437,6 +474,8 @@ static char *replace_extn(char *tmpl, char *extn) {
 static void cleanup(void) {
   for (int i = 0; i < tmpfiles.len; i++)
     unlink(tmpfiles.data[i]);
+  if (closed_tmpdir)
+    rmdir(closed_tmpdir);
 }
 
 static char *create_tmpfile(void) {
@@ -446,6 +485,18 @@ static char *create_tmpfile(void) {
     error("mkstemp failed: %s", strerror(errno));
   close(fd);
 
+  strarray_push(&tmpfiles, path);
+  return path;
+}
+
+static char *create_closed_tmpfile(char *suffix) {
+  static int id;
+  if (!closed_tmpdir) {
+    char *dir = strdup("/tmp/chibicc-closed-XXXXXX");
+    if (!mkdtemp(dir)) error("mkdtemp: %s", strerror(errno));
+    closed_tmpdir = dir;
+  }
+  char *path = format("%s/%d%s", closed_tmpdir, id++, suffix);
   strarray_push(&tmpfiles, path);
   return path;
 }
@@ -542,7 +593,7 @@ static void print_dependencies(void) {
   for (int i = 0; files[i]; i++) {
     if (opt_MMD && in_std_include_path(files[i]->name))
       continue;
-    fprintf(out, " \\\n  %s", files[i]->name);
+    fprintf(out, " \\\n  %s", quote_makefile(files[i]->name));
   }
 
   fprintf(out, "\n\n");
@@ -827,6 +878,162 @@ static FileType get_file_type(char *filename) {
   error("<command line>: unknown file extension: %s", filename);
 }
 
+static bool is_closed_object(char *path) {
+  FILE *in = fopen(path, "rb");
+  if (!in) return false;
+  char buf[128] = {};
+  size_t n = fread(buf, 1, strlen(closed_object_header), in);
+  fclose(in);
+  return n == strlen(closed_object_header) && !memcmp(buf, closed_object_header, n);
+}
+
+static char *closed_helper(char *argv0) {
+  char *override = getenv("PPCHIBICC_STATIC_DISPATCH");
+  if (override && *override) return override;
+  char executable[4096];
+  ssize_t len = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+  if (len > 0 && len < sizeof(executable) - 1) {
+    executable[len] = '\0';
+    argv0 = executable;
+  }
+  char *dir = dirname(strdup(argv0));
+  char *installed = format("%s/../share/ppchibicc/ppc-static-dispatch.py", dir);
+  if (file_exists(installed)) return installed;
+  char *source = format("%s/../cmake/ppc-static-dispatch.py", dir);
+  if (file_exists(source)) return source;
+  error("closed-program helper not found; set PPCHIBICC_STATIC_DISPATCH");
+}
+
+static char *canonical_output(char *path) {
+  char *resolved = realpath(path, NULL);
+  if (resolved) return resolved;
+  char *parent = realpath(dirname(strdup(path)), NULL);
+  return parent ? format("%s/%s", parent, basename(strdup(path))) : path;
+}
+
+static char *output_temporary(char *path) {
+  struct stat st;
+  if (!stat(path, &st) && S_ISDIR(st.st_mode)) error("output is a directory: %s", path);
+  char *temporary = format("%s.ppchibicc-XXXXXX", path);
+  int fd = mkstemp(temporary);
+  if (fd < 0) error("cannot prepare output %s: %s", path, strerror(errno));
+  close(fd);
+  strarray_push(&tmpfiles, temporary);
+  return temporary;
+}
+
+static void build_closed_program(int argc, char **argv) {
+  if (opt_MD && !opt_c)
+    error("--closed-program dependency generation requires separate -c compilation");
+  for (int i = 0; i < ld_extra_args.len; i++)
+    if (strcmp(ld_extra_args.data[i], "-static") && strcmp(ld_extra_args.data[i], "-s"))
+      error("unsupported closed-program linker option: %s", ld_extra_args.data[i]);
+  char *output = opt_o ? opt_o : opt_c ? NULL : opt_S ?
+    (input_paths.len == 1 ? replace_extn(input_paths.data[0], opt_emit_llvm ? ".ll" : ".s") :
+     opt_emit_llvm ? "a.ll" : "a.s") : "a.out";
+  if (output && !strcmp(output, "-") && !opt_S && !opt_c)
+    error("closed-program executable requires a file output");
+  char *report = opt_c ? NULL : opt_closed_report ? opt_closed_report :
+    strcmp(output, "-") ? format("%s.closed.json", output) : NULL;
+  if (report && !strcmp(report, "-")) error("closed report requires a file output");
+  if (report && !strcmp(canonical_output(report), canonical_output(output)))
+    error("closed report and program output must be distinct");
+  for (int i = 0; i < input_paths.len; i++) {
+    char *input = input_paths.data[i];
+    if ((output && strcmp(output, "-") && !strcmp(canonical_output(output), canonical_output(input))) ||
+        (report && !strcmp(canonical_output(report), canonical_output(input))))
+      error("closed-program output would overwrite an input: %s", input);
+  }
+  StringArray modules = {}, libraries = {};
+  for (int i = 0; i < input_paths.len; i++) {
+    char *input = input_paths.data[i];
+    if (!strcmp(input, "-lm")) {
+      if (opt_c || opt_S) error("-lm requires executable linking");
+      strarray_push(&libraries, input);
+      continue;
+    }
+    if (input[0] == '-' && strcmp(input, "-"))
+      error("unsupported closed-program input/linker flag: %s", input);
+    FileType type = get_file_type(input);
+    if (opt_c && type != FILE_C)
+      error("closed-program -c requires C/4P source: %s", input);
+    if (type == FILE_C) {
+      char *ir = create_closed_tmpfile(".ll");
+      run_cc1(argc, argv, input, ir);
+      if (opt_c) {
+        char *dest = output ? output : replace_extn(input, ".o");
+        if (strcmp(dest, "-") && !strcmp(canonical_output(dest), canonical_output(input)))
+          error("closed-program output would overwrite an input: %s", input);
+        char *object = create_closed_tmpfile(".o");
+        FILE *in = fopen(ir, "rb");
+        FILE *out = fopen(object, "wb");
+        if (!in || !out) error("cannot prepare closed-program object");
+        fputs(closed_object_header, out);
+        char buf[8192];
+        size_t count;
+        while ((count = fread(buf, 1, sizeof(buf), in)))
+          if (fwrite(buf, 1, count, out) != count) error("cannot write closed-program object");
+        if (ferror(in) || fclose(out)) error("cannot finish closed-program object");
+        fclose(in);
+        copy_output(object, dest);
+      } else {
+        strarray_push(&modules, ir);
+      }
+    } else if (type == FILE_IR && endswith(input, ".ll")) {
+      strarray_push(&modules, input);
+    } else if (type == FILE_OBJ && is_closed_object(input)) {
+      strarray_push(&modules, input);
+    } else {
+      error("closed program requires source, raw .ll, or --closed-program -c objects: %s", input);
+    }
+  }
+  if (opt_c) return;
+  if (!modules.len) error("closed program has no user modules");
+  char *ir = create_closed_tmpfile(".ll");
+  char *audit = create_closed_tmpfile(".json");
+  StringArray command = {};
+  strarray_push(&command, llvm_tool("PPCHIBICC_PYTHON", "python3"));
+  strarray_push(&command, closed_helper(argv[0]));
+  strarray_push(&command, "--closed-program");
+  strarray_push(&command, "--allow-empty");
+  strarray_push(&command, "--quiet");
+  strarray_push(&command, "--llvm-as");
+  strarray_push(&command, llvm_tool("PPCHIBICC_LLVM_AS", "llvm-as"));
+  strarray_push(&command, "--llvm-opt");
+  strarray_push(&command, llvm_tool("PPCHIBICC_LLVM_OPT", "opt"));
+  strarray_push(&command, "--llvm-link");
+  strarray_push(&command, llvm_tool("PPCHIBICC_LLVM_LINK", "llvm-link"));
+  if (!opt_emit_llvm) {
+    strarray_push(&command, "--llvm-llc");
+    strarray_push(&command, llvm_tool("PPCHIBICC_LLVM_LLC", "llc"));
+  }
+  strarray_push(&command, "-o");
+  strarray_push(&command, ir);
+  strarray_push(&command, "--report");
+  strarray_push(&command, audit);
+  for (int i = 0; i < opt_closed_families.len; i++) {
+    strarray_push(&command, "--family");
+    strarray_push(&command, opt_closed_families.data[i]);
+  }
+  for (int i = 0; i < modules.len; i++) strarray_push(&command, modules.data[i]);
+  strarray_push(&command, NULL);
+  run_subprocess(command.data);
+  char *result = opt_emit_llvm ? ir : compile_llvm(ir, opt_S);
+  char *temporary_output = strcmp(output, "-") ? output_temporary(output) : NULL;
+  char *temporary_report = report ? output_temporary(report) : NULL;
+  if (opt_S) {
+    copy_output(result, temporary_output ? temporary_output : "-");
+  } else {
+    StringArray objects = {};
+    strarray_push(&objects, result);
+    for (int i = 0; i < libraries.len; i++) strarray_push(&objects, libraries.data[i]);
+    run_linker(&objects, temporary_output);
+  }
+  if (report) copy_output(audit, temporary_report);
+  if (temporary_output && rename(temporary_output, output)) error("cannot publish output: %s", strerror(errno));
+  if (temporary_report && rename(temporary_report, report)) error("cannot publish report: %s", strerror(errno));
+}
+
 int main(int argc, char **argv) {
   atexit(cleanup);
   init_macros();
@@ -838,8 +1045,13 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (input_paths.len > 1 && opt_o && (opt_c || opt_S || opt_E))
+  if (input_paths.len > 1 && opt_o && (opt_c || (!opt_closed_program && opt_S) || opt_E))
     error("cannot specify '-o' with '-c,' '-S' or '-E' with multiple files");
+
+  if (opt_closed_program && !opt_E && !opt_M) {
+    build_closed_program(argc, argv);
+    return 0;
+  }
 
   StringArray ld_args = {};
 
@@ -883,6 +1095,8 @@ int main(int argc, char **argv) {
 
     // Handle .o or .a
     if (type == FILE_OBJ || type == FILE_AR || type == FILE_DSO) {
+      if (type == FILE_OBJ && is_closed_object(input))
+        error("closed-program IR object requires --closed-program: %s", input);
       strarray_push(&ld_args, input);
       continue;
     }

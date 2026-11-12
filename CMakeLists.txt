@@ -47,6 +47,9 @@ target_compile_options(ppchibicc_stage1 PRIVATE
 file(REMOVE "${CMAKE_BINARY_DIR}/include")
 file(CREATE_LINK "${CMAKE_SOURCE_DIR}/include" "${CMAKE_BINARY_DIR}/include"
   SYMBOLIC)
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share")
+file(REMOVE "${CMAKE_BINARY_DIR}/share/ppchibicc")
+file(CREATE_LINK "${CMAKE_SOURCE_DIR}/cmake" "${CMAKE_BINARY_DIR}/share/ppchibicc" SYMBOLIC)
 
 # bin/ppchibicc is a durable copy of a successful stage1 build. It is not
 # declared as a CMake output, so the generated `make clean` intentionally
@@ -61,6 +64,8 @@ add_custom_command(TARGET ppchibicc_stage1 POST_BUILD
 
 install(TARGETS ppchibicc_stage1 RUNTIME DESTINATION bin)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/include/" DESTINATION include)
+install(FILES cmake/ppc-static-dispatch.py cmake/ppc-dispatch-report.py cmake/PpchibiccClosedProgram.cmake
+  DESTINATION share/ppchibicc)
 
 function(add_ppc_test_binaries suite compiler compiler_dependency output_dir out_var)
   file(GLOB test_sources CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/test/*.c")
@@ -296,6 +301,12 @@ add_llvm_target(test-llvm-stage2 cmake/run-llvm-tests.sh "${PPCHIBICC_STAGE2_COM
   ppchibicc_stage2 llvm-test-stage2 "Checking LLVM IR, execution and ABI (test-llvm-stage2)")
 add_llvm_target(test-llvm-driver cmake/run-llvm-driver-tests.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-driver-test "Checking the LLVM compiler driver")
+add_llvm_target(test-llvm-closed-compiler cmake/run-llvm-closed-compiler-tests.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-closed-compiler "Checking closed-program compilation and standard CMake targets"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}" "${CMAKE_COMMAND}" "${CMAKE_BINARY_DIR}")
+add_llvm_target(test-llvm-closed-compiler-stage2 cmake/run-llvm-closed-compiler-tests.sh "${PPCHIBICC_STAGE2_COMPILER}"
+  ppchibicc_stage2 llvm-closed-compiler-stage2 "Checking self-hosted closed-program compilation"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}" "${CMAKE_COMMAND}" "${CMAKE_BINARY_DIR}")
 add_llvm_target(llvm-opt-demo cmake/run-llvm-opt-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-opt-demo "Comparing LLVM optimization pipelines")
 add_llvm_target(llvm-dispatch-demo cmake/run-llvm-dispatch-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"

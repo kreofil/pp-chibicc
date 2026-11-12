@@ -280,6 +280,41 @@ assembler and per-kernel/whole-core code sizes are retained. Compiler
 internals, ABI and tag semantics are unchanged. Default timing runs 224 samples;
 stage1/stage2 CI uses check-only without performance gates. See
 docs/llvm-static-dispatch-benchmark-ru.md.
+The public compiler now integrates this closure pipeline through
+--closed-program (implicitly LLVM). A final executable command accepts all
+source units, raw ppchibicc .ll units and marked closed-program .o files.
+--closed-program -c saves raw textual IR with a versioned comment header,
+without Python or external LLVM tools; ordinary compilation still produces
+ELF objects. Final closure checks matching LLVM as/opt/link/llc versions,
+uses the existing strict input/table audits, optimizes the combined IR at the
+requested level, lowers it and links with the existing system ELF toolchain.
+--closed-family is repeatable and requires a uniquely resolved closed matrix;
+--closed-report selects the JSON manifest (default OUTPUT.closed.json).
+Unselected/open families retain runtime behavior and their statuses appear
+in the report. A complete pure-C/all-open program is allowed with no frozen
+tables; standalone freezing still requires a selected table by default.
+
+Native application objects, archives/shared libraries, bitcode/assembly and
+arbitrary linker options cannot establish this complete-input contract and
+are rejected in closed mode; the supported C runtime and -lm are permitted.
+Ordinary mixed compilation is unchanged. There is no PPC ABI/tag change;
+clean rebuilds or separate directories are needed when changing the object
+mode. Dependency prerequisites now use the existing Makefile quoting helper,
+including paths with spaces. Final output/report are prepared in sibling
+temporary files before publication; tool or linker failure preserves existing
+results. -S -emit-llvm emits combined verified pre-optimization IR; normal
+single-unit raw IR remains tool-free.
+
+PpchibiccClosedProgram.cmake enables this mode on standard CMake executable
+and OBJECT library targets, with final-link optimization/family/report options.
+Python helpers and the module install under share/ppchibicc and are discovered
+relative to the compiler; moved prefixes and explicit helper overrides work.
+The closed-build example covers object libraries, incremental builds and CTest.
+Stage1/stage2 CI adds 11 regression tests for these paths, all dispatch modes,
+O0/O2/O3/Os/Oz, source/IR/object combinations, .ppc/.pph, dependency output,
+empty closure, native/external-module rejection and output preservation.
+Focused checks pass with LLVM 19, 21 and 23. See docs/llvm-closed-compiler-ru.md.
+
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.

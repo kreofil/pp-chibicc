@@ -6,7 +6,7 @@ Workflow `.github/workflows/test.yml` запускается при push и pull
 | Job | Проверки |
 | --- | --- |
 | `cmake-test-all` | Обычный `test-all`: native stage1, самокомпиляция stage2, тесты C/4П и примеры |
-| `llvm-23` | `test-llvm`, `test-llvm-stage2`, `llvm-opt-demo`, `llvm-dispatch-demo`, `llvm-dispatch-report`, `test-llvm-dispatch-report-stage2`, `llvm-static-dispatch-demo`, `test-llvm-static-dispatch-stage2`, `test-llvm-static-dispatch-bench`, `test-llvm-static-dispatch-bench-stage2` |
+| `llvm-23` | `test-llvm`, `test-llvm-stage2`, `llvm-opt-demo`, `llvm-dispatch-demo`, `llvm-dispatch-report`, `test-llvm-dispatch-report-stage2`, `llvm-static-dispatch-demo`, `test-llvm-static-dispatch-stage2`, `test-llvm-static-dispatch-bench`, `test-llvm-static-dispatch-bench-stage2`, `test-llvm-closed-compiler`, `test-llvm-closed-compiler-stage2` |
 
 LLVM-набор проверяет IR, выполнение при O0/O2, ABI с системным GCC,
 смешанные native/LLVM-объекты, регистрацию 4П, команды компилятора и
@@ -66,6 +66,11 @@ bitcode/O2 и все шесть порядков модулей исполняе
 по независимому Python-эталону и неправильные аргументы. Оба компилятора
 проверяются без калибровки и сбора статистики; порогов быстродействия нет.
 
+Публичная [закрытая сборка](llvm-closed-compiler-ru.md) проверяется stage1
+и stage2: исходники и промежуточные IR-объекты, обычные цели CMake и CTest,
+пересборка по заголовкам, очистка, установка и перенос префикса,
+диагностики и сохранение результата при ошибках инструментов/линковки.
+
 ## Повторение LLVM-проверок
 
 С обычной установленной версией LLVM 23 достаточно команд из
@@ -82,7 +87,8 @@ cmake --build build-llvm-ci --target \
   test-llvm test-llvm-stage2 llvm-opt-demo llvm-dispatch-demo \
   llvm-dispatch-report test-llvm-dispatch-report-stage2 \
   llvm-static-dispatch-demo test-llvm-static-dispatch-stage2 \
-  test-llvm-static-dispatch-bench test-llvm-static-dispatch-bench-stage2
+  test-llvm-static-dispatch-bench test-llvm-static-dispatch-bench-stage2 \
+  test-llvm-closed-compiler test-llvm-closed-compiler-stage2
 ```
 
 Для установочного скрипта нужны Python 3.11+, `curl`, `dpkg-deb` и системные
