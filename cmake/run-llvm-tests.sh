@@ -87,6 +87,10 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/stdarg-abi-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
+  elif [ "$name" = ppc-closed-indices ]; then
+    "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/closed-init-host.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
   elif [ "$name" = long-double-abi ]; then
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/long-double-abi-host.c" \
       -o "$prefix.host.o"
@@ -137,7 +141,7 @@ done
 echo "testing LLVM PPC multifile (x86, O0, O2, mixed objects)"
 multifile=$result_dir/multifile
 mkdir -p "$multifile"
-for unit in base rectangle square main; do
+for unit in base rectangle square opaque main; do
   source=$source_dir/test/llvm/multifile/$unit.c
   prefix=$multifile/$unit
   "$compiler" -c "$source" -o "$prefix.x86.o"
@@ -150,13 +154,18 @@ for unit in base rectangle square main; do
 done
 for variant in x86 O0 O2; do
   "$host_cc" "$multifile/base.$variant.o" "$multifile/rectangle.$variant.o" \
-    "$multifile/square.$variant.o" "$multifile/main.$variant.o" -o "$multifile/$variant.exe"
+    "$multifile/square.$variant.o" "$multifile/opaque.$variant.o" "$multifile/main.$variant.o" -o "$multifile/$variant.exe"
   check_execution "$multifile/$variant.exe" "$multifile/$variant" \
     "$source_dir/test/llvm/multifile/expected.txt" 0
+  "$host_cc" "$multifile/main.$variant.o" "$multifile/opaque.$variant.o" \
+    "$multifile/square.$variant.o" "$multifile/rectangle.$variant.o" \
+    "$multifile/base.$variant.o" -o "$multifile/$variant-reversed.exe"
+  check_execution "$multifile/$variant-reversed.exe" "$multifile/$variant-reversed" \
+    "$source_dir/test/llvm/multifile/expected.txt" 0
 done
-for native in base rectangle square main; do
+for native in base rectangle square opaque main; do
   set --
-  for unit in base rectangle square main; do
+  for unit in base rectangle square opaque main; do
     variant=O2
     [ "$unit" != "$native" ] || variant=x86
     set -- "$@" "$multifile/$unit.$variant.o"

@@ -36,6 +36,21 @@ int main(void) {
   if (extended<objects[0]>(1.25L) != 13.25L ||
       extended<objects[1]>(2.5L) != 11.5L || extended<&zero>(0.75L) != 11.75L)
     return 6;
+  MFClosedChoice choice = MFClosedChoice.first;
+  choice.id = 5;
+  MFClosedUnion.second closed_union = {2.5};
+  MFClosedPointer.second closed_pointer = {0};
+  MFClosedCase.first closed_case = {7};
+  if (closed_sizes() != 12 || get_spec_var_index(&closed_union) != 2 ||
+      get_spec_var_index(&closed_pointer) != 2 || get_spec_var_index(&closed_case) != 1)
+    return 7;
+  if (closed_pick<&choice>() != 16 || closed_opaque(&choice) != 16 ||
+      closed_pair<&choice, &closed_union>() != 32)
+    return 8;
+  choice = MFClosedChoice.second;
+  if (closed_pick<&choice>() != 17 || closed_opaque(&choice) != 17 ||
+      closed_pair<&choice, &closed_union>() != 20)
+    return 9;
   puts("PPC multifile OK");
   return 0;
 }

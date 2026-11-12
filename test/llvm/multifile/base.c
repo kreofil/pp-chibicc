@@ -22,3 +22,11 @@ Measurement measure<Figure *f>(Dimensions extra) {
 }
 
 long double extended<Figure *f>(long double extra) { return f->id + extra; }
+
+int closed_pick<MFClosedChoice.void *x>(void) { return 10; }
+int closed_pair<MFClosedChoice *a, MFClosedUnion *b>(void) { return 20; }
+int closed_sizes(void) {
+  enum { all = get_spec_size(MFClosedCase) + get_spec_size(MFClosedChoice) +
+               get_spec_size(MFClosedPointer) + get_spec_size(MFClosedUnion) };
+  return all;
+}

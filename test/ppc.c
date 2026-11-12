@@ -637,6 +637,9 @@ static void test_enum_feature_assignment(void) {
 }
 
 int main() {
+  // Closed tags are constants even when a native VLA needs a runtime loop.
+  ASSERT(3, ({ int n = 3; ConstKind.number values[n];
+               get_spec_var_index(&values[2]); }));
   test_enum_feature_assignment();
   test_pointer_generalizations();
   test_union_generalizations();

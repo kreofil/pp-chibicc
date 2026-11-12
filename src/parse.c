@@ -182,7 +182,7 @@ static Node *ppc_tag_value(Member *mem, Token *tok);
 static Node *ppc_tag_initializer(Obj *var, Token *tok);
 static Node *ppc_vla_tag_initializer(Obj *var, Token *tok);
 static void ppc_gvar_tag_initializer(Obj *var, Initializer *init, Token *tok);
-static bool ppc_initializer_has_enum_feature(Initializer *init);
+static bool ppc_initializer_has_enum_feature(Initializer *init, bool runtime_only);
 static Member *ppc_read_enum_feature(Token **rest, Token *tok, Type *ty);
 static void ppc_check_enum_feature_target(Type *ty, Token *tok);
 static Node *ppc_enum_feature_assignment(Node *lhs, Member *feature, Token *tok);
@@ -985,7 +985,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       Initializer *init = NULL;
       if (equal(tok, "="))
         init = gvar_initializer(&tok, tok->next, var);
-      if (attr->is_tls && ppc_initializer_has_enum_feature(init))
+      if (attr->is_tls && ppc_initializer_has_enum_feature(init, false))
         error_tok(tok, "PPC enum feature initialization of thread-local storage is not supported");
       ppc_gvar_tag_initializer(var, init, tok);
       continue;
@@ -1607,10 +1607,19 @@ static Node *new_block_node(Node *body, Token *tok) {
   return node;
 }
 
+static bool ppc_constant_tag(Member *mem) {
+  return !mem->ppc_tag_var ||
+         (mem->ppc_tag_base && mem->ppc_tag_base->is_ppc_const_generalization);
+}
+
+static int ppc_declared_tag(Member *mem) {
+  return mem->is_ppc_tag ? mem->ppc_index : mem->idx;
+}
+
 static Node *ppc_tag_value(Member *mem, Token *tok) {
-  if (mem->ppc_tag_var)
+  if (!ppc_constant_tag(mem))
     return new_var_node(mem->ppc_tag_var, tok);
-  return new_num(0, tok);
+  return new_num(ppc_declared_tag(mem), tok);
 }
 
 static Type *ppc_enum_family(Type *ty) {
@@ -1695,7 +1704,7 @@ static bool ppc_type_has_tag(Type *ty, bool runtime_only) {
 
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (mem->is_ppc_tag) {
-      if (!runtime_only || mem->ppc_tag_var)
+      if (!runtime_only || !ppc_constant_tag(mem))
         return true;
       continue;
     }
@@ -1806,25 +1815,29 @@ static Node *ppc_vla_tag_initializer(Obj *var, Token *tok) {
   return loop;
 }
 
-static bool ppc_initializer_has_enum_feature(Initializer *init) {
+static bool ppc_initializer_has_enum_feature(Initializer *init, bool runtime_only) {
   if (!init)
     return false;
   if (init->ppc_enum_feature)
-    return true;
+    return !runtime_only || !ppc_constant_tag(init->ppc_enum_feature);
   if (init->ty->kind == TY_ARRAY) {
     for (int i = 0; i < init->ty->array_len; i++)
-      if (ppc_initializer_has_enum_feature(init->children[i]))
+      if (ppc_initializer_has_enum_feature(init->children[i], runtime_only))
         return true;
   } else if (init->ty->kind == TY_STRUCT || init->ty->kind == TY_UNION) {
     for (Member *mem = init->ty->members; mem; mem = mem->next)
-      if (ppc_initializer_has_enum_feature(init->children[mem->idx]))
+      if (ppc_initializer_has_enum_feature(init->children[mem->idx], runtime_only))
         return true;
   }
   return false;
 }
 
 static void ppc_gvar_tag_initializer(Obj *var, Initializer *init, Token *tok) {
-  if (!ppc_type_has_tag(var->ty, true) && !ppc_initializer_has_enum_feature(init))
+  // Explicit closed initializers already contain their tags in .data.
+  // Retain startup initialization for tentative/static zero-initialized
+  // objects, preserving C common-symbol merging across translation units.
+  if (!ppc_type_has_tag(var->ty, init != NULL) &&
+      !ppc_initializer_has_enum_feature(init, true))
     return;
 
   static int id = 0;
@@ -1879,7 +1892,9 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
   if (ty->kind == TY_STRUCT) {
     for (Member *mem = ty->members; mem; mem = mem->next) {
       if (mem->is_ppc_tag) {
-        write_buf(buf + offset + mem->offset, 0, mem->ty->size);
+        Member *tag = init->ppc_enum_feature ? init->ppc_enum_feature : mem;
+        write_buf(buf + offset + mem->offset,
+                  ppc_constant_tag(tag) ? ppc_declared_tag(tag) : 0, mem->ty->size);
         continue;
       }
 
@@ -1953,7 +1968,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
 // initializer list contains a non-constant expression.
 static Initializer *gvar_initializer(Token **rest, Token *tok, Obj *var) {
   Initializer *init = initializer(rest, tok, var->ty, &var->ty);
-  if (var->is_tls && ppc_initializer_has_enum_feature(init))
+  if (var->is_tls && ppc_initializer_has_enum_feature(init, false))
     error_tok(tok, "PPC enum feature initialization of thread-local storage is not supported");
 
   Relocation head = {};
@@ -3530,6 +3545,7 @@ static void ensure_ppc_tag_member(Type *ty) {
   mem->ty = ty_int;
   mem->align = ty_int->align;
   mem->is_ppc_tag = true;
+  mem->ppc_tag_base = ty;
   mem->ppc_index = 0;
   mem->next = ty->members;
   ty->members = mem;
@@ -3771,6 +3787,7 @@ static void append_ppc_specs(Type *base, Member *specs) {
       error_tok(mem->name, "duplicate PPC specialization name");
 
     mem->idx = idx++;
+    mem->ppc_tag_base = base;
     mem->ppc_ty = NULL;
     mem->ppc_tag_var =
       new_ppc_common_var(format("__ppc_%s_%.*s_tag", ppc_type_name(base),
@@ -5404,18 +5421,15 @@ static Node *ppc_get_subtype_index_expr(Token *tok, Type *ty) {
 
   remember_ppc_gen(base, tok);
 
-  // The generalization itself and a named default specialization both
-  // occupy parameter index 0. Ordinary specializations receive their
-  // actual index at program startup through the shared runtime tag.
+  // The family and its named default occupy index 0. Closed families use
+  // declaration-order constants; open families load their shared startup tag.
   if (!ty->ppc_base)
     return new_num(0, tok);
 
   Member *tag = ppc_tag_member(ty);
   if (!tag)
     error_tok(tok, "PPC specialization has no specialization tag");
-  if (!tag->ppc_tag_var)
-    return new_num(tag->ppc_index, tok);
-  return new_var_node(tag->ppc_tag_var, tok);
+  return ppc_tag_value(tag, tok);
 }
 
 static Node *ppc_get_spec_var_index_expr(Token *tok, Node *ptr) {
@@ -5566,6 +5580,8 @@ static Node *ppc_cast_fnptr(Node *fn, Type *fnptr_ty) {
 }
 
 static Node *ppc_extent_expr(Type *base, Token *tok) {
+  if (base->is_ppc_const_generalization)
+    return new_num(ppc_next_spec_index(base), tok);
   return new_add(new_var_node(base->ppc_count_var, tok), new_num(1, tok), tok);
 }
 
@@ -5611,7 +5627,7 @@ static Node *ppc_handler_tag_expr(Type *param_ty, Token *tok) {
   Member *tag = ppc_tag_member(param_ty->base);
   if (!tag || !tag->ppc_tag_var)
     error_tok(tok, "PPC specialization has no runtime tag");
-  return new_var_node(tag->ppc_tag_var, tok);
+  return ppc_tag_value(tag, tok);
 }
 
 static Node *ppc_handler_table_index(PpcFunc *ppc_fn, PpcHandler *handler, Token *tok) {
@@ -5641,8 +5657,13 @@ static void ppc_make_spec_ctor(Type *base, Member *spec) {
   if_node->cond = new_var_node(spec->ppc_tag_var, tok);
   if_node->then = early_return;
 
-  Node *count = new_var_node(base->ppc_count_var, tok);
+  // Retain shared metadata for units that see only an opaque forward
+  // declaration. Closed tags/counts must be independent of constructor order.
+  Node *count = base->is_ppc_const_generalization ? new_num(spec->idx, tok) :
+                new_var_node(base->ppc_count_var, tok);
   Node *inc = new_binary(ND_ASSIGN, new_var_node(base->ppc_count_var, tok),
+                         base->is_ppc_const_generalization ?
+                         new_num(ppc_next_spec_index(base) - 1, tok) :
                          new_add(new_var_node(base->ppc_count_var, tok), new_num(1, tok), tok),
                          tok);
   Node *set_tag = new_binary(ND_ASSIGN, new_var_node(spec->ppc_tag_var, tok), count, tok);

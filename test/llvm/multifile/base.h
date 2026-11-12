@@ -1,5 +1,6 @@
 #ifndef LLVM_PPC_BASE_H
 #define LLVM_PPC_BASE_H
+#include "closed.h"
 typedef struct Figure { int id; } case {} Figure;
 int perimeter<Figure *f>();
 long variable_sum<Figure *f>(int n, ...);

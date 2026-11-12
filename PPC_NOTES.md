@@ -130,6 +130,27 @@ Native long-double-to-short/unsigned-short/unsigned-int/unsigned-long casts
 are corrected, including the upper uint64_t half used by self-hosted stage2.
 Public PPC tags, registration and dispatch rules are unchanged. See
 `docs/llvm-long-double-ru.md` for the ABI and regression commands.
+Closed case/enum/nullptr/union families now have declaration-order constant
+indices: zero/default is 0, nonzero alternatives are 1..N, and get_spec_size
+includes zero. get_subtype_index and get_spec_size are integer constant
+expressions for visible closed definitions (case labels, C enums, array bounds
+and static initializers). Member.ppc_tag_base retains the owning family through
+specialization/nested-type copies, so tag reads, enum feature assignments,
+local/global initialization, create_spec/init_spec and handler registration
+agree. Explicit global initializers serialize fixed tags directly; tentative
+and implicit-static objects retain startup initialization to preserve common
+symbol merging. Shared tag/count metadata remains available to opaque modules;
+closed registration writes fixed values instead of startup-order increments.
+All objects/libraries exchanging closed PPC types must be clean rebuilt.
+Open-family nonzero tags/extents remain runtime values. Dispatch tables and
+handler registration remain dynamic at this stage, including mixed open/closed
+multimethods. Future immutable-table/switch dispatch is restricted to functions
+whose procedural argument families are all closed and whose handler set is
+known; no automatic macros or source-closing utility are introduced. Native,
+stage2, LLVM and independent host startup tests cover all four forms, empty and
+named zero cases, static data, nesting, mutable enum tags, side effects, strict
+completeness, opaque declarations and mixed native/LLVM modules. See
+`docs/ppc-closed-indices-ru.md`.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.
@@ -434,14 +455,14 @@ Current implementation strategy:
   Feature assignment does not apply to ordinary `case` or pointer lists.
 - Initializing an enum object from a feature initializes its common fields to
   zero. Feature initializers work for automatic, global and local `static`
-  objects, arrays, nested aggregate members and automatic compound literals. Global and
-  static feature tags are initialized at startup from registered runtime tag
-  cells, including for specializations declared in other translation units.
+  objects, arrays, nested aggregate members and automatic compound literals. Explicit closed-family global/static initializers contain fixed tag bytes;
+  open-family feature tags are initialized at startup from registered tag
+  cells, including specializations declared in other translation units.
 - A `const` generalization has a closed specialization set. Later `+`
   extensions of such a generalization are rejected.
 - The hidden tag field is the first struct member. The generalization uses
-  tag 0; concrete non-default specializations receive tags 1..N at program
-  startup. A named default specialization also uses tag 0 and does not need a
+  tag 0; concrete non-default specializations have declaration-order tags 1..N
+  for closed definitions and startup-assigned tags for open families. A named default specialization also uses tag 0 and does not need a
   runtime tag cell.
 - Each generalization has a common runtime counter:
   `__ppc_<type>_count`.
@@ -450,8 +471,8 @@ Current implementation strategy:
   `__ppc_<type>_spec_ptr_tags`.
 - Each specialization has a common runtime tag cell:
   `__ppc_<type>_<specialization>_tag`.
-- Specialization constructors in `.init_array.101` assign tags by incrementing
-  the common counter. They are idempotent, so a PPC header included by several
+- Specialization constructors in `.init_array.101` increment the counter for
+  open families, or store fixed indices/counts for closed families. They are idempotent, so a PPC header included by several
   translation units does not register the same specialization more than once.
 - Tag-carrier constructors in `.init_array.151` allocate and fill the
   `get_spec_ptr` array after specialization tags have been assigned and before
@@ -504,8 +525,8 @@ Current implementation strategy:
 - `init_spec(Shape.color.rect[2], ptr)` casts `ptr` to the corresponding
   element pointer type, initializes the tag chain in every fixed-size array
   element, and still accepts `void *` for arbitrary caller-provided memory.
-- `get_spec_size(struct Figure)` lowers to `__ppc_Figure_count + 1`, so the
-  returned size always includes the zero coordinate.
+- `get_spec_size(struct Figure)` is a literal for a visible closed definition,
+  otherwise `__ppc_Figure_count + 1`; both include the zero coordinate.
 - `get_spec_ptr(struct Figure, i)` stores `i` in a local temporary, checks that
   `0 <= i < get_spec_size(struct Figure)`, and returns
   `(struct Figure *)&__ppc_Figure_spec_ptr_tags[i]`. The returned pointer is a
@@ -519,7 +540,7 @@ Current implementation strategy:
 - Tag-carrier finalizers in `.fini_array.151` free arrays allocated for
   `get_spec_ptr` and reset the common pointer to zero.
 - Handler constructors in `.init_array.301` write specialization handler
-  pointers into the table by reading the runtime tag cell. A `Base.void`
+  pointers into the table using literal closed indices or open runtime tags. A `Base.void`
   handler, or a named default-specialization handler, contributes a literal
   zero coordinate.
 - PPC handler implementation symbols follow ordinary C linkage rules. A

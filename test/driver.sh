@@ -954,4 +954,32 @@ union Value { int number; } source = {3};
 union Value copy = source;
 EOF
 
+# Only closed-family nonzero indices and extents are integer constants.
+for family in 'case { void first; }' 'enum { first }' \
+              'nullptr { int *first; }' 'union sizeof(16) { int first; }'; do
+  expect_fail "open $family index is not a case constant" <<EOF_OPEN_INDEX
+typedef struct Open {} $family Open;
+int main(void) {
+  switch (0) { case get_subtype_index(Open.first): return 1; }
+  return 0;
+}
+EOF_OPEN_INDEX
+  expect_fail "open $family size is not an enum constant" <<EOF_OPEN_SIZE
+typedef struct Open {} $family Open;
+enum { size = get_spec_size(Open) };
+int main(void) { return 0; }
+EOF_OPEN_SIZE
+done
+expect_fail 'closed indices diagnose duplicate cases after constant folding' <<'EOF'
+typedef struct Closed {} enum { first } const Closed;
+int main(void) {
+  switch (1) { case 1: return 0; case get_subtype_index(Closed.first): return 1; }
+}
+EOF
+
+expect_fail 'closed enum features preserve the TLS initialization diagnostic' <<'EOF'
+typedef struct Closed {} enum { first } const Closed;
+_Thread_local Closed value = Closed.first;
+EOF
+
 echo OK

@@ -24,3 +24,11 @@ Measurement measure<Figure.rectangle *f>(Dimensions extra) {
 }
 
 long double extended<Figure.rectangle *f>(long double extra) { return f->rectangle.width * f->rectangle.height + extra; }
+
+int closed_pick<MFClosedChoice.first *x>(void) {
+  switch (get_spec_var_index(x)) {
+    case get_subtype_index(MFClosedChoice.first): return 11 + x->id;
+    default: return -1;
+  }
+}
+int closed_pair<MFClosedChoice.first *a, MFClosedUnion.second *b>(void) { return 32; }

@@ -409,6 +409,7 @@ struct Member {
   // Hidden specialization-index field inserted at the beginning of
   // PPC generalizations and generated specialization types.
   bool is_ppc_tag;
+  Type *ppc_tag_base; // Owning family, also on specialization-list members
   int ppc_index;
   Obj *ppc_tag_var;
 

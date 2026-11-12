@@ -101,12 +101,12 @@ multi=$source_dir/test/llvm/multifile
 # the real multifile program, replacing only its filenames/include spellings.
 extensions=$result_dir/extensions
 mkdir -p "$extensions"
-for unit in base rectangle square; do
-  sed 's/"base.h"/"base.pph"/;s/"rectangle.h"/"rectangle.pph"/;s/"square.h"/"square.pph"/' \
+for unit in base rectangle square closed; do
+  sed 's/"base.h"/"base.pph"/;s/"rectangle.h"/"rectangle.pph"/;s/"square.h"/"square.pph"/;s/"closed.h"/"closed.pph"/' \
     "$multi/$unit.h" >"$extensions/$unit.pph"
 done
-for unit in base rectangle square main; do
-  sed 's/"base.h"/"base.pph"/;s/"rectangle.h"/"rectangle.pph"/;s/"square.h"/"square.pph"/' \
+for unit in base rectangle square opaque main; do
+  sed 's/"base.h"/"base.pph"/;s/"rectangle.h"/"rectangle.pph"/;s/"square.h"/"square.pph"/;s/"closed.h"/"closed.pph"/' \
     "$multi/$unit.c" >"$extensions/$unit.ppc"
 done
 for level in 0 2; do
@@ -129,19 +129,19 @@ reject --backend=llvm -c "$extensions/hello.custom" -o "$extensions/custom.o"
 "$compiler" --backend=llvm -x c "$extensions/hello.custom" -o "$extensions/custom.exe"
 check_hello "$extensions/custom.exe"
 
-"$compiler" --backend=llvm -O2 "$multi/base.c" "$multi/rectangle.c" "$multi/square.c" "$multi/main.c" \
+"$compiler" --backend=llvm -O2 "$multi/base.c" "$multi/rectangle.c" "$multi/square.c" "$multi/opaque.c" "$multi/main.c" \
   -o "$result_dir/multifile.exe"
 "$result_dir/multifile.exe" >"$result_dir/multifile.stdout"
 cmp "$multi/expected.txt" "$result_dir/multifile.stdout" || fail 'multifile output'
 "$compiler" -c "$multi/rectangle.c" -o "$result_dir/rectangle.native.o"
-"$compiler" --backend=llvm -O2 "$multi/base.c" "$result_dir/rectangle.native.o" "$multi/square.c" "$multi/main.c" \
+"$compiler" --backend=llvm -O2 "$multi/base.c" "$result_dir/rectangle.native.o" "$multi/square.c" "$multi/opaque.c" "$multi/main.c" \
   -o "$result_dir/mixed.exe"
 "$result_dir/mixed.exe" >"$result_dir/mixed.stdout"
 cmp "$multi/expected.txt" "$result_dir/mixed.stdout" || fail 'mixed PPC output'
-for unit in base rectangle square; do
+for unit in base rectangle square opaque; do
   "$compiler" --backend=llvm -O2 -c "$multi/$unit.c" -o "$result_dir/$unit.o"
 done
-ar rcs "$result_dir/shapes.a" "$result_dir/base.o" "$result_dir/rectangle.o" "$result_dir/square.o"
+ar rcs "$result_dir/shapes.a" "$result_dir/base.o" "$result_dir/rectangle.o" "$result_dir/square.o" "$result_dir/opaque.o"
 "$compiler" --backend=llvm -O2 "$multi/main.c" -Wl,--whole-archive "$result_dir/shapes.a" \
   -Wl,--no-whole-archive -o "$result_dir/archive.exe"
 "$result_dir/archive.exe" >"$result_dir/archive.stdout"
