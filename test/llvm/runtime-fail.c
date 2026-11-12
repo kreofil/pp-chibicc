@@ -2,6 +2,11 @@
 typedef struct Family {} case { int item; } Family;
 int dispatch<Family *f>(int extra) = 0;
 int main(void) { Family.item f = 1; return dispatch<&f>(7); }
+#elif defined(FAIL_UNCOVERED_MULTI)
+typedef struct Closed {} enum { one } const Closed;
+typedef struct Open {} enum { one, two } Open;
+int dispatch<Closed *a, Open *b>(int extra) = 0;
+int main(void) { Closed a = Closed.one; Open b = Open.two; return dispatch<&a, &b>(7); }
 #elif defined(FAIL_UNCOVERED_FLOAT)
 typedef struct Family {} case { double item; } Family;
 double dispatch<Family *f>(double extra) = 0;

@@ -1,3 +1,4 @@
+#define DISPATCH_EXTERNAL_HELPER 1
 #define main closed_dispatch_main
 #include "../../ppc-closed-dispatch.c"
 #undef main

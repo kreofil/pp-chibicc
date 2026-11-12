@@ -1,5 +1,5 @@
-n=0 known=0.00 closed=0.00 open=0.00 extra=0.00 control=0.00
-n=1 known=10.00 closed=10.00 open=10.00 extra=0.00 control=10.00
-n=4 known=40.00 closed=44.50 open=44.50 extra=0.00 control=40.00
-n=7 known=70.00 closed=76.75 open=76.75 extra=0.00 control=70.00
-n=31 known=310.00 closed=343.75 open=343.75 extra=0.00 control=310.00
+n=0 known=0.00 closed=0.00 open=0.00 extra=0.00 control=0.00 multi=0.00
+n=1 known=10.00 closed=10.00 open=10.00 extra=0.00 control=10.00 multi=10.00
+n=4 known=40.00 closed=44.50 open=44.50 extra=0.00 control=40.00 multi=45.00
+n=7 known=70.00 closed=76.75 open=76.75 extra=0.00 control=70.00 multi=77.75
+n=31 known=310.00 closed=343.75 open=343.75 extra=0.00 control=310.00 multi=347.75

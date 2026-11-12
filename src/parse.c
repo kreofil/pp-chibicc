@@ -5793,58 +5793,51 @@ static void ppc_make_spec_ptr_tags_dtor(PpcGen *gen) {
 static void ppc_make_table_ctor(PpcFunc *ppc_fn) {
   static int id = 0;
   Token *tok = ppc_fn->name_tok;
-  Type *generic_ty = ppc_generic_func_type(ppc_fn);
-  Type *fnptr_ty = pointer_to(generic_ty);
-
   Obj *fn = new_generated_func(format("__ppc_ctor_201_table_%d", id++),
                                func_type(ty_void), 201);
-
   Obj *locals = NULL;
   fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
-  Obj *i = new_generated_lvar(&locals, ty_int);
-
   Node *early_return = new_node(ND_RETURN, tok);
   Node *if_node = new_node(ND_IF, tok);
   if_node->cond = new_var_node(ppc_fn->table_var, tok);
   if_node->then = early_return;
-
-  Node *table_size = ppc_table_size_expr(ppc_fn, tok);
-  Node *arg1 = new_cast(table_size, ty_ulong);
-  Node *arg2 = new_ulong(8, tok);
-  arg1->next = arg2;
-  Node *calloc_call = new_func_call_node(get_calloc_func(), arg1, tok);
+  Node *arg1 = new_cast(ppc_table_size_expr(ppc_fn, tok), ty_ulong);
+  arg1->next = new_ulong(8, tok);
   Node *alloc = new_binary(ND_ASSIGN, new_var_node(ppc_fn->table_var, tok),
-                           new_cast(calloc_call, ppc_fn->table_var->ty), tok);
+    new_cast(new_func_call_node(get_calloc_func(), arg1, tok), ppc_fn->table_var->ty), tok);
+  // Leave holes null until actual defaults and concrete handlers register.
+  if_node->next = new_expr_stmt_node(alloc, tok);
+  fn->body = new_block_node(if_node, tok);
+  fn->locals = locals;
+  add_type(fn->body);
+}
 
-  Node *init = new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(i, tok),
-                                             new_num(0, tok), tok),
-                                  tok);
-  Node *cond = new_binary(ND_LT, new_var_node(i, tok),
-                          ppc_table_size_expr(ppc_fn, tok), tok);
-  Node *inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
-                         new_add(new_var_node(i, tok), new_num(1, tok), tok), tok);
-
+static void ppc_make_fill_ctor(PpcFunc *ppc_fn, Obj *target, int priority) {
+  static int id = 0;
+  Token *tok = ppc_fn->name_tok;
+  Obj *fn = new_generated_func(format("__ppc_ctor_%d_fill_%d", priority, id++),
+                               func_type(ty_void), priority);
+  Obj *locals = NULL;
+  fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
+  Obj *i = new_generated_lvar(&locals, ty_int);
   Node *slot = ppc_table_slot(ppc_fn->table_var, new_var_node(i, tok), tok);
-  Node *def = ppc_needs_exhaustive_check(ppc_fn) ?
-    new_cast(new_num(0, tok), fnptr_ty) :
-    ppc_cast_fnptr(new_var_node(ppc_default_handler(ppc_fn, tok), tok), fnptr_ty);
-  Node *fill = new_expr_stmt_node(new_binary(ND_ASSIGN, slot, def, tok), tok);
-
+  Node *fill = new_node(ND_IF, tok);
+  fill->cond = new_unary(ND_NOT, slot, tok);
+  fill->then = new_expr_stmt_node(new_binary(ND_ASSIGN,
+    ppc_table_slot(ppc_fn->table_var, new_var_node(i, tok), tok),
+    ppc_cast_fnptr(new_var_node(target, tok), ppc_fn->fnptr_ty), tok), tok);
   Node *loop = new_node(ND_FOR, tok);
-  loop->init = init;
-  loop->cond = cond;
-  loop->inc = inc;
-  loop->then = new_block_node(fill, tok);
+  loop->init = new_expr_stmt_node(new_binary(ND_ASSIGN,
+    new_var_node(i, tok), new_num(0, tok), tok), tok);
+  loop->cond = new_binary(ND_LT, new_var_node(i, tok), ppc_table_size_expr(ppc_fn, tok), tok);
+  loop->inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
+    new_add(new_var_node(i, tok), new_num(1, tok), tok), tok);
+  loop->then = fill;
   loop->brk_label = new_unique_name();
   loop->cont_label = new_unique_name();
-
-  Node *stmt1 = if_node;
-  Node *stmt2 = new_expr_stmt_node(alloc, tok);
-  stmt1->next = stmt2;
-  stmt2->next = loop;
-
-  fn->body = new_block_node(stmt1, tok);
+  fn->body = new_block_node(loop, tok);
   fn->locals = locals;
+  target->is_root = true;
   add_type(fn->body);
 }
 
@@ -5953,6 +5946,7 @@ static void ppc_make_handler_ctor(PpcFunc *ppc_fn, PpcHandler *handler) {
   Node *slot = ppc_table_slot(ppc_fn->table_var, ppc_handler_table_index(ppc_fn, handler, tok), tok);
   Node *rhs = ppc_cast_fnptr(new_var_node(handler->fn, tok), fnptr_ty);
   Node *stmt = new_expr_stmt_node(new_binary(ND_ASSIGN, slot, rhs, tok), tok);
+  handler->fn->is_root = true;
 
   fn->body = new_block_node(stmt, tok);
   fn->locals = locals;
@@ -5969,13 +5963,27 @@ static void ppc_make_spec_ctors(Type *base, Member *spec) {
 // Closed types do not close the registry of handlers. The local catalog is
 // immutable, but every optimized call guards it against the active runtime
 // slot. Another module (including native code) may still register a handler.
+// The limit is on the product of extents, not on each axis. Check before
+// multiplication so large/partly open grids cannot overflow or be optimized.
+static int ppc_closed_table_count(PpcFunc *family) {
+  int count = 1;
+  for (int i = 0; i < family->ppc_param_count; i++) {
+    Type *base = family->base_tys[i];
+    if (!base->is_ppc_const_generalization)
+      return 0;
+    int extent = ppc_next_spec_index(base);
+    if (extent > 16 / count)
+      return 0;
+    count *= extent;
+  }
+  return count;
+}
+
 static void ppc_make_candidates(PpcFunc *family) {
-  if (opt_ppc_dispatch == PPC_DISPATCH_RUNTIME || family->ppc_param_count != 1 ||
-      !family->base_tys[0]->is_ppc_const_generalization)
+  if (opt_ppc_dispatch == PPC_DISPATCH_RUNTIME)
     return;
-  int count = ppc_next_spec_index(family->base_tys[0]);
-  // Bound both code growth and catalog construction for this first stage.
-  if (count > 16)
+  int count = ppc_closed_table_count(family);
+  if (!count)
     return;
   bool used = false;
   for (PpcCall *site = ppc_calls; site; site = site->next)
@@ -5984,9 +5992,20 @@ static void ppc_make_candidates(PpcFunc *family) {
   if (!used)
     return;
   Obj **targets = calloc(count, sizeof(Obj *));
+  // Defaults fill holes; concrete coordinates always take precedence,
+  // independently of declaration/definition order in the source unit.
+  if (ppc_has_concrete_default_handler(family)) {
+    Obj *fallback = ppc_default_handler(family, family->name_tok);
+    for (int i = 0; i < count; i++)
+      targets[i] = fallback;
+  }
   for (PpcHandler *h = family->handlers; h; h = h->next)
-    if (!h->is_default && !h->is_abstract && h->fn)
-      targets[h->indices[0]] = h->fn;
+    if (!h->is_default && !h->is_abstract && h->fn) {
+      int index = h->indices[0];
+      for (int i = 1; i < family->ppc_param_count; i++)
+        index = index * ppc_next_spec_index(family->base_tys[i]) + h->indices[i];
+      targets[index] = h->fn;
+    }
   for (int i = 0; i < count; i++)
     if (!targets[i])
       return;
@@ -6037,7 +6056,7 @@ static void ppc_optimize_call(PpcCall *site) {
   Node *arg_last = &arguments;
   for (Node *arg = original->args; arg; arg = arg->next) {
     Type *ty = arg->ty;
-    if (ty->kind == TY_ARRAY)
+    if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
       ty = pointer_to(ty->base);
     else if (ty->kind == TY_FUNC)
       ty = pointer_to(ty);
@@ -6109,7 +6128,13 @@ static void finalize_ppc_runtime(void) {
     ppc_make_table_dtor(fn);
     for (PpcHandler *handler = fn->handlers; handler; handler = handler->next)
       ppc_make_handler_ctor(fn, handler);
+    if (ppc_has_concrete_default_handler(fn))
+      ppc_make_fill_ctor(fn, ppc_default_handler(fn, fn->name_tok), 301);
     ppc_make_exhaustive_check_ctor(fn);
+    // Error stubs must not mask a closed-family completeness check or
+    // block a real default coming from another (possibly opaque) unit.
+    if (!ppc_needs_exhaustive_check(fn) && !ppc_has_concrete_default_handler(fn))
+      ppc_make_fill_ctor(fn, ppc_default_handler(fn, fn->name_tok), 361);
   }
   for (PpcCall *site = ppc_calls; site; site = site->next)
     ppc_optimize_call(site);
@@ -6299,9 +6324,7 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
 
   Node *fn = ppc_table_slot(ppc_fn->table_var, ppc_mixed_index_expr(ppc_fn, tags, tok), tok);
   PpcCall *site = NULL;
-  if (opt_ppc_dispatch != PPC_DISPATCH_RUNTIME && ppc_fn->ppc_param_count == 1 &&
-      ppc_fn->base_tys[0]->is_ppc_const_generalization &&
-      ppc_next_spec_index(ppc_fn->base_tys[0]) <= 16 && current_fn) {
+  if (opt_ppc_dispatch != PPC_DISPATCH_RUNTIME && ppc_closed_table_count(ppc_fn) && current_fn) {
     site = calloc(1, sizeof(PpcCall));
     site->family = ppc_fn;
     site->owner = current_fn;
@@ -6310,7 +6333,7 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
     site->tag = new_lvar("", ty_int);
     site->active = new_lvar("", ppc_fn->fnptr_ty);
     cur = cur->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
-      new_var_node(site->tag, tok), tags[0], tok), tok);
+      new_var_node(site->tag, tok), ppc_mixed_index_expr(ppc_fn, tags, tok), tok), tok);
     cur = cur->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
       new_var_node(site->active, tok),
       ppc_table_slot(ppc_fn->table_var, new_var_node(site->tag, tok), tok), tok), tok);

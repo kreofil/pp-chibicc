@@ -20,8 +20,8 @@ int main(int argc, char **argv) {
   int count = argc > 1 ? atoi(argv[1]) : 4;
   if (count < 0 || count > 32)
     return 2;
-  printf("n=%d known=%.2f closed=%.2f open=%.2f extra=%.2f control=%.2f\n", count,
+  printf("n=%d known=%.2f closed=%.2f open=%.2f extra=%.2f control=%.2f multi=%.2f\n", count,
          probe_known(count), probe_closed(count), probe_open(count), extra_probe(count),
-         probe_control(count));
+         probe_control(count), probe_multi(count));
   return 0;
 }

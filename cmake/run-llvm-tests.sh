@@ -87,6 +87,12 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/stdarg-abi-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
+  elif [ "$name" = ppc-closed-multimethod ]; then
+    "$compiler" --ppc-dispatch=runtime -c "$source_dir/test/llvm/support/closed-multimethod-override.c" \
+      -o "$prefix.override.o"
+    "$compiler" --ppc-dispatch=runtime -c "$source_dir/test/llvm/support/closed-multimethod-opaque.c" \
+      -o "$prefix.opaque.o"
+    set -- "$prefix.override.o" "$prefix.opaque.o"
   elif [ "$name" = ppc-closed-dispatch ]; then
     "$compiler" --ppc-dispatch=runtime -c "$source_dir/test/llvm/support/closed-dispatch-override.c" \
       -o "$prefix.host.o"
@@ -182,7 +188,7 @@ done
 # Abort diagnostics exercise runtime-generated variadic dprintf calls and
 # distinguish an uncovered open family from a failed closed-family startup.
 ulimit -c 0
-for feature in UNCOVERED UNCOVERED_FLOAT UNCOVERED_RECORD UNCOVERED_REAL_RECORD INCOMPLETE; do
+for feature in UNCOVERED UNCOVERED_MULTI UNCOVERED_FLOAT UNCOVERED_RECORD UNCOVERED_REAL_RECORD INCOMPLETE; do
   echo "testing LLVM PPC runtime diagnostic $feature"
   prefix=$result_dir/runtime-$feature
   "$compiler" -c -DFAIL_$feature "$source_dir/test/llvm/runtime-fail.c" -o "$prefix.x86.o"
@@ -193,6 +199,7 @@ for feature in UNCOVERED UNCOVERED_FLOAT UNCOVERED_RECORD UNCOVERED_REAL_RECORD 
   "$llvm_llc" -O=2 -filetype=obj -relocation-model=pic "$prefix.O2.ll" -o "$prefix.O2.o"
   case $feature in
     UNCOVERED) message='PPC dispatch error: uncovered handler for dispatch<' ;;
+    UNCOVERED_MULTI) message='PPC dispatch error: uncovered handler for dispatch<1,' ;;
     UNCOVERED_FLOAT) message='PPC dispatch error: uncovered handler for dispatch<1>()' ;;
     UNCOVERED_RECORD) message='PPC dispatch error: uncovered handler for dispatch<1>()' ;;
     UNCOVERED_REAL_RECORD) message='PPC dispatch error: uncovered handler for dispatch<1>()' ;;
@@ -289,4 +296,6 @@ done
   "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/driver-pipeline"
 "$source_dir/cmake/run-llvm-closed-dispatch-tests.sh" "$source_dir" "$compiler" "$host_cc" \
   "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/closed-dispatch"
+"$source_dir/cmake/run-llvm-closed-multimethod-tests.sh" "$source_dir" "$compiler" "$host_cc" \
+  "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/closed-multimethod"
 echo "LLVM tests passed"

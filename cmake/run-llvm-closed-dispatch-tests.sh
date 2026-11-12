@@ -33,10 +33,10 @@ for mode in runtime table switch; do
   else
     grep -Fq 'internal constant [3 x ptr]' "$prefix.ll" || fail 'missing immutable catalog'
     grep -Fq 'icmp eq ptr' "$prefix.ll" || fail 'missing active-handler guard'
-    for name in dispatch_pick dispatch_case dispatch_pointer dispatch_union dispatch_late; do
+    for name in dispatch_pick dispatch_case dispatch_pointer dispatch_union dispatch_late dispatch_incomplete dispatch_pair; do
       grep -Fq ".L.ppc_candidates.$name\" =" "$prefix.ll" || fail "missing catalog for $name"
     done
-    for name in dispatch_incomplete dispatch_pair dispatch_mixed; do
+    for name in dispatch_external dispatch_mixed; do
       if grep -Fq ".L.ppc_candidates.$name\" =" "$prefix.ll"; then fail "ineligible $name was optimized"; fi
     done
     if [ "$mode" = switch ]; then

@@ -41,3 +41,30 @@ double probe_control(int count) {
     total += handler(2.5, 4.0);
   return total;
 }
+
+// The default is defined after the concrete handlers and their caller.
+double closed_interaction<ClosedFigure.rectangle *a, ClosedFigure.rectangle *b>(void) {
+  return a->rectangle.width * b->rectangle.height;
+}
+double probe_multi(int count) {
+  ClosedFigure.rectangle rectangle = {{2.5, 4.0}};
+  ClosedFigure.square square = 3.5;
+  ClosedFigure *figures[] = {&rectangle, &square};
+  double total = 0;
+  for (int i = 0; i < count; i++) {
+    ClosedFigure *a = figures[i % 2];
+    ClosedFigure *b = figures[(i / 2) % 2];
+    total += closed_interaction<a, b>();
+  }
+  return total;
+}
+double closed_interaction<ClosedFigure.rectangle *a, ClosedFigure.square *b>(void) {
+  return a->rectangle.width * b->square;
+}
+double closed_interaction<ClosedFigure.square *a, ClosedFigure.rectangle *b>(void) {
+  return a->square * b->rectangle.height;
+}
+double closed_interaction<ClosedFigure.square *a, ClosedFigure.square *b>(void) {
+  return a->square * b->square;
+}
+double closed_interaction<ClosedFigure *a, ClosedFigure *b>(void) { return 0; }

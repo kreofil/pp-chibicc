@@ -74,7 +74,13 @@ int dispatch_transition<DispatchChoice.void *p>(void) { return 10; }
 int dispatch_transition<DispatchChoice.first *p>(void) { *(DispatchChoice *)p = DispatchChoice.second; return 20; }
 int dispatch_transition<DispatchChoice.second *p>(void) { *(DispatchChoice *)p = DispatchChoice.first; return 30; }
 
-// These families must retain their runtime path.
+int dispatch_external<DispatchChoice.void *p>(void) { return 40; }
+int dispatch_external<DispatchChoice.first *p>(void) { return 41; }
+#ifndef DISPATCH_EXTERNAL_HELPER
+int dispatch_external<DispatchChoice.second *p>(void) { return 42; }
+#endif
+
+// Defaults complete a local catalog; open arguments retain the runtime path.
 int dispatch_incomplete<DispatchChoice *p>(int x) { return x + 100; }
 int dispatch_incomplete<DispatchChoice.first *p>(int x) { return x + 101; }
 typedef struct DispatchOpen {} enum { first } DispatchOpen;
@@ -126,6 +132,7 @@ int main(void) {
   CHECK(dispatch_pick<(effects++, &second)>(effects++) == dispatch_second_base + 1);
   CHECK(effects == 2);
   CHECK(dispatch_incomplete<&zero>(1) == 101 && dispatch_incomplete<&first>(1) == 102);
+  CHECK(dispatch_external<&second>() == 42);
   DispatchOpen.first open;
   CHECK((dispatch_mixed<&first, &open>() == 7 && dispatch_pair<&first, &second>() == 8));
   DispatchCase.second c = 7;

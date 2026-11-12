@@ -5,3 +5,5 @@ int host_active_second(void) {
   DispatchChoice p = DispatchChoice.second;
   return dispatch_pick<&p>(0);
 }
+
+int dispatch_external<DispatchChoice.second *p>(void) { return 42; }

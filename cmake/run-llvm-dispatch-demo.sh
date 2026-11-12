@@ -26,7 +26,7 @@ opt_version=$("$llvm_opt" --version | sed -n 's/.*LLVM version \([^[:space:]]*\)
 dispatch=${PPCHIBICC_PPC_DISPATCH:-auto}
 case "$dispatch" in auto|runtime|table|switch) ;; *) fail "unknown PPC dispatch mode: $dispatch" ;; esac
 demo=$source_dir/examples/llvm/dispatch
-roots=main,probe_known,probe_closed,probe_open,probe_control,extra_probe
+roots=main,probe_known,probe_closed,probe_multi,probe_open,probe_control,extra_probe
 mkdir -p "$result_dir/source" "$result_dir/input" "$result_dir/native"
 cp "$demo"/* "$result_dir/source/"
 
@@ -152,7 +152,7 @@ for scenario in baseline extended; do
     check_execution "$prefix/program.exe" "$prefix/result" "$expected"
     awk -v pipeline="$scenario/$mode" -f "$source_dir/cmake/llvm-ir-metrics.awk" \
       "$prefix/program.ll" >>"$result_dir/metrics.tsv"
-    for function in probe_known probe_closed probe_open probe_control extra_probe main; do
+    for function in probe_known probe_closed probe_multi probe_open probe_control extra_probe main; do
       awk -v wanted="$function" '
         /^define / {
           name = $0; sub(/^[^@]*@/, "", name); sub(/\(.*/, "", name); gsub(/"/, "", name)
@@ -202,7 +202,7 @@ done
       print "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"
       next
     }
-    $2 ~ /^(probe_known|probe_closed|probe_open|probe_control|extra_probe)$/ {
+    $2 ~ /^(probe_known|probe_closed|probe_multi|probe_open|probe_control|extra_probe)$/ {
       printf "| %s | %s | %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $8, $9
     }
   ' "$result_dir/metrics.tsv"

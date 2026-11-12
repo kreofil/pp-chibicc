@@ -151,29 +151,50 @@ stage2, LLVM and independent host startup tests cover all four forms, empty and
 named zero cases, static data, nesting, mutable enum tags, side effects, strict
 completeness, opaque declarations and mixed native/LLVM modules. See
 `docs/ppc-closed-indices-ru.md`.
-Closed single-parameter dispatch now has a guarded local optimization. After
-parsing the unit, a complete explicit set of concrete handlers (including zero,
-up to 16 alternatives) produces a private immutable pointer-array catalog.
+Closed dispatch now has a guarded local optimization, including multimethods
+when every procedural parameter family is closed. After parsing the unit,
+complete local coverage produces a private immutable pointer-array catalog.
+A real all-general default fills holes and concrete tuples override it,
+independent of source order. Generated abort stubs do not count as defaults.
+The limit is 16 cells in the product of all extents, including zero on each
+axis; the product is checked before multiplication. The flattened selector
+uses the same row-major coordinates as the shared runtime table.
 Bodies can be in other units, and declarations after a call are considered.
-Each optimized call snapshots the object tag and active runtime handler once,
+Each optimized call snapshots the object tags and active runtime handler once,
 then checks that handler against the catalog. A match uses the catalog/table
 call or an explicit switch of direct calls; a mismatch retains the active
 indirect call. Runtime tables/constructors and ABI remain available for other
 units, including private handlers registered from native/LLVM modules. Closed
-types do not imply a closed handler registry. Partial sets, open/opaque types
-and all multimethods retain the original runtime path and completeness checks.
+types do not imply a closed handler registry. Partial sets without a real
+default, any open/opaque parameter and over-limit grids retain runtime dispatch.
 --ppc-dispatch=auto|runtime|table|switch selects the representation; auto uses
 switch for LLVM and runtime natively. Existing LLVM opt can inline known switch
 branches while retaining the guard/fallback. Generic typed AST lowering covers
 void/scalars, records/sret and varargs. Arguments are snapshotted before
-branching so nested dispatch labels are emitted once; array/function arguments
+branching so nested dispatch labels are emitted once; array/VLA/function arguments
 decay to pointers and records are copied without aggregate casts. Catalogs
 use LLVM internal constant pointer arrays and native .data.rel.ro; function
 roots referenced by them are retained. Native/stage2 and LLVM tests cover all
 modes, late definitions, all four families, tag mutation, argument side effects,
 record/variadic ABI and separately registered overriding handlers in both link
-orders and mixed backends. Multimethod optimization remains restricted to all-
-closed families for a future step. See `docs/ppc-closed-dispatch-ru.md`.
+orders and mixed backends. New multimethod fixtures cover every cell in 2x3,
+2x3x2 and 2x2 grids, early/late defaults, records, sret plus variadic stack
+arguments, all six orders of three objects, and a third opaque unit.
+Removing the external real default must abort for closed incompleteness before
+main, regardless of object order; opaque error stubs cannot mask that check.
+A native-only VLA fixture verifies variadic pointer decay in all modes.
+
+The startup registration protocol has changed for both native and LLVM PPC
+objects: priority 201 only allocates a zeroed table, priority 301 concrete
+registrations overwrite their cells and actual defaults fill only null cells,
+priority 351 checks closed families without a local actual default, and
+priority 361 fills remaining open/opaque holes with abort stubs. Thus real
+defaults work before or after concrete handlers and across translation units.
+All objects/libraries containing PPC functions/registrations must be cleanly
+rebuilt together. Old constructors prefill tables and must not be mixed with
+this protocol; ordinary C libraries require no rebuild. Closed tag numbers,
+object layouts and function calling conventions are unchanged. See
+`docs/ppc-closed-dispatch-ru.md`.
 The public driver now accepts --backend=llvm to compile C, .ll or .bc through
 external opt/llc, produce objects directly and use the existing ELF linker.
 -S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.
@@ -512,15 +533,22 @@ Current implementation strategy:
   wildcard mask. Thus `struct Figure *` and `struct Figure.void *` are distinct:
   the former is the all-table default coordinate, while the latter is the
   concrete zero tag coordinate.
-- Table constructors in `.init_array.201` allocate and fill the table with the
-  all-generalizing/default handler, for example
-  `FigurePair<struct Figure *a, struct Figure *b>() { ... }`. If the
-  generalizing handler is abstract or missing, the table is filled with a
-  generated diagnostic handler.
+- Table constructors in `.init_array.201` allocate a zeroed table once. All
+  slots remain null until registration. Real all-general defaults, such as
+  `FigurePair<struct Figure *a, struct Figure *b>() { ... }`, register at
+  `.init_array.301` by filling only null slots. Concrete registrations always
+  overwrite their coordinate, so their priority does not depend on whether
+  they execute before or after the default registration, even across units.
 - If every PPC parameter of a function belongs to a closed generalization and
-  the function has no concrete all-general default handler, the table
-  constructor leaves cells empty and a later `.init_array.351` completeness
+  the function has no local concrete all-general default handler, a later
+  `.init_array.351` completeness
   checker aborts before `main` if any specialization tuple is still uncovered.
+  Actual defaults from other units have already filled holes by this phase.
+- Non-strict open/opaque declarations without a real default fill remaining
+  null slots with generated diagnostic handlers at `.init_array.361`, after
+  all closed completeness checks. Such a stub cannot hide a closed hole or
+  block a real default registered in another unit. Global PPC initialization
+  at priority 401 still happens after all these phases.
 - The diagnostic handler has the same generic PPC signature as the table entry.
   It prints the PPC function name and the actual runtime tag coordinates, for
   example `PPC dispatch error: uncovered handler for Missing<0, 1>()`, and then
@@ -573,8 +601,8 @@ Current implementation strategy:
 - PPC specialization types receive stable internal names derived from their
   source-level path, for example `Figure_rect`, `Figure_trian`, and
   `Shape_color_rect`. These names are used for generated handler symbols;
-  runtime dispatch table coordinates still use the constructor-assigned numeric
-  tags.
+  runtime dispatch table coordinates use literal closed indices or
+  constructor-assigned open tags.
 - A named incomplete struct used in PPC syntax is treated as an external PPC
   generalization. The compiler emits the common runtime symbols needed for the
   family and reads the hidden first tag through the pointer ABI, without
