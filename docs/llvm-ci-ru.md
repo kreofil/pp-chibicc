@@ -6,7 +6,7 @@ Workflow `.github/workflows/test.yml` запускается при push и pull
 | Job | Проверки |
 | --- | --- |
 | `cmake-test-all` | Обычный `test-all`: native stage1, самокомпиляция stage2, тесты C/4П и примеры |
-| `llvm-23` | `test-llvm`, `test-llvm-stage2`, `llvm-opt-demo`, `llvm-dispatch-demo`, `llvm-dispatch-report`, `test-llvm-dispatch-report-stage2`, `llvm-static-dispatch-demo`, `test-llvm-static-dispatch-stage2`, `test-llvm-static-dispatch-bench`, `test-llvm-static-dispatch-bench-stage2`, `test-llvm-closed-compiler`, `test-llvm-closed-compiler-stage2`, `llvm-real-programs`, `test-llvm-real-programs-stage2` |
+| `llvm-23` | `test-llvm`, `test-llvm-stage2`, `llvm-opt-demo`, `llvm-dispatch-demo`, `llvm-dispatch-report`, `test-llvm-dispatch-report-stage2`, `llvm-static-dispatch-demo`, `test-llvm-static-dispatch-stage2`, `test-llvm-static-dispatch-bench`, `test-llvm-static-dispatch-bench-stage2`, `test-llvm-closed-compiler`, `test-llvm-closed-compiler-stage2`, `llvm-real-programs`, `test-llvm-real-programs-stage2`, `test-llvm-life-bench`, `test-llvm-life-bench-stage2` |
 
 LLVM-набор проверяет IR, выполнение при O0/O2, ABI с системным GCC,
 смешанные native/LLVM-объекты, регистрацию 4П, команды компилятора и
@@ -78,6 +78,16 @@ bitcode/O2 и все шесть порядков модулей исполняе
 runtime-пути открытых типов. ppVector дополнительно проверяет системный
 `reallocarray`; отдельный C-тест покрывает переполнение размера и ENOMEM.
 
+Актуальный открытый `spec-param` с обработчиком `Figure.void` проверяется
+как успешный, включая прямой вызов этого обработчика; исторический закрытый
+пример без него сохранён как отдельная отрицательная проверка.
+[Вычислительное ядро «Жизни»](llvm-life-benchmark-ru.md) проверяется обоими
+компиляторами на четырёх рабочих картах и граничных торах 1×1/3×5, с
+независимой Python-моделью. В CI выполняется check-only (144 результата и
+45 ошибок аргументов на компилятор), без выборок времени и порогов скорости.
+Большие копирования и возвраты структур дополнительно проверяются native
+stage1/stage2 и LLVM O0/O2.
+
 ## Повторение LLVM-проверок
 
 С обычной установленной версией LLVM 23 достаточно команд из
@@ -96,7 +106,8 @@ cmake --build build-llvm-ci --target \
   llvm-static-dispatch-demo test-llvm-static-dispatch-stage2 \
   test-llvm-static-dispatch-bench test-llvm-static-dispatch-bench-stage2 \
   test-llvm-closed-compiler test-llvm-closed-compiler-stage2 \
-  llvm-real-programs test-llvm-real-programs-stage2
+  llvm-real-programs test-llvm-real-programs-stage2 \
+  test-llvm-life-bench test-llvm-life-bench-stage2
 ```
 
 Для установочного скрипта нужны Python 3.11+, `curl`, `dpkg-deb` и системные

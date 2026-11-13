@@ -7,7 +7,7 @@ paths and SHA256 values. Only the source files required for the three selected
 programs are included; original comments and source text are preserved.
 
 - `simplest/spec-param`: ordinary parameters/results carrying specialized
-  values and pointers. The original abstract `Print` omits the tag-0 handler,
+  values and pointers. The pinned historical abstract `Print` omits the tag-0 handler,
   so the current completeness protocol rejects it before `main`.
 - `patterns/shvets-patterns/visitor-mm.ppc`: a two-argument visitor with two
   open case generalizations, heap objects and four concrete combinations.
@@ -20,6 +20,13 @@ original with `main` renamed, defines a concrete `Figure.void` handler, invokes
 it, then runs the original main. It does not close any open generalization.
 The expected text files are manually specified from the examples' operations;
 the vector reference is calculated independently by the Python runner.
+
+The current `examples/simplest/spec-param/main.c` in ppchibicc is checked
+separately as a successful open generalization. `spec-param-current-zero.c`
+invokes that example's own newly supplied tag-0 handler without defining one.
+The historical closed example is retained to check both frozen and incomplete
+matrices. Each compiler now builds/runs 30 variants (25 success, 5 expected
+historical startup rejections).
 
 Run `cmake --build build --target llvm-real-programs` to compare native,
 per-unit LLVM O0/O2 and closed-program O0/O2. The original startup rejection

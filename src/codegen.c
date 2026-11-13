@@ -232,6 +232,21 @@ static void store(Type *ty) {
   switch (ty->kind) {
   case TY_STRUCT:
   case TY_UNION:
+    // Expanding every byte makes assignments of large arrays-in-records
+    // generate enormous functions. Keep the source value in %rax and
+    // preserve the registers that the byte-at-a-time path leaves intact.
+    if (ty->size > 64) {
+      println("  push %%rdi");
+      println("  push %%rsi");
+      println("  push %%rcx");
+      println("  mov %%rax, %%rsi");
+      println("  mov $%d, %%ecx", ty->size);
+      println("  rep movsb");
+      println("  pop %%rcx");
+      println("  pop %%rsi");
+      println("  pop %%rdi");
+      return;
+    }
     for (int i = 0; i < ty->size; i++) {
       println("  mov %d(%%rax), %%r8b", i);
       println("  mov %%r8b, %d(%%rdi)", i);
@@ -660,10 +675,22 @@ static void copy_struct_mem(void) {
 
   println("  mov %d(%%rbp), %%rdi", var->offset);
 
+  if (ty->size > 64) {
+    println("  mov %%rax, %%rsi");
+    println("  mov %%rdi, %%rax");
+    println("  mov $%d, %%ecx", ty->size);
+    println("  rep movsb");
+    return;
+  }
+
   for (int i = 0; i < ty->size; i++) {
     println("  mov %d(%%rax), %%dl", i);
     println("  mov %%dl, %d(%%rdi)", i);
   }
+  // SysV memory returns also return the caller's result-buffer address.
+  // Returning the source address can expose a dead callee frame or argument
+  // area to a following aggregate assignment.
+  println("  mov %%rdi, %%rax");
 }
 
 static void builtin_alloca(void) {

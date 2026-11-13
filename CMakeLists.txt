@@ -313,6 +313,15 @@ add_llvm_target(llvm-real-programs cmake/run-llvm-real-programs.sh "$<TARGET_FIL
 add_llvm_target(test-llvm-real-programs-stage2 cmake/run-llvm-real-programs.sh "${PPCHIBICC_STAGE2_COMPILER}"
   ppchibicc_stage2 llvm-real-programs-stage2 "Checking real 4P programs with the self-hosted compiler"
   "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}")
+add_llvm_target(llvm-life-bench cmake/run-llvm-life-bench.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-life-bench "Measuring the toroidal PPC Life simulation"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}")
+add_llvm_target(test-llvm-life-bench cmake/run-llvm-life-bench.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-life-bench-check "Checking bounded PPC Life states against an independent model"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}" "--check-only")
+add_llvm_target(test-llvm-life-bench-stage2 cmake/run-llvm-life-bench.sh "${PPCHIBICC_STAGE2_COMPILER}"
+  ppchibicc_stage2 llvm-life-bench-check-stage2 "Checking bounded PPC Life with the self-hosted compiler"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}" "--check-only")
 add_llvm_target(llvm-opt-demo cmake/run-llvm-opt-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-opt-demo "Comparing LLVM optimization pipelines")
 add_llvm_target(llvm-dispatch-demo cmake/run-llvm-dispatch-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"

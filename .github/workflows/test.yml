@@ -70,7 +70,8 @@ jobs:
             llvm-static-dispatch-demo test-llvm-static-dispatch-stage2 \
             test-llvm-static-dispatch-bench test-llvm-static-dispatch-bench-stage2 \
             test-llvm-closed-compiler test-llvm-closed-compiler-stage2 \
-            llvm-real-programs test-llvm-real-programs-stage2
+            llvm-real-programs test-llvm-real-programs-stage2 \
+            test-llvm-life-bench test-llvm-life-bench-stage2
 
       - name: Preserve LLVM diagnostics on failure
         if: failure()

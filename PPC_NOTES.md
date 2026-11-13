@@ -290,9 +290,11 @@ also tested: its missing tag-0 Print handler must abort before main, or fail at
 build time when explicitly required with --closed-family=Print. This preserves
 the existing completeness rules rather than silently accepting an empty slot.
 
-Each compiler builds and runs 20 programs: native, per-unit LLVM O0/O2 and
-whole-program O0/O2 for three successful cases plus the original negative
-case. Expected output is specified independently, with a scalar Python vector
+Each compiler builds and runs 30 programs: native, per-unit LLVM O0/O2 and
+whole-program O0/O2 for five successful cases plus the historical negative
+case. The current repository spec-param (open Figure) and an adapter calling
+its own Figure.void handler are successful runtime cases; the pinned closed
+4P-examples version and its independent adapter remain separate checks. Expected output is specified independently, with a scalar Python vector
 reference. Raw matrices, frozen IR and public-compiler manifests are checked;
 Print freezes into three addresses and loses six lifecycle functions, while
 both open examples retain their runtime tables. Reports keep input/executable
@@ -309,6 +311,38 @@ still require their IR. No compiler ABI, type/tag semantics or source-project
 CMake changes are introduced. LLVM 19/21/23 focused checks pass. These short
 printing demos are not timed; executable .text can grow under whole-program
 O2, as it does for the open vector. See docs/llvm-real-programs-ru.md.
+
+The optional llvm-life-bench measures the original toroidal Life simulation
+(map.c/eworld.c unchanged) in native, per-unit LLVM O2 and combined LLVM O2.
+A finite harness replaces animation/file loading/sleep, seeds initial maps,
+cycles eight single-cell perturbations, restores both maps, runs 32 generations
+and hashes the final board/population. The four original Cell families remain
+open/excluded, with no lifecycle removal; no source closure is performed.
+The timer is compiled by the selected pipeline, not shared machine code.
+The LLVM life_run round boundary is marked noinline and verified after O2.
+
+A Python model independently counts eight neighbours (the PPC code counts
+nine including self), checks all eight phases, input/final fingerprints,
+population/counter invariants and aggregate warmup/sample results. Six map
+sizes including 1x1/3x5, 0/1/7/32 generations, boundary seeds and 1/9 rounds
+produce 144 execution checks plus 45 bad-argument checks per compiler. The
+shared benchmark protocol supplies CPU affinity, equal calibrated work per
+workload, shuffled repeats, median/MAD and CPU statistics: default 84 samples.
+Both compilers run check-only in CI, with no performance gates. Snapshots,
+tools/commands/SHA256, raw/O2 IR, matrices, manifests and ELF sizes are retained.
+
+This workload exposed pathological native code growth from byte-unrolled
+large record assignments. Native stores above 64 bytes now use rep movsb,
+preserving rax and rdi/rsi/rcx; the Life executable .text fell from 1702904 to
+24926 bytes. Memory-class returns also copy large results compactly and now
+return the hidden result-buffer address in rax as required by SysV, fixing a
+latent bug that returned a pointer into a dead source/argument frame.
+Native objects containing these memory-return definitions should be rebuilt;
+their old generated code still violates the required return-pointer rule. A new
+large-copy C regression checks unaligned guarded records, odd tails, unions,
+self/chained/value assignments, stack arguments and aggregate returns, in
+native stage1/stage2, LLVM and system GCC. Type/tag layout and signatures are
+unchanged. See docs/llvm-life-benchmark-ru.md.
 
 The public compiler now integrates this closure pipeline through
 --closed-program (implicitly LLVM). A final executable command accepts all

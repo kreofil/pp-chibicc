@@ -57,7 +57,7 @@ def report(directory, info):
              'Проверены исходники из: `'+info['source_origin']+'`.',
              'Артефакты этого запуска: `'+str(directory)+'`.', '',
              'Текстовый вывод сверяется с независимыми ожидаемыми значениями; '
-             'ошибка нулевой ячейки исходного spec-param проверяется отдельно.', '',
+             'исторический закрытый spec-param без нулевого обработчика проверяется отдельно.', '',
              '| Пример | Режим | Выполнение | .text, байт | Выбранные семьи | Удалено runtime-функций |',
              '| --- | --- | --- | ---: | --- | ---: |']
     for case in info['cases']:
@@ -69,7 +69,9 @@ def report(directory, info):
               'может оптимизировать общий IR, но не замораживает таблицы.', '',
               'spec-param-covered — явно выделенный тестовый адаптер: добавляет '
               'обработчик Figure.void и вызывает его, затем запускает исходный main. '
-              'Исходный spec-param сохраняется без изменений.', '',
+              'Закреплённый spec-param сохраняется без изменений. '
+              'spec-param-current проверяет актуальный открытый пример из ppchibicc, '
+              'а spec-param-current-zero вызывает его собственный нулевой обработчик.', '',
               'Время выполнения не измеряется: примеры короткие и в основном печатают текст. '
               'Размер .text относится ко всему исполняемому файлу, включая startup/runtime; '
               'это не измерение быстродействия.', '',
@@ -129,6 +131,12 @@ def main():
         inputs.append(dict(path=rel, sha256=checksum, matches_pinned=checksum == entry['sha256']))
     shutil.copyfile(fixture/'spec-param-covered.c', source/'spec-param-covered.c')
     inputs.append(dict(path='spec-param-covered.c', sha256=digest(source/'spec-param-covered.c'), test_adapter=True))
+    current = root/'examples/simplest/spec-param/main.c'
+    shutil.copyfile(current, source/'spec-param-current-main.c')
+    shutil.copyfile(fixture/'spec-param-current-zero.c', source/'spec-param-current-zero.c')
+    inputs += [dict(path='spec-param-current-main.c', source_origin=str(current), sha256=digest(current)),
+               dict(path='spec-param-current-zero.c', test_adapter=True,
+                    sha256=digest(source/'spec-param-current-zero.c'))]
     actual_commit = None
     if args.examples_dir and (origin/'.git').exists():
         actual_commit = run(['git', '-C', origin, 'rev-parse', 'HEAD'], directory/'upstream-head', env).stdout.strip()
@@ -144,6 +152,10 @@ def main():
     cases = [
         ('spec-param-original', [base/'simplest/spec-param/main.c'], [], None),
         ('spec-param-covered', [source/'spec-param-covered.c'], [], (fixture/'spec-param-covered.expected').read_text()),
+        ('spec-param-current', [source/'spec-param-current-main.c'], [],
+         ''.join((fixture/'spec-param-covered.expected').read_text().splitlines(True)[1:])),
+        ('spec-param-current-zero', [source/'spec-param-current-zero.c'], [],
+         'Incorrect Figure usin tag = 0\n'+''.join((fixture/'spec-param-covered.expected').read_text().splitlines(True)[1:])),
         ('visitor-mm', [base/'patterns/shvets-patterns/visitor-mm.ppc'], [], (fixture/'visitor-mm.expected').read_text()),
         ('ppvector-sum-int', [vector/'examples/ppvector-sum-int/ppvector-sum-int.c',
                             vector/'src/ppvector/ppvector.c', vector/'src/ppvector/ppgeneral.c'],
@@ -194,7 +206,7 @@ def main():
             if result.returncode == 0 or 'Print (incomplete)' not in result.stderr:
                 raise RuntimeError('explicitly requiring incomplete Print must fail at build time')
         record = dict(name=name, sources=[str(p.relative_to(source)) for p in sources],
-                      adaptation=name == 'spec-param-covered', raw_matrices=matrix,
+                      adaptation=name in ('spec-param-covered', 'spec-param-current-zero'), raw_matrices=matrix,
                       closure=closure, variants={})
         for variant, options in VARIANTS.items():
             exe = folder/(variant+'.exe')
