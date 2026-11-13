@@ -13,8 +13,6 @@ int main(void) { return 0; }
 struct S { int n; };
 int external();
 int main(void) { struct S s = {3}; return external(s); }
-#elif defined(REJECT_VLA)
-int main(void) { int n = 3; int a[n]; a[0] = 1; return a[0]; }
 #elif defined(REJECT_TLS)
 _Thread_local int x;
 int main(void) { return x; }

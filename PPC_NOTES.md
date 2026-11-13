@@ -182,7 +182,7 @@ orders and mixed backends. New multimethod fixtures cover every cell in 2x3,
 arguments, all six orders of three objects, and a third opaque unit.
 Removing the external real default must abort for closed incompleteness before
 main, regardless of object order; opaque error stubs cannot mask that check.
-A native-only VLA fixture verifies variadic pointer decay in all modes.
+A VLA fixture verifies variadic pointer decay in native/LLVM and closed mode.
 
 The startup registration protocol has changed for both native and LLVM PPC
 objects: priority 201 only allocates a zeroed table, priority 301 concrete
@@ -371,6 +371,33 @@ slot-product overflow. Native stage1/stage2 and LLVM O0/O2 run the cases;
 no huge physical allocation is attempted. Focused LLVM 19/21/23 and full
 stage1/stage2/static/application checks pass. See docs/ppc-table-dimensions-ru.md.
 
+LLVM now supports local variable-length arrays and direct alloca calls through
+dynamic byte allocas, keeping a separate pointer slot for each VLA. Array
+decay, addresses of whole arrays and multi-dimensional row operations use the
+allocated payload. PPC runtime tag-initialization loops work for open/closed
+case/enum/nullptr/union elements and nested fields, with unchanged dispatch
+eligibility, tags and ABI. Direct alloca memory still requires explicit init_spec.
+
+Shared frontend corrections capture VLA typedef bounds at declaration and
+reuse them, widen size multiplications before calculation, divide pointer
+differences by the saved runtime row size, and retain the element alignment
+for _Alignof. VLA typedef parameters decay to pointers; array assignment is
+rejected except for the compiler-owned pointer initialization node.
+Generated allocations carry the element/declaration alignment. The built-in
+alloca parameter is size_t-width; native allocation keeps 64-bit arithmetic,
+aligns the result address (also above 16 bytes), and moves pending expression
+temporaries by the same displacement. PPC layouts and calling conventions
+are unchanged. Rebuild affected VLA/alloca functions to use these corrections.
+
+Dynamic storage currently lasts until function return in both backends; no
+block-exit VLA stack restoration is emitted. Headers referring to earlier
+parameter names, such as f(int n, int a[n]), remain a shared parser limit.
+New checks cover saved typedef sizes/side effects, 4-GiB sizeof without
+allocation, 1D/2D/3D addressing, alignment, recursion and nested/loop alloca.
+Existing VLA sources and an expanded all-form PPC fixture run in LLVM O0/O2,
+native and stage2. All dispatch modes and closed builds cover VLA pointer
+arguments to a variadic multimethod. See docs/llvm-vla-ru.md.
+
 The public compiler now integrates this closure pipeline through
 --closed-program (implicitly LLVM). A final executable command accepts all
 source units, raw ppchibicc .ll units and marked closed-program .o files.
@@ -401,7 +428,7 @@ and OBJECT library targets, with final-link optimization/family/report options.
 Python helpers and the module install under share/ppchibicc and are discovered
 relative to the compiler; moved prefixes and explicit helper overrides work.
 The closed-build example covers object libraries, incremental builds and CTest.
-Stage1/stage2 CI adds 12 regression tests for these paths, all dispatch modes,
+Stage1/stage2 CI adds 13 regression tests for these paths, all dispatch modes,
 O0/O2/O3/Os/Oz, source/IR/object combinations, .ppc/.pph, dependency output,
 empty closure, native/external-module rejection and output preservation.
 Focused checks pass with LLVM 19, 21 and 23. See docs/llvm-closed-compiler-ru.md.

@@ -211,7 +211,9 @@ Type *array_of(Type *base, int len) {
 }
 
 Type *vla_of(Type *base, Node *len) {
-  Type *ty = new_type(TY_VLA, 8, 8);
+  // The object is represented by a local pointer slot, but C _Alignof still
+  // describes the array's elements rather than that implementation detail.
+  Type *ty = new_type(TY_VLA, 8, base->align);
   ty->base = base;
   ty->vla_len = len;
   return ty;
@@ -334,7 +336,8 @@ void add_type(Node *node) {
     return;
   }
   case ND_ASSIGN:
-    if (node->lhs->ty->kind == TY_ARRAY)
+    if (node->lhs->ty->kind == TY_ARRAY ||
+        (node->lhs->ty->kind == TY_VLA && node->lhs->kind != ND_VLA_PTR))
       error_tok(node->lhs->tok, "not an lvalue");
     if (is_aggregate(node->lhs->ty) || is_aggregate(node->rhs->ty)) {
       if (!is_assignable(node->lhs->ty, node->rhs->ty))

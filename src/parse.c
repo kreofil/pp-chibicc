@@ -256,7 +256,7 @@ static Node *ppc_get_subtype_index_expr(Token *tok, Type *ty);
 static Node *ppc_get_spec_var_index_expr(Token *tok, Node *ptr);
 static Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs);
 static Node *ppc_funcall_expr(Token **rest, Token *tok);
-static Token *parse_typedef(Token *tok, Type *basety);
+static Token *parse_typedef(Token *tok, Type *basety, Node **vla_sizes);
 static bool is_ppc_function(Token *tok);
 static Token *ppc_function(Token *tok, Type *basety, VarAttr *attr);
 static bool is_function(Token *tok);
@@ -737,7 +737,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 
     Token *name = ty2->name;
 
-    if (ty2->kind == TY_ARRAY) {
+    if (ty2->kind == TY_ARRAY || ty2->kind == TY_VLA) {
       // "array of T" is converted to "pointer to T" only in the parameter
       // context. For example, *argv[] is converted to **argv by this.
       Type *base = ty2->base;
@@ -951,6 +951,10 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
 // Generate code for computing a VLA size.
 static Node *compute_vla_size(Type *ty, Token *tok) {
   Node *node = new_node(ND_NULL_EXPR, tok);
+  // A typedef or an earlier declaration has already captured this bound.
+  // Reuse its runtime size instead of evaluating its expression again.
+  if (ty->kind == TY_VLA && ty->vla_size)
+    return node;
   if (ty->base)
     node = new_binary(ND_COMMA, node, compute_vla_size(ty->base, tok), tok);
 
@@ -965,7 +969,8 @@ static Node *compute_vla_size(Type *ty, Token *tok) {
 
   ty->vla_size = new_lvar("", ty_ulong);
   Node *expr = new_binary(ND_ASSIGN, new_var_node(ty->vla_size, tok),
-                          new_binary(ND_MUL, ty->vla_len, base_sz, tok),
+                          new_binary(ND_MUL, new_cast(ty->vla_len, ty_ulong),
+                                     new_cast(base_sz, ty_ulong), tok),
                           tok);
   return new_binary(ND_COMMA, node, expr, tok);
 }
@@ -1022,9 +1027,13 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       // x = alloca(tmp)`.
       Obj *var = new_lvar(get_ident(ty->name), ty);
       Token *tok = ty->name;
+      Type *elem = ty;
+      while (elem->kind == TY_ARRAY || elem->kind == TY_VLA)
+        elem = elem->base;
+      Node *allocation = new_alloca(new_var_node(ty->vla_size, tok));
+      allocation->alloca_align = MAX(16, MAX(elem->align, attr ? attr->align : 0));
       Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
-                              new_alloca(new_var_node(ty->vla_size, tok)),
-                              tok);
+                              allocation, tok);
 
       cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);
 
@@ -2306,7 +2315,10 @@ static Node *compound_stmt(Token **rest, Token *tok) {
       Type *basety = declspec(&tok, tok, &attr);
 
       if (attr.is_typedef) {
-        tok = parse_typedef(tok, basety);
+        Node *sizes = NULL;
+        tok = parse_typedef(tok, basety, &sizes);
+        cur = cur->next = new_unary(ND_EXPR_STMT, sizes, tok);
+        add_type(cur);
         continue;
       }
 
@@ -3054,7 +3066,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   }
 
   // VLA + num
-  if (lhs->ty->base->kind == TY_VLA) {
+  if (lhs->ty->base && lhs->ty->base->kind == TY_VLA && is_integer(rhs->ty)) {
     rhs = new_binary(ND_MUL, rhs, new_var_node(lhs->ty->base->vla_size, tok), tok);
     return new_binary(ND_ADD, lhs, rhs, tok);
   }
@@ -3076,8 +3088,8 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
     return new_binary(ND_SUB, lhs, rhs, tok);
 
-  // VLA + num
-  if (lhs->ty->base->kind == TY_VLA) {
+  // VLA - num
+  if (lhs->ty->base && lhs->ty->base->kind == TY_VLA && is_integer(rhs->ty)) {
     rhs = new_binary(ND_MUL, rhs, new_var_node(lhs->ty->base->vla_size, tok), tok);
     add_type(rhs);
     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
@@ -3098,6 +3110,9 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   if (lhs->ty->base && rhs->ty->base) {
     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
     node->ty = ty_long;
+    if (lhs->ty->base->kind == TY_VLA)
+      return new_binary(ND_DIV, node,
+                        new_cast(new_var_node(lhs->ty->base->vla_size, tok), ty_long), tok);
     return new_binary(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
   }
 
@@ -4766,7 +4781,7 @@ static Node *primary(Token **rest, Token *tok) {
   error_tok(tok, "expected an expression");
 }
 
-static Token *parse_typedef(Token *tok, Type *basety) {
+static Token *parse_typedef(Token *tok, Type *basety, Node **vla_sizes) {
   bool first = true;
 
   while (!consume(&tok, tok, ";")) {
@@ -4779,6 +4794,10 @@ static Token *parse_typedef(Token *tok, Type *basety) {
       error_tok(ty->name_pos, "typedef name omitted");
     if (ty->is_ppc_generalization && !ty->ppc_name)
       ty->ppc_name = get_ident(ty->name);
+    if (vla_sizes) {
+      Node *size = compute_vla_size(ty, tok);
+      *vla_sizes = *vla_sizes ? new_binary(ND_COMMA, *vla_sizes, size, tok) : size;
+    }
     push_scope(get_ident(ty->name))->type_def = ty;
   }
   return tok;
@@ -6659,7 +6678,7 @@ static void scan_globals(void) {
 
 static void declare_builtin_functions(void) {
   Type *ty = func_type(pointer_to(ty_void));
-  ty->params = copy_type(ty_int);
+  ty->params = copy_type(ty_ulong);
   builtin_alloca = new_gvar("alloca", ty);
   builtin_alloca->is_definition = false;
 }
@@ -6696,7 +6715,7 @@ Obj *parse(Token *tok) {
 
     // Typedef
     if (attr.is_typedef) {
-      tok = parse_typedef(tok, basety);
+      tok = parse_typedef(tok, basety, NULL);
       continue;
     }
 

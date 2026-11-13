@@ -51,7 +51,8 @@ check_execution() {
 for source in "$source_dir"/test/llvm/valid/*.c \
     "$source_dir"/examples/llvm/ppc-figures.c "$source_dir"/examples/llvm/ppc-by-value.c \
     "$source_dir"/examples/llvm/ppc-floating.c \
-    "$source_dir"/examples/llvm/ppc-floating-by-value.c; do
+    "$source_dir"/examples/llvm/ppc-floating-by-value.c \
+    "$source_dir"/examples/llvm/ppc-vla-array.c; do
   name=$(basename "$source" .c)
   prefix=$result_dir/$name
   expected_status=0
@@ -105,6 +106,10 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/long-double-abi-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
+  elif [ "$name" = vla ] || [ "$name" = ppc-vla ]; then
+    "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/assert-quiet.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
   fi
 
   # Use the system compiler as an independent reference for ABI boundaries
@@ -143,6 +148,21 @@ for source in "$source_dir"/test/llvm/valid/*.c \
       "$compiler" --backend=llvm "-O$level" "$source" "$@" -o "$prefix.driver-O$level.exe"
     check_execution "$prefix.driver-O$level.exe" "$prefix.driver-O$level" \
       "$prefix.x86.stdout" "$expected_status"
+  done
+done
+
+# VLA constraints are shared frontend diagnostics in both backends.
+for statement in 'int a[n], b[n]; a = b;' 'int a[n] = {1};'; do
+  printf 'int main(void) { int n = 3; %s return 0; }\n' "$statement" >"$result_dir/vla-invalid.c"
+  for backend in native llvm; do
+    set -- -c
+    [ "$backend" = native ] || set -- -S -emit-llvm
+    if "$compiler" "$@" "$result_dir/vla-invalid.c" -o "$result_dir/vla-invalid.o" \
+        >"$result_dir/vla-invalid.stdout" 2>"$result_dir/vla-invalid.stderr"; then
+      fail "invalid VLA accepted ($backend): $statement"
+    fi
+    grep -Eq 'not an lvalue|variable-sized object may not be initialized' \
+      "$result_dir/vla-invalid.stderr" || fail "missing VLA constraint diagnostic ($backend)"
   done
 done
 
@@ -219,7 +239,7 @@ done
 
 # Unsupported source constructs must produce a compiler diagnostic instead
 # of invalid IR or a silently different executable.
-for feature in VARARG_AGGREGATE BITFIELD VA_ARG_AGGREGATE UNPROTOTYPED_AGGREGATE VLA TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
+for feature in VARARG_AGGREGATE BITFIELD VA_ARG_AGGREGATE UNPROTOTYPED_AGGREGATE TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
   echo "testing LLVM diagnostic $feature"
   if "$compiler" -S -emit-llvm -DREJECT_$feature \
       "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \

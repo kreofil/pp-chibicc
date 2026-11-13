@@ -294,6 +294,7 @@ struct Node {
   Node *args;
   bool pass_by_stack;
   Obj *ret_buffer;
+  int alloca_align; // Required alignment for a generated VLA allocation
 
   // Goto or labeled statement, or labels-as-values
   char *label;

@@ -47,6 +47,11 @@ for mode in runtime table switch; do
   "$prefix.vla.exe" >"$prefix.vla.stdout"
   grep -qx 'multimethod VLA OK' "$prefix.vla.stdout" || fail 'native VLA argument decay'
   for level in 0 2; do
+    "$compiler" --backend=llvm "--ppc-dispatch=$mode" "-O$level" \
+      "$source_dir/test/ppc-multimethod-vla.c" -o "$prefix.vla.O$level.exe"
+    "$prefix.vla.O$level.exe" >"$prefix.vla.O$level.stdout" 2>"$prefix.vla.O$level.stderr"
+    cmp "$prefix.vla.stdout" "$prefix.vla.O$level.stdout" || fail 'LLVM VLA argument decay'
+    [ ! -s "$prefix.vla.O$level.stderr" ] || fail 'LLVM VLA argument stderr'
     "$compiler" --backend=llvm "--ppc-dispatch=$mode" "-O$level" -c "$source" -o "$prefix.O$level.o"
   done
   for variant in native O0 O2; do

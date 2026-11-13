@@ -693,10 +693,15 @@ static void copy_struct_mem(void) {
   println("  mov %%rdi, %%rax");
 }
 
-static void builtin_alloca(void) {
-  // Align size to 16 bytes.
-  println("  add $15, %%rdi");
-  println("  and $0xfffffff0, %%edi");
+static void builtin_alloca(int align) {
+  // Align the result address, including over-aligned VLA elements. Compute
+  // the displacement from alloca_bottom so pending expression temporaries
+  // can be moved by the same amount. Keep the full size_t width throughout.
+  println("  mov %d(%%rbp), %%rax", current_fn->alloca_bottom->offset);
+  println("  sub %%rdi, %%rax");
+  println("  and $%d, %%rax", -MAX(16, align));
+  println("  mov %d(%%rbp), %%rdi", current_fn->alloca_bottom->offset);
+  println("  sub %%rax, %%rdi");
 
   // Shift the temporary area by %rdi.
   println("  mov %d(%%rbp), %%rcx", current_fn->alloca_bottom->offset);
@@ -913,7 +918,7 @@ static void gen_expr(Node *node) {
     if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca")) {
       gen_expr(node->args);
       println("  mov %%rax, %%rdi");
-      builtin_alloca();
+      builtin_alloca(node->alloca_align);
       return;
     }
 

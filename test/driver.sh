@@ -55,6 +55,18 @@ EOF
     check "$name"
 }
 
+expect_fail 'VLA assignment is not allowed' <<'EOF'
+int main(void) { int n = 3; int a[n], b[n]; a = b; return 0; }
+EOF
+grep -q 'not an lvalue' "$tmp/fail.err"
+check 'VLA assignment diagnostic'
+
+expect_fail 'VLA initializer is not allowed' <<'EOF'
+int main(void) { int n = 3; int a[n] = {1}; return 0; }
+EOF
+grep -q 'variable-sized object may not be initialized' "$tmp/fail.err"
+check 'VLA initializer diagnostic'
+
 for code in \
   'switch (1.0) { case 1: break; }' \
   'switch ((int *)0) { case 0: break; }' \

@@ -54,6 +54,7 @@ static LlvmAbi llvm_return_abi;
 
 static char *llvm_expr(Node *node);
 static void llvm_stmt(Node *node);
+static char *llvm_load(char *addr, Type *ty, Token *tok);
 
 static void llvm_print(char *fmt, ...) {
   va_list ap;
@@ -71,7 +72,7 @@ static void llvm_unsupported(Token *tok, char *what) {
 
 static bool llvm_pointer(Type *ty) {
   return ty->kind == TY_PTR || ty->kind == TY_NULLPTR ||
-         ty->kind == TY_ARRAY || ty->kind == TY_FUNC;
+         ty->kind == TY_ARRAY || ty->kind == TY_VLA || ty->kind == TY_FUNC;
 }
 
 static bool llvm_aggregate(Type *ty) {
@@ -85,7 +86,7 @@ static void llvm_check_scalar(Type *ty, Token *tok) {
     llvm_unsupported(tok, "volatile types");
   if (is_integer(ty) || is_flonum(ty) || llvm_pointer(ty) || ty->kind == TY_VOID)
     return;
-  llvm_unsupported(tok, "this value type (aggregate or VLA)");
+  llvm_unsupported(tok, "this value type");
 }
 
 static void llvm_check_object(Type *ty, Token *tok) {
@@ -93,7 +94,7 @@ static void llvm_check_object(Type *ty, Token *tok) {
     llvm_unsupported(tok, "atomic types");
   if (ty->is_volatile)
     llvm_unsupported(tok, "volatile types");
-  if (ty->kind == TY_ARRAY) {
+  if (ty->kind == TY_ARRAY || ty->kind == TY_VLA) {
     llvm_check_object(ty->base, tok);
     return;
   }
@@ -584,6 +585,10 @@ static char *llvm_cast(char *value, Type *from, Type *to, Token *tok) {
 static char *llvm_addr(Node *node) {
   switch (node->kind) {
   case ND_VAR:
+    if (node->var->ty->kind == TY_VLA)
+      return llvm_load(llvm_addr_var(node->var), pointer_to(node->ty->base), node->tok);
+    return llvm_addr_var(node->var);
+  case ND_VLA_PTR:
     return llvm_addr_var(node->var);
   case ND_DEREF:
     return llvm_expr(node->lhs);
@@ -609,7 +614,7 @@ static char *llvm_load(char *addr, Type *ty, Token *tok) {
     return addr;
   }
   llvm_check_scalar(ty, tok);
-  if (ty->kind == TY_ARRAY || ty->kind == TY_FUNC)
+  if (ty->kind == TY_ARRAY || ty->kind == TY_VLA || ty->kind == TY_FUNC)
     return addr;
   char *result = llvm_reg();
   llvm_print("  %s = load %s, ptr %s, align 1", result, llvm_type(ty), addr);
@@ -679,8 +684,13 @@ static void llvm_check_signature(Type *ty, Token *tok) {
 
 static char *llvm_call(Node *node) {
   llvm_check_signature(node->func_ty, node->tok);
-  if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca"))
-    llvm_unsupported(node->tok, "alloca");
+  if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca")) {
+    char *size = llvm_cast(llvm_expr(node->args), node->args->ty, ty_ulong, node->tok);
+    char *result = llvm_reg();
+    llvm_print("  %s = alloca i8, i64 %s, align %d", result, size,
+               MAX(16, node->alloca_align));
+    return result;
+  }
   char *callee = llvm_expr(node->lhs);
   char *args = "";
   Type *ret = node->func_ty->return_ty;
@@ -853,7 +863,7 @@ static char *llvm_expr(Node *node) {
   case ND_VAR:
     if (node->var->is_tls)
       llvm_unsupported(node->tok, "thread-local storage");
-    return llvm_load(llvm_addr_var(node->var), node->ty, node->tok);
+    return llvm_load(llvm_addr(node), node->ty, node->tok);
   case ND_ADDR:
     return llvm_addr(node->lhs);
   case ND_DEREF:
@@ -944,8 +954,6 @@ static char *llvm_expr(Node *node) {
   case ND_CAS:
   case ND_EXCH:
     llvm_unsupported(node->tok, "atomic operations");
-  case ND_VLA_PTR:
-    llvm_unsupported(node->tok, "variable-length arrays");
   case ND_LABEL_VAL:
     llvm_unsupported(node->tok, "labels as values");
   default:
