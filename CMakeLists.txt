@@ -307,6 +307,12 @@ add_llvm_target(test-llvm-closed-compiler cmake/run-llvm-closed-compiler-tests.s
 add_llvm_target(test-llvm-closed-compiler-stage2 cmake/run-llvm-closed-compiler-tests.sh "${PPCHIBICC_STAGE2_COMPILER}"
   ppchibicc_stage2 llvm-closed-compiler-stage2 "Checking self-hosted closed-program compilation"
   "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}" "${CMAKE_COMMAND}" "${CMAKE_BINARY_DIR}")
+add_llvm_target(llvm-real-programs cmake/run-llvm-real-programs.sh "$<TARGET_FILE:ppchibicc_stage1>"
+  ppchibicc_stage1 llvm-real-programs "Comparing native, LLVM and closed builds of real 4P programs"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}")
+add_llvm_target(test-llvm-real-programs-stage2 cmake/run-llvm-real-programs.sh "${PPCHIBICC_STAGE2_COMPILER}"
+  ppchibicc_stage2 llvm-real-programs-stage2 "Checking real 4P programs with the self-hosted compiler"
+  "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}")
 add_llvm_target(llvm-opt-demo cmake/run-llvm-opt-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"
   ppchibicc_stage1 llvm-opt-demo "Comparing LLVM optimization pipelines")
 add_llvm_target(llvm-dispatch-demo cmake/run-llvm-dispatch-demo.sh "$<TARGET_FILE:ppchibicc_stage1>"

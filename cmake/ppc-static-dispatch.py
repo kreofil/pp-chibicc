@@ -34,7 +34,7 @@ ROLES = {"allocate": ("ctors", 201), "release": ("dtors", 201),
 # A bounded first executable mode: application helpers must be supplied as IR.
 # Dynamic loading APIs and arbitrary native application libraries are excluded.
 C_FUNCTIONS = set("""abort exit _Exit _exit atexit __assert_fail __errno_location
-malloc calloc realloc free aligned_alloc posix_memalign
+malloc calloc realloc reallocarray free aligned_alloc posix_memalign
 memcpy memmove memset memcmp memchr strlen strnlen strcmp strncmp strcpy strncpy
 strcat strncat strchr strrchr strstr strdup strndup atoi atol atoll strtol strtoul
 strtoll strtoull strtod strtof strtold abs labs llabs

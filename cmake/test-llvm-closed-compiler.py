@@ -143,6 +143,15 @@ int main(void) { Open.a x; return choose<&x>() != 17; }
         run(options.compiler, '--closed-program', source, '-lm', '-o', self.out/'math.exe')
         run(self.out/'math.exe')
 
+    def test_reallocarray_runtime(self):
+        exe = self.out/'reallocarray.exe'
+        run(options.compiler, '--closed-program', '-O2',
+            self.root/'test/llvm/valid/reallocarray.c', '-o', exe)
+        self.assertEqual('reallocarray OK\n', run(exe).stdout)
+        report = json.loads(Path(str(exe)+'.closed.json').read_text())
+        self.assertFalse(report['optimization_applied'])
+        self.assertIn('reallocarray', report['audit']['external_runtime_symbols'])
+
     def test_failed_tools_preserve_outputs(self):
         exe = self.out/'preserve.exe'
         report = Path(str(exe)+'.closed.json')

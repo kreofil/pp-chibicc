@@ -280,6 +280,36 @@ assembler and per-kernel/whole-core code sizes are retained. Compiler
 internals, ABI and tag semantics are unchanged. Default timing runs 224 samples;
 stage1/stage2 CI uses check-only without performance gates. See
 docs/llvm-static-dispatch-benchmark-ru.md.
+Real application checks now compare three unchanged source subsets from
+kreofil/4P-examples at 9e8f1f1c07ef08e845f877c8dac7a804ef9c0af4:
+specialized ordinary parameters/results (spec-param), the open two-argument
+visitor-mm, and the three-unit integer ppVector example. Source paths and
+SHA256s are pinned; no network is needed. A separate adapter covers and invokes
+Figure.void before calling the unchanged spec-param main. The original is
+also tested: its missing tag-0 Print handler must abort before main, or fail at
+build time when explicitly required with --closed-family=Print. This preserves
+the existing completeness rules rather than silently accepting an empty slot.
+
+Each compiler builds and runs 20 programs: native, per-unit LLVM O0/O2 and
+whole-program O0/O2 for three successful cases plus the original negative
+case. Expected output is specified independently, with a scalar Python vector
+reference. Raw matrices, frozen IR and public-compiler manifests are checked;
+Print freezes into three addresses and loses six lifecycle functions, while
+both open examples retain their runtime tables. Reports keep input/executable
+SHA256s, tools, commands, stdout/stderr and complete ELF section sizes. An
+optional --examples-dir checks a separate upstream checkout with actual hashes
+and its Git HEAD. Stage1/stage2 targets llvm-real-programs and
+test-llvm-real-programs-stage2 are included in LLVM CI.
+
+The vector revealed that the strict closed-program runtime allowlist omitted
+libc reallocarray; it is now included. A C execution regression and the closed
+compiler suite check allocation/growth and multiplication-overflow failure,
+including preserved contents and ENOMEM. Unknown application dependencies
+still require their IR. No compiler ABI, type/tag semantics or source-project
+CMake changes are introduced. LLVM 19/21/23 focused checks pass. These short
+printing demos are not timed; executable .text can grow under whole-program
+O2, as it does for the open vector. See docs/llvm-real-programs-ru.md.
+
 The public compiler now integrates this closure pipeline through
 --closed-program (implicitly LLVM). A final executable command accepts all
 source units, raw ppchibicc .ll units and marked closed-program .o files.
@@ -310,7 +340,7 @@ and OBJECT library targets, with final-link optimization/family/report options.
 Python helpers and the module install under share/ppchibicc and are discovered
 relative to the compiler; moved prefixes and explicit helper overrides work.
 The closed-build example covers object libraries, incremental builds and CTest.
-Stage1/stage2 CI adds 11 regression tests for these paths, all dispatch modes,
+Stage1/stage2 CI adds 12 regression tests for these paths, all dispatch modes,
 O0/O2/O3/Os/Oz, source/IR/object combinations, .ppc/.pph, dependency output,
 empty closure, native/external-module rejection and output preservation.
 Focused checks pass with LLVM 19, 21 and 23. See docs/llvm-closed-compiler-ru.md.
