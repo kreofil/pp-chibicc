@@ -154,7 +154,9 @@ int main(void) { Open.a x; return choose<&x>() != 17; }
 
     def test_dynamic_stack_storage(self):
         for name, expected in (('vla-storage', 'VLA storage OK\n'),
-                               ('ppc-multimethod-vla', 'multimethod VLA OK\n')):
+                               ('ppc-multimethod-vla', 'multimethod VLA OK\n'),
+                               ('vla-params', 'VLA parameters OK\n'),
+                               ('ppc-vla-params', 'PPC VLA parameters OK\n')):
             for mode in ('runtime', 'table', 'switch'):
                 for level in ('0', '2'):
                     exe = self.out/(name+'-'+mode+'-O'+level+'.exe')
@@ -162,8 +164,15 @@ int main(void) { Open.a x; return choose<&x>() != 17; }
                         '--ppc-dispatch='+mode, self.root/'test'/(name+'.c'), '-o', exe)
                     self.assertEqual(expected, run(exe).stdout)
                     report = json.loads(Path(str(exe)+'.closed.json').read_text())
-                    self.assertEqual(['vla_sum'] if name == 'ppc-multimethod-vla' else [],
-                                     report['selected_families'])
+                    if name == 'ppc-vla-params':
+                        self.assertIn('vla_matrix', report['selected_families'])
+                        self.assertIn('vla_pair', report['selected_families'])
+                        self.assertIn('vla_bound_call', report['selected_families'])
+                        self.assertTrue(any(f['name'] == 'vla_open' and f['status'] == 'excluded'
+                                            for f in report['unselected_families']))
+                    else:
+                        self.assertEqual(['vla_sum'] if name == 'ppc-multimethod-vla' else [],
+                                         report['selected_families'])
 
     def test_failed_tools_preserve_outputs(self):
         exe = self.out/'preserve.exe'

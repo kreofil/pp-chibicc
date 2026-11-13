@@ -28,7 +28,6 @@ typedef struct {
 } VarScope;
 
 // Represents a block scope.
-typedef struct Scope Scope;
 struct Scope {
   Scope *next;
 
@@ -166,6 +165,7 @@ static Scope *scope = &(Scope){};
 
 // Points to the function object the parser is currently parsing.
 static Obj *current_fn;
+static int in_param_list;
 
 // Lists of all goto statements and labels in the curent function.
 static Node *gotos;
@@ -188,6 +188,7 @@ static Type *enum_specifier(Token **rest, Token *tok);
 static Type *typeof_specifier(Token **rest, Token *tok);
 static Type *type_suffix(Token **rest, Token *tok, Type *ty);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
+static Node *compute_vla_size(Type *ty, Token *tok);
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
 static void array_initializer2(Token **rest, Token *tok, Initializer *init, int i);
 static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem);
@@ -711,6 +712,17 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
 
 // func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = declspec declarator
+static void bind_param(Type *ty) {
+  if (!ty->name)
+    return;
+  char *name = get_ident(ty->name);
+  if (hashmap_get(&scope->vars, name))
+    error_tok(ty->name, "duplicate parameter name");
+  ty->param_var = new_var(name, ty);
+  ty->param_var->is_local = true;
+  ty->param_var->tok = ty->name;
+}
+
 static Type *func_params(Token **rest, Token *tok, Type *ty) {
   if (equal(tok, "void") && equal(tok->next, ")")) {
     *rest = tok->next->next;
@@ -720,6 +732,13 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
   Type head = {};
   Type *cur = &head;
   bool is_variadic = false;
+  Obj *saved_locals = locals;
+  Obj *saved_fn = current_fn;
+  Obj *context = calloc(1, sizeof(Obj));
+  locals = NULL;
+  current_fn = context;
+  enter_scope();
+  in_param_list++;
 
   while (!equal(tok, ")")) {
     if (cur != &head)
@@ -735,6 +754,11 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     Type *ty2 = declspec(&tok, tok, NULL);
     ty2 = declarator(&tok, tok, ty2);
 
+    Type *decl = ty2;
+    for (Type *inner = decl->base; inner; inner = inner->base)
+      if (inner->param_array_qualifiers)
+        error_tok(ty2->name_pos, "array qualifiers require the outermost parameter array");
+    Node *setup = compute_vla_size(decl, tok);
     Token *name = ty2->name;
 
     if (ty2->kind == TY_ARRAY || ty2->kind == TY_VLA) {
@@ -747,44 +771,77 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
       }
       ty2 = pointer_to(base);
       ty2->name = name;
+      ty2->name_pos = decl->name_pos;
+      ty2->is_volatile = decl->param_array_volatile;
     } else if (ty2->kind == TY_FUNC) {
       // Likewise, a function is converted to a pointer to a function
       // only in the parameter context.
       ty2 = pointer_to(ty2);
       ty2->name = name;
+      ty2->name_pos = decl->name_pos;
     }
 
     cur = cur->next = copy_type(ty2);
+    cur->param_decl = decl;
+    cur->param_vla_setup = setup;
+    bind_param(cur);
   }
 
   ty = func_type(ty);
   ty->params = head.next;
   ty->is_variadic = is_variadic;
   ty->is_unprototyped = cur == &head && !is_variadic;
+  ty->param_scope = scope;
+  ty->param_context = context;
+  context->locals = locals;
+  leave_scope();
+  in_param_list--;
+  locals = saved_locals;
+  current_fn = saved_fn;
   *rest = tok->next;
   return ty;
 }
 
 // array-dimensions = ("static" | "restrict")* const-expr? "]" type-suffix
 static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
-  while (equal(tok, "static") || equal(tok, "restrict"))
+  Token *start = tok;
+  bool qualifiers = false;
+  bool pointer_volatile = false;
+  bool static_bound = false;
+  while (equal(tok, "static") || equal(tok, "const") || equal(tok, "volatile") ||
+         equal(tok, "restrict") || equal(tok, "__restrict") || equal(tok, "__restrict__")) {
+    qualifiers = true;
+    pointer_volatile |= equal(tok, "volatile");
+    static_bound |= equal(tok, "static");
     tok = tok->next;
-
-  if (equal(tok, "]")) {
-    ty = type_suffix(rest, tok->next, ty);
-    return array_of(ty, -1);
   }
+  if (qualifiers && !in_param_list)
+    error_tok(start, "array qualifiers require a function parameter");
 
-  Node *expr = conditional(&tok, tok);
-  add_type(expr);
-  if (expr->ty->kind == TY_NULLPTR)
-    error_tok(expr->tok, "array size must have integer type");
-  tok = skip(tok, "]");
-  ty = type_suffix(rest, tok, ty);
-
-  if (ty->kind == TY_VLA || !is_const_expr(expr))
-    return vla_of(ty, expr);
-  return array_of(ty, eval(expr));
+  if (equal(tok, "*") && equal(tok->next, "]")) {
+    if (!in_param_list)
+      error_tok(tok, "[*] requires function prototype scope");
+    if (static_bound)
+      error_tok(tok, "static array parameter requires a bound");
+    ty = vla_of(type_suffix(rest, tok->next->next, ty), new_num(1, tok));
+    ty->is_vla_star = true;
+  } else if (equal(tok, "]")) {
+    if (static_bound)
+      error_tok(tok, "static array parameter requires a bound");
+    ty = type_suffix(rest, tok->next, ty);
+    ty = array_of(ty, -1);
+  } else {
+    Node *expr = conditional(&tok, tok);
+    add_type(expr);
+    if (expr->ty->kind == TY_NULLPTR)
+      error_tok(expr->tok, "array size must have integer type");
+    tok = skip(tok, "]");
+    ty = type_suffix(rest, tok, ty);
+    ty = ty->kind == TY_VLA || !is_const_expr(expr) ? vla_of(ty, expr) : array_of(ty, eval(expr));
+  }
+  ty->param_array_qualifiers = qualifiers;
+  ty->param_array_volatile = pointer_volatile;
+  return ty;
 }
 
 // type-suffix = "(" func-params
@@ -4808,7 +4865,14 @@ static void create_param_lvars(Type *param) {
     create_param_lvars(param->next);
     if (!param->name)
       error_tok(param->name_pos, "parameter name omitted");
-    new_lvar(get_ident(param->name), param);
+    Obj *var = param->param_var;
+    if (!var) {
+      new_lvar(get_ident(param->name), param);
+      return;
+    }
+    var->next = locals;
+    locals = var;
+    push_scope(var->name)->var = var;
   }
 }
 
@@ -5056,6 +5120,8 @@ static Obj *get_ppc_handler_obj(PpcFunc *ppc_fn, PpcHandler *handler, Type *fn_t
       error_tok(tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || is_definition;
     fn->is_inline = fn->is_inline || attr->is_inline;
+    if (is_definition)
+      fn->ty = fn_ty;
     return fn;
   }
 
@@ -5068,9 +5134,14 @@ static Obj *get_ppc_handler_obj(PpcFunc *ppc_fn, PpcHandler *handler, Type *fn_t
 }
 
 static Token *finish_function(Token *tok, Obj *fn, Type *ty) {
+  Scope *saved_scope = scope;
+  Obj *saved_fn = current_fn;
   current_fn = fn;
   locals = NULL;
-  enter_scope();
+  if (ty->param_scope)
+    scope = ty->param_scope;
+  else
+    enter_scope();
   create_param_lvars(ty->params);
 
   // A buffer for a struct/union return value is passed
@@ -5080,6 +5151,31 @@ static Token *finish_function(Token *tok, Obj *fn, Type *ty) {
     fn->ret_param = new_lvar("", pointer_to(rty));
 
   fn->params = locals;
+
+  // Bound expressions refer to these same parameter objects. Their temporary
+  // buffers are locals, but must not become additional ABI parameters.
+  if (ty->param_context) {
+    for (Obj *var = ty->param_context->locals; var;) {
+      Obj *next = var->next;
+      var->next = locals;
+      locals = var;
+      var = next;
+    }
+    for (int i = 0; i < ty->param_context->refs.len; i++)
+      strarray_push(&fn->refs, ty->param_context->refs.data[i]);
+  }
+
+  Node head = {};
+  Node *cur = &head;
+  for (Type *param = ty->params; param; param = param->next) {
+    for (Type *decl = param->param_decl; decl; decl = decl->base)
+      if (decl->kind == TY_VLA && decl->is_vla_star)
+        error_tok(param->name, "[*] is not allowed in a function definition");
+    if (param->param_vla_setup) {
+      cur = cur->next = new_expr_stmt_node(param->param_vla_setup, tok);
+      add_type(cur);
+    }
+  }
 
   if (ty->is_variadic) {
     // The public System V va_list record; each backend owns its register save area.
@@ -5101,8 +5197,13 @@ static Token *finish_function(Token *tok, Obj *fn, Type *ty) {
     new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
 
   fn->body = compound_stmt(&tok, tok);
+  if (head.next) {
+    cur->next = fn->body->body;
+    fn->body->body = head.next;
+  }
   fn->locals = locals;
-  leave_scope();
+  scope = saved_scope;
+  current_fn = saved_fn;
   resolve_goto_labels();
   return tok;
 }
@@ -6309,7 +6410,7 @@ static PpcFunc *get_or_create_ppc_func(Token *name, Type *return_ty, Type *ppc_p
 
 static Type *ppc_param(Token **rest, Token *tok) {
   Type *ty = declspec(&tok, tok, NULL);
-  ty = declarator(&tok, tok, ty);
+  ty = copy_type(declarator(&tok, tok, ty));
   if (!ty->name)
     error_tok(ty->name_pos, "PPC parameter name omitted");
   *rest = tok;
@@ -6326,6 +6427,7 @@ static Type *ppc_param_list(Token **rest, Token *tok) {
 
     cur = cur->next = ppc_param(&tok, tok);
     cur->next = NULL;
+    bind_param(cur);
   }
 
   *rest = tok;
@@ -6339,13 +6441,21 @@ static Token *ppc_function(Token *tok, Type *basety, VarAttr *attr) {
   get_ident(tok);
   tok = skip(tok->next, "<");
 
+  enter_scope();
+  Scope *polymorphic_scope = scope;
   Type *ppc_param_tys = ppc_param_list(&tok, tok);
   tok = skip(tok, ">");
 
   if (!equal(tok, "("))
     error_tok(tok, "expected '(' after PPC parameter list");
   Type *ordinary_fn_ty = func_params(&tok, tok->next, basety);
-  // PPC already has an explicit procedural parameter list. An empty ordinary
+  if (!ordinary_fn_ty->param_scope)
+    ordinary_fn_ty->param_scope = polymorphic_scope;
+  for (Type *param = ordinary_fn_ty->params; param; param = param->next)
+    if (param->name && hashmap_get(&scope->vars, get_ident(param->name)))
+      error_tok(param->name, "duplicate parameter name");
+  leave_scope();
+  // PPC already has an explicit polymorphic parameter list. An empty ordinary
   // list denotes zero ordinary arguments, just like (void), not C varargs.
 
   int ppc_param_count = type_list_len(ppc_param_tys);
@@ -6385,6 +6495,8 @@ static Token *ppc_function(Token *tok, Type *basety, VarAttr *attr) {
 
   Type *actual_ty = ppc_actual_func_type(ordinary_fn_ty->return_ty, ppc_param_tys,
                                          ordinary_fn_ty->params, ordinary_fn_ty->is_variadic);
+  actual_ty->param_scope = ordinary_fn_ty->param_scope;
+  actual_ty->param_context = ordinary_fn_ty->param_context;
 
   bool is_definition = equal(tok, "{");
   Obj *fn = get_ppc_handler_obj(ppc_fn, handler, actual_ty, attr, name, is_definition);
@@ -6446,7 +6558,8 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
 
   Node *fn = ppc_table_slot(ppc_fn->table_var, ppc_mixed_index_expr(ppc_fn, tags, tok), tok);
   PpcCall *site = NULL;
-  if (opt_ppc_dispatch != PPC_DISPATCH_RUNTIME && ppc_closed_table_count(ppc_fn) && current_fn) {
+  if (opt_ppc_dispatch != PPC_DISPATCH_RUNTIME && ppc_closed_table_count(ppc_fn) &&
+      current_fn && !in_param_list) {
     site = calloc(1, sizeof(PpcCall));
     site->family = ppc_fn;
     site->owner = current_fn;

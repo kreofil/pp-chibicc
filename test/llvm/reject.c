@@ -28,6 +28,12 @@ int main(void) { int x = 1; int *volatile p = &x; return *p; }
 typedef int Values[2];
 int first(volatile Values values) { return values[0]; }
 int main(void) { int values[2] = {1, 2}; return first(values); }
+#elif defined(REJECT_VOLATILE_VLA_PARAMETER)
+int first(int n, int values[volatile n]) { return values[0]; }
+int main(void) { int values[2] = {1, 2}; return first(2, values); }
+#elif defined(REJECT_VOLATILE_VLA_ELEMENT)
+int first(int n, volatile int values[n]) { return values[0]; }
+int main(void) { int values[2] = {1, 2}; return first(2, values); }
 #elif defined(REJECT_ASM)
 int main(void) { asm("nop"); return 0; }
 #elif defined(REJECT_COMPUTED_GOTO)

@@ -52,7 +52,8 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$source_dir"/examples/llvm/ppc-figures.c "$source_dir"/examples/llvm/ppc-by-value.c \
     "$source_dir"/examples/llvm/ppc-floating.c \
     "$source_dir"/examples/llvm/ppc-floating-by-value.c \
-    "$source_dir"/examples/llvm/ppc-vla-array.c; do
+    "$source_dir"/examples/llvm/ppc-vla-array.c \
+    "$source_dir"/examples/llvm/ppc-vla-matrix.c; do
   name=$(basename "$source" .c)
   prefix=$result_dir/$name
   expected_status=0
@@ -110,12 +111,16 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/assert-quiet.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
+  elif [ "$name" = vla-params ]; then
+    "$host_cc" -std=c11 -O2 -c "$source_dir/test/llvm/support/vla-params-host.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
   fi
 
   # Use the system compiler as an independent reference for ABI boundaries
   # and IEEE floating-point edge cases. The native backend has existing
   # limitations here (notably NaN conditions and unsigned 64-bit conversions).
-  if [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ] || [ "$name" = switch ] || [ "$name" = empty-params ] || [ "$name" = stdarg-abi ] || [ "$name" = long-double ] || [ "$name" = long-double-abi ]; then
+  if [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ] || [ "$name" = switch ] || [ "$name" = empty-params ] || [ "$name" = stdarg-abi ] || [ "$name" = long-double ] || [ "$name" = long-double-abi ] || [ "$name" = vla-params ]; then
     "$host_cc" -std=c11 -O2 -c "$source" -o "$prefix.x86.o"
   else
     "$compiler" -c "$source" -o "$prefix.x86.o"
@@ -150,6 +155,9 @@ for source in "$source_dir"/test/llvm/valid/*.c \
       "$prefix.x86.stdout" "$expected_status"
   done
 done
+
+"$source_dir/cmake/run-vla-parameter-tests.sh" "$source_dir" "$compiler" \
+  "$result_dir/vla-params-modes" "$llvm_opt" "$llvm_llc"
 
 # VLA constraints are shared frontend diagnostics in both backends.
 for statement in 'int a[n], b[n]; a = b;' 'int a[n] = {1};'; do
@@ -239,7 +247,7 @@ done
 
 # Unsupported source constructs must produce a compiler diagnostic instead
 # of invalid IR or a silently different executable.
-for feature in VARARG_AGGREGATE BITFIELD VA_ARG_AGGREGATE UNPROTOTYPED_AGGREGATE TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF ASM COMPUTED_GOTO; do
+for feature in VARARG_AGGREGATE BITFIELD VA_ARG_AGGREGATE UNPROTOTYPED_AGGREGATE TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF VOLATILE_VLA_PARAMETER VOLATILE_VLA_ELEMENT ASM COMPUTED_GOTO; do
   echo "testing LLVM diagnostic $feature"
   if "$compiler" -S -emit-llvm -DREJECT_$feature \
       "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \

@@ -30,6 +30,7 @@ typedef struct Node Node;
 typedef struct Member Member;
 typedef struct Relocation Relocation;
 typedef struct Hideset Hideset;
+typedef struct Scope Scope;
 
 //
 // strings.c
@@ -380,13 +381,19 @@ struct Type {
   // Declaration
   Token *name;
   Token *name_pos;
+  Obj *param_var;          // Parameter object shared with bound expressions
+  Type *param_decl;        // Parameter type before array/function adjustment
+  Node *param_vla_setup;   // Bounds evaluated only by a function definition
 
   // Array
   int array_len;
+  bool param_array_qualifiers;
+  bool param_array_volatile;
 
   // Variable-length array
   Node *vla_len; // # of elements
   Obj *vla_size; // sizeof() value
+  bool is_vla_star; // [*] is allowed only in a function prototype
 
   // Struct
   Member *members;
@@ -418,6 +425,8 @@ struct Type {
   // Function type
   Type *return_ty;
   Type *params;
+  Scope *param_scope;
+  Obj *param_context; // Temporaries and references owned by the parameter list
   bool is_variadic;
   bool is_unprototyped; // C () leaves parameter types unspecified, unlike ...
   Type *next;

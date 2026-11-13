@@ -390,13 +390,42 @@ temporaries by the same displacement. PPC layouts and calling conventions
 are unchanged. Rebuild affected VLA/alloca functions to use these corrections.
 
 Dynamic storage currently lasts until function return in both backends; no
-block-exit VLA stack restoration is emitted. Headers referring to earlier
-parameter names, such as f(int n, int a[n]), remain a shared parser limit.
+block-exit VLA stack restoration is emitted.
 New checks cover saved typedef sizes/side effects, 4-GiB sizeof without
 allocation, 1D/2D/3D addressing, alignment, recursion and nested/loop alloca.
 Existing VLA sources and an expanded all-form PPC fixture run in LLVM O0/O2,
 native and stage2. All dispatch modes and closed builds cover VLA pointer
 arguments to a variadic multimethod. See docs/llvm-vla-ru.md.
+
+Function parameter VLA bounds now share real parameter objects with the
+definition. Each list has an isolated scope, temporary locals and function
+references. Earlier parameter names (including polymorphic parameters of PPC
+handlers) are visible to later bounds; prototypes and nested callback types
+do not execute those bounds or leak their names/references. Definitions reuse
+their own parameter objects, retain bound-expression temporaries separately
+from ABI parameters and prepend saved-size evaluation before the body.
+Renamed declarations/handlers keep their own bounds and runtime side effects.
+Polymorphic parameter descriptors are private even when declared through one
+pointer typedef. Polymorphic calls inside bounds retain the runtime path;
+the whole-program sealer can still freeze their eligible tables.
+
+Array parameters decay to pointers without copying or reinitializing PPC tags.
+Pointer-to-VLA, multidimensional arrays, sizeof/stride after parameter changes,
+callbacks, named records, sret and variadic functions use the existing native
+and LLVM ABI. Array compatibility now compares element types and constant
+lengths, allowing a variable or unspecified bound to match a compatible array.
+Prototype [*] and outermost static/const/restrict array qualifiers are parsed;
+[*] definitions, misplaced qualifiers, duplicate/escaped names and incompatible
+PPC row types are diagnosed. LLVM volatile limitations are retained.
+
+Native/stage2, LLVM O0/O2 and closed-mode checks cover C and polymorphic
+handlers (including all dispatch representations), host calls in both
+directions, entry-only side effects, memory-result bound calls, nested scopes,
+unused prototype dependencies and all-closed/open multimethods. PPC layouts,
+tags, metadata v2 and calling conventions are unchanged; rebuild affected
+definitions to use the new parameter-bound lowering. Russian guides use
+polymorphic parameters/arguments for the <...> list, retaining the name
+procedural-parametric programming. See docs/llvm-vla-ru.md.
 
 The public compiler now integrates this closure pipeline through
 --closed-program (implicitly LLVM). A final executable command accepts all
