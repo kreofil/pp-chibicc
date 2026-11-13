@@ -252,7 +252,7 @@ without inbounds in LLVM. This exposes constant entries without changing
 ordinary C pointer/integer lowering or native code generation. The 2x3 example
 removes 11 lifecycle functions and LLVM O2 reduces registry_known to ret i32
 507, while runtime dispatch retains an indirect call. Current LLVM 23 dispatch
-demo raw/O2 counts are 99/45 (known), 137/64 (closed), 197/87 (multi), and
+demo raw/O2 counts are 101/45 (known), 139/64 (closed), 201/87 (multi), and
 99/43 (open); these are static metrics, not speed measurements. ABI/tag values
 are unchanged. Static-dispatch stage1/stage2 CI tests cover all three modes,
 six module orders, records/sret/varargs, all four closed forms, a private handler
@@ -343,6 +343,33 @@ large-copy C regression checks unaligned guarded records, odd tails, unions,
 self/chained/value assignments, stack arguments and aggregate returns, in
 native stage1/stage2, LLVM and system GCC. Type/tag layout and signatures are
 unchanged. See docs/llvm-life-benchmark-ru.md.
+
+PPC matrix size and mixed-radix handler indices now use unsigned 64-bit
+arithmetic before multiplication. The old int products could wrap 4^16 to
+zero, allocate an empty table and silently skip filling/completeness checks.
+The default/stub fill loop counter is widened too; tiny local catalogs keep
+an int switch index because their existing bound is 16 cells.
+
+All-closed table products are validated at compilation against SIZE_MAX/8.
+If any axis is open, constructor 201 checks each extent/product before
+multiplication, then checks calloc before registration or table iteration.
+A zero extent or unrepresentable byte size aborts with a named size-overflow
+diagnostic; allocation failure reports the full unsigned slot count. No new
+arbitrary runtime size cap is imposed. Tag values, public introspection types,
+object layout, symbol names and priorities are unchanged. Rebuild PPC objects
+and raw IR to replace the old arithmetic; update the sealer with the compiler.
+
+The sealer admits allocation-error dprintf/abort calls and diagnostic strings
+in the owned allocate role, retaining the other call/global-reference audits.
+Tests insert valid assembled IR with an unrelated global store or puts call
+and verify rejection by the runtime-side-effect audit. Metadata stays v2.
+
+The new ppc-table-size source checks a 2x3 matrix and one-time argument
+capture. Its fault modes cover open/closed 4^16 allocation under RLIMIT_AS,
+a small deterministic calloc failure, 4^31 slot-to-byte overflow and 4^32
+slot-product overflow. Native stage1/stage2 and LLVM O0/O2 run the cases;
+no huge physical allocation is attempted. Focused LLVM 19/21/23 and full
+stage1/stage2/static/application checks pass. See docs/ppc-table-dimensions-ru.md.
 
 The public compiler now integrates this closure pipeline through
 --closed-program (implicitly LLVM). A final executable command accepts all

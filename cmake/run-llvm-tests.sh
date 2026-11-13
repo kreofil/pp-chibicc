@@ -298,4 +298,6 @@ done
   "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/closed-dispatch"
 "$source_dir/cmake/run-llvm-closed-multimethod-tests.sh" "$source_dir" "$compiler" "$host_cc" \
   "$llvm_as" "$llvm_opt" "$llvm_llc" "$result_dir/closed-multimethod"
+"$source_dir/cmake/run-ppc-table-size-tests.sh" "$source_dir" "$compiler" \
+  "$result_dir/table-sizes" "$llvm_opt" "$llvm_llc"
 echo "LLVM tests passed"

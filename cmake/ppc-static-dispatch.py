@@ -128,12 +128,12 @@ def audit_runtime(text, families):
             occurrences = [(k, p) for k, entries in arrays.items() for p, n, _ in entries if n == name]
             if occurrences != [(kind, priority)]:
                 raise ValueError("runtime initializer priority/ownership mismatch: " + name)
-            allowed_calls = {"allocate": {"calloc"}, "release": {"free"},
+            allowed_calls = {"allocate": {"calloc", "dprintf", "abort"}, "release": {"free"},
                              "check": {"dprintf", "abort"}, "handler": set(), "default": set()}[role]
             for line in fn["body"].splitlines():
                 refs = set(globals_in(line))
                 allowed = targets | {family["table"]} | allowed_calls
-                if role == "check":
+                if role in ("allocate", "check"):
                     allowed |= {ref for ref in refs if ref.startswith('.L..')}
                 if not refs <= allowed:
                     raise ValueError("unaccounted runtime side effect: " + name)

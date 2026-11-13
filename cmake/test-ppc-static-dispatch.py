@@ -178,9 +178,16 @@ class StaticDispatchTests(unittest.TestCase):
         variants = [original[:root.start()]+ '!ppchibicc.dispatch = !{'+', '.join('!'+i for i in ids)+'}'+original[root.end():],
                     original.replace('i32 301, ptr ', 'i32 302, ptr ', 1),
                     original+'\ndefine void @unexpected_startup_call() {\nentry:\n  call void '+token+'()\n  ret void\n}\n']
+        header = 'define internal void '+token+'() {\n"entry":\n'
+        self.assertIn(header, original)
+        variants += [original.replace(header, header+'  store i32 1, ptr @audit_side_effect, align 4\n', 1)
+                     +'\n@audit_side_effect = global i32 0, align 4\n',
+                     original.replace(header, header+'  call i32 @puts(ptr null)\n', 1)
+                     +'\ndeclare i32 @puts(ptr)\n']
         for i, text in enumerate(variants):
             altered = self.out/('altered-'+str(i)+'.ll')
             altered.write_text(text)
+            run(options.llvm_as, altered, '-o', altered.with_suffix('.bc'))
             self.freeze([self.base[0], altered, self.base[2]], 'audit-blocked-'+str(i), expected=2)
 
     def test_outputs_are_preserved_on_failure(self):

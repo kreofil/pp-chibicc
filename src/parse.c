@@ -5605,10 +5605,11 @@ static Node *ppc_extent_expr(Type *base, Token *tok) {
 }
 
 static Node *ppc_table_size_expr(PpcFunc *ppc_fn, Token *tok) {
-  Node *size = new_num(1, tok);
+  Node *size = new_ulong(1, tok);
 
   for (int i = 0; i < ppc_fn->ppc_param_count; i++)
-    size = new_binary(ND_MUL, size, ppc_extent_expr(ppc_fn->base_tys[i], tok), tok);
+    size = new_binary(ND_MUL, size,
+                      new_cast(ppc_extent_expr(ppc_fn->base_tys[i], tok), ty_ulong), tok);
   return size;
 }
 
@@ -5630,11 +5631,12 @@ static bool ppc_needs_exhaustive_check(PpcFunc *ppc_fn) {
 }
 
 static Node *ppc_mixed_index_expr(PpcFunc *ppc_fn, Node **tags, Token *tok) {
-  Node *idx = tags[0];
+  Node *idx = new_cast(tags[0], ty_ulong);
 
   for (int i = 1; i < ppc_fn->ppc_param_count; i++) {
-    idx = new_binary(ND_MUL, idx, ppc_extent_expr(ppc_fn->base_tys[i], tok), tok);
-    idx = new_add(idx, tags[i], tok);
+    idx = new_binary(ND_MUL, idx,
+                     new_cast(ppc_extent_expr(ppc_fn->base_tys[i], tok), ty_ulong), tok);
+    idx = new_add(idx, new_cast(tags[i], ty_ulong), tok);
   }
   return idx;
 }
@@ -5793,7 +5795,37 @@ static void ppc_make_spec_ptr_tags_dtor(PpcGen *gen) {
   add_type(fn->body);
 }
 
+static Node *ppc_table_failure(PpcFunc *family, char *message, Node *slots, Token *tok) {
+  char *fmt = format("PPC table error: %s for %s%s\n", message, family->name,
+                     slots ? " (slots %lu)" : "");
+  Obj *text = new_string_literal(fmt, array_of(ty_char, strlen(fmt) + 1));
+  Node *args = new_num(2, tok);
+  args->next = new_cast(new_var_node(text, tok), pointer_to(ty_char));
+  args->next->next = slots;
+  Node *print = new_expr_stmt_node(new_func_call_node(get_dprintf_func(), args, tok), tok);
+  print->next = new_expr_stmt_node(new_func_call_node(get_abort_func(), NULL, tok), tok);
+  return new_block_node(print, tok);
+}
+
+// Full runtime-table representability is independent of the tiny local
+// optimization catalog's 16-cell limit.
+static uint64_t ppc_closed_table_size(PpcFunc *family) {
+  for (int i = 0; i < family->ppc_param_count; i++)
+    if (!family->base_tys[i]->is_ppc_const_generalization)
+      return 0;
+  uint64_t slots = 1;
+  uint64_t limit = (uint64_t)-1 / 8;
+  for (int i = 0; i < family->ppc_param_count; i++) {
+    int extent = ppc_next_spec_index(family->base_tys[i]);
+    if (slots > limit / extent)
+      error_tok(family->name_tok, "PPC table size overflows for %s", family->name);
+    slots *= extent;
+  }
+  return slots;
+}
+
 static Obj *ppc_make_table_ctor(PpcFunc *ppc_fn) {
+  uint64_t closed_slots = ppc_closed_table_size(ppc_fn);
   static int id = 0;
   Token *tok = ppc_fn->name_tok;
   Obj *fn = new_generated_func(format("__ppc_ctor_201_table_%d", id++),
@@ -5804,12 +5836,34 @@ static Obj *ppc_make_table_ctor(PpcFunc *ppc_fn) {
   Node *if_node = new_node(ND_IF, tok);
   if_node->cond = new_var_node(ppc_fn->table_var, tok);
   if_node->then = early_return;
-  Node *arg1 = new_cast(ppc_table_size_expr(ppc_fn, tok), ty_ulong);
+  Obj *slots = new_generated_lvar(&locals, ty_ulong);
+  Obj *extent = new_generated_lvar(&locals, ty_ulong);
+  Node *last = if_node;
+  last = last->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+    new_var_node(slots, tok), new_ulong(closed_slots ? closed_slots : 1, tok), tok), tok);
+  for (int i = 0; !closed_slots && i < ppc_fn->ppc_param_count; i++) {
+    last = last->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+      new_var_node(extent, tok), new_cast(ppc_extent_expr(ppc_fn->base_tys[i], tok), ty_ulong), tok), tok);
+    Node *check = new_node(ND_IF, tok);
+    Node *zero = new_binary(ND_EQ, new_var_node(extent, tok), new_ulong(0, tok), tok);
+    Node *limit = new_binary(ND_DIV, new_ulong((uint64_t)-1 / 8, tok), new_var_node(extent, tok), tok);
+    check->cond = new_binary(ND_LOGOR, zero,
+      new_binary(ND_LT, limit, new_var_node(slots, tok), tok), tok);
+    check->then = ppc_table_failure(ppc_fn, "size overflow", NULL, tok);
+    last = last->next = check;
+    last = last->next = new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(slots, tok),
+      new_binary(ND_MUL, new_var_node(slots, tok), new_var_node(extent, tok), tok), tok), tok);
+  }
+  Node *arg1 = new_var_node(slots, tok);
   arg1->next = new_ulong(8, tok);
   Node *alloc = new_binary(ND_ASSIGN, new_var_node(ppc_fn->table_var, tok),
     new_cast(new_func_call_node(get_calloc_func(), arg1, tok), ppc_fn->table_var->ty), tok);
   // Leave holes null until actual defaults and concrete handlers register.
-  if_node->next = new_expr_stmt_node(alloc, tok);
+  last = last->next = new_expr_stmt_node(alloc, tok);
+  Node *failed = new_node(ND_IF, tok);
+  failed->cond = new_unary(ND_NOT, new_var_node(ppc_fn->table_var, tok), tok);
+  failed->then = ppc_table_failure(ppc_fn, "allocation failed", new_var_node(slots, tok), tok);
+  last->next = failed;
   fn->body = new_block_node(if_node, tok);
   fn->locals = locals;
   add_type(fn->body);
@@ -5823,7 +5877,7 @@ static Obj *ppc_make_fill_ctor(PpcFunc *ppc_fn, Obj *target, int priority) {
                                func_type(ty_void), priority);
   Obj *locals = NULL;
   fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
-  Obj *i = new_generated_lvar(&locals, ty_int);
+  Obj *i = new_generated_lvar(&locals, ty_ulong);
   Node *slot = ppc_table_slot(ppc_fn->table_var, new_var_node(i, tok), tok);
   Node *fill = new_node(ND_IF, tok);
   fill->cond = new_unary(ND_NOT, slot, tok);
@@ -5832,10 +5886,10 @@ static Obj *ppc_make_fill_ctor(PpcFunc *ppc_fn, Obj *target, int priority) {
     ppc_cast_fnptr(new_var_node(target, tok), ppc_fn->fnptr_ty), tok), tok);
   Node *loop = new_node(ND_FOR, tok);
   loop->init = new_expr_stmt_node(new_binary(ND_ASSIGN,
-    new_var_node(i, tok), new_num(0, tok), tok), tok);
+    new_var_node(i, tok), new_ulong(0, tok), tok), tok);
   loop->cond = new_binary(ND_LT, new_var_node(i, tok), ppc_table_size_expr(ppc_fn, tok), tok);
   loop->inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
-    new_add(new_var_node(i, tok), new_num(1, tok), tok), tok);
+    new_add(new_var_node(i, tok), new_ulong(1, tok), tok), tok);
   loop->then = fill;
   loop->brk_label = new_unique_name();
   loop->cont_label = new_unique_name();
@@ -6379,6 +6433,7 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
     site->owner = current_fn;
     site->prefix = cur;
     site->runtime_callee = fn;
+    // A local catalog has at most 16 cells, so its switch index fits int.
     site->tag = new_lvar("", ty_int);
     site->active = new_lvar("", ppc_fn->fnptr_ty);
     cur = cur->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
