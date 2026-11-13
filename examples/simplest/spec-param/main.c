@@ -24,6 +24,10 @@ Figure + {Rectangle r;};
 // Полиморфнай функция вывода фигуры
 void Print<Figure* f>() = 0;
 // Вывод специализированного треугольника
+void Print<Figure.void* f>() {
+  printf("Incorrect Figure usin tag = %d\n", get_spec_var_index(f));
+}
+// Вывод специализированного треугольника
 void Print<Figure.t* f>() {
   printf("Triangle(%d,%d,%d)\n", f->t.a, f->t.b, f->t.c);
 }
