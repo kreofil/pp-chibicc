@@ -11,7 +11,10 @@ typedef struct { unsigned char a,b,c; } VrBytes;
 typedef struct { unsigned a:3; int b:5; _Bool c:1; } VrBits;
 typedef struct { struct { int a,b; } inner; double real; } VrNested;
 typedef union { double real; unsigned long bits; } VrUnion;
-typedef union { long double real; unsigned long bits[2]; } VrWideUnion;
+// GCC 13 miscompiles va_arg of a long-double/INTEGER union: it assumes a
+// 16-byte aligned GP save slot. Keep the INTEGER union at alignment 8;
+// VrX87 independently checks the aligned long-double aggregate path.
+typedef union { double real; unsigned long bits[2]; } VrWideUnion;
 typedef struct { long a,b,c; } VrLarge;
 typedef struct __attribute__((packed)) { char tag; double real; } VrPacked;
 typedef struct __attribute__((packed)) { unsigned head:7; unsigned long value:64; } VrCrossBits;
