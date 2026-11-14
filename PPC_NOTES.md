@@ -3,6 +3,17 @@
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
 
+LLVM self-hosting is verified without further frontend/backend changes.
+The optional CMake PPCHIBICC_STAGE2_BACKEND=llvm mode builds stage2 through
+LLVM, then stage2 builds stage3 with the same optimization level and tools.
+llvm-selfhost checks identical raw IR and objects for all compiler modules,
+generation of C/4P fixtures by seed/stage2/stage3, diagnostics and executions.
+test-llvm-selfhost adds the complete native, LLVM, example and closed-program
+stage3 suites. O0/O2 bootstrap reports and full O2 stage3 checks run in CI;
+focused LLVM 19/21/23 checks pass locally. The default stage2 remains native,
+and bin/installation still use stage1. Public 4P semantics, registration ABI
+and metadata v2 are unchanged. See docs/llvm-selfhost-ru.md.
+
 LLVM now passes structs/unions among unnamed variadic arguments and reads
 them through typed va_arg nodes. The existing INTEGER/SSE/X87 classifier
 controls both call lowering and list consumption. Register pieces are

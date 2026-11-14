@@ -11,6 +11,10 @@ The documentation describes the syntax and semantics of the C language extension
 
 The current version of the compiler is being developed for the Linux operating system.
 
+[LLVM self-hosting](docs/llvm-selfhost-ru.md) is available in a separate CMake
+build with `-DPPCHIBICC_STAGE2_BACKEND=llvm`. The `test-llvm-selfhost` target
+compares stage2/stage3 IR and objects and tests the LLVM-built compiler.
+
 ## Building the compiler
 
 The project uses an out-of-source CMake build. Compiler sources stay in `src`,

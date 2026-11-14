@@ -15,6 +15,7 @@ ppchibicc - это попытка реализовать компилятор я
 [руководстве по экспериментальному LLVM backend](docs/llvm-backend-ru.md).
 Доступна также [поддержка битовых полей в LLVM и 4П](docs/llvm-bitfields-ru.md).
 Структуры и объединения можно [передавать среди `...` и читать через `va_arg`](docs/llvm-vararg-records-ru.md).
+Доступна [самокомпиляция через LLVM со сравнением stage2/stage3](docs/llvm-selfhost-ru.md).
 
 ## Сборка компилятора
 

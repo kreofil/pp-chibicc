@@ -180,21 +180,80 @@ add_test(
           --target check-stage1
 )
 
+# Emitting textual IR needs no LLVM library. External tools are optional
+# unless LLVM is explicitly selected to build the compiler itself.
+set(PPCHIBICC_LLVM_VERSION "" CACHE STRING
+    "LLVM tool suffix for optional tests (empty prefers unversioned tools)")
+function(find_llvm_tool variable tool)
+  if(PPCHIBICC_LLVM_VERSION)
+    find_program(${variable} NAMES ${tool}-${PPCHIBICC_LLVM_VERSION} ${tool})
+  else()
+    find_program(${variable} NAMES ${tool} ${tool}-23 ${tool}-22 ${tool}-21 ${tool}-20 ${tool}-19)
+  endif()
+endfunction()
+find_llvm_tool(PPCHIBICC_LLVM_AS llvm-as)
+find_llvm_tool(PPCHIBICC_LLVM_OPT opt)
+find_llvm_tool(PPCHIBICC_LLVM_LLC llc)
+find_llvm_tool(PPCHIBICC_LLVM_LINK llvm-link)
+find_llvm_tool(PPCHIBICC_LLVM_PROFDATA llvm-profdata)
+find_llvm_tool(PPCHIBICC_LLVM_CLANG clang)
+find_package(Python3 3.8 QUIET COMPONENTS Interpreter)
+message(STATUS "LLVM tools (optional): llvm-as=${PPCHIBICC_LLVM_AS}; opt=${PPCHIBICC_LLVM_OPT}; llc=${PPCHIBICC_LLVM_LLC}; llvm-link=${PPCHIBICC_LLVM_LINK}")
+message(STATUS "LLVM PGO tools (optional): llvm-profdata=${PPCHIBICC_LLVM_PROFDATA}; clang=${PPCHIBICC_LLVM_CLANG}")
+
+set(PPCHIBICC_STAGE2_BACKEND "x86-64" CACHE STRING "Backend used to build stage2: x86-64 or llvm")
+set_property(CACHE PPCHIBICC_STAGE2_BACKEND PROPERTY STRINGS x86-64 llvm)
+set(PPCHIBICC_STAGE2_LLVM_OPTIMIZATION "2" CACHE STRING "LLVM optimization for stage2/stage3: 0, 1, 2, 3, s or z")
+file(GLOB_RECURSE PPCHIBICC_BOOTSTRAP_HEADERS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/include/*")
+set_property(CACHE PPCHIBICC_STAGE2_LLVM_OPTIMIZATION PROPERTY STRINGS 0 1 2 3 s z)
+if(NOT PPCHIBICC_STAGE2_BACKEND MATCHES "^(x86-64|llvm)$")
+  message(FATAL_ERROR "PPCHIBICC_STAGE2_BACKEND must be x86-64 or llvm")
+endif()
+if(PPCHIBICC_STAGE2_BACKEND STREQUAL "llvm")
+  if(NOT PPCHIBICC_LLVM_OPT OR NOT PPCHIBICC_LLVM_LLC)
+    message(FATAL_ERROR "LLVM stage2 requires opt and llc. Set PPCHIBICC_LLVM_OPT and PPCHIBICC_LLVM_LLC.")
+  endif()
+  if(NOT PPCHIBICC_STAGE2_LLVM_OPTIMIZATION MATCHES "^(0|1|2|3|s|z)$")
+    message(FATAL_ERROR "PPCHIBICC_STAGE2_LLVM_OPTIMIZATION must be 0, 1, 2, 3, s or z")
+  endif()
+endif()
+
 # Build the compiler sources with stage1, then link the resulting objects with
-# the host compiler. This preserves the original chibicc self-hosting model.
+# the host compiler. The default backend preserves the original chibicc model.
 set(STAGE2_OBJECTS)
 foreach(source_file IN LISTS PPCHIBICC_SOURCES)
   get_filename_component(source_name "${source_file}" NAME_WE)
   set(stage2_object "${PPCHIBICC_STAGE2_DIR}/obj/${source_name}.o")
+  set(stage2_input "${source_file}")
+  set(stage2_command "$<TARGET_FILE:ppchibicc_stage1>")
+  if(PPCHIBICC_STAGE2_BACKEND STREQUAL "llvm")
+    set(stage2_input "${PPCHIBICC_STAGE2_DIR}/ir/${source_name}.ll")
+    add_custom_command(
+      OUTPUT "${stage2_input}"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${PPCHIBICC_STAGE2_DIR}/ir"
+      COMMAND "$<TARGET_FILE:ppchibicc_stage1>" -S -emit-llvm -fno-common
+              "-I${CMAKE_SOURCE_DIR}/include" "${source_file}" -o "${stage2_input}"
+      DEPENDS ppchibicc_stage1 "${CMAKE_SOURCE_DIR}/${source_file}" "${CMAKE_SOURCE_DIR}/src/chibicc.h"
+              ${PPCHIBICC_BOOTSTRAP_HEADERS}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "Emitting stage2 LLVM IR for ${source_file}"
+      VERBATIM
+    )
+    set(stage2_command "${CMAKE_COMMAND}" -E env
+      "PPCHIBICC_LLVM_OPT=${PPCHIBICC_LLVM_OPT}"
+      "PPCHIBICC_LLVM_LLC=${PPCHIBICC_LLVM_LLC}"
+      "$<TARGET_FILE:ppchibicc_stage1>" --backend=llvm "-O${PPCHIBICC_STAGE2_LLVM_OPTIMIZATION}")
+  endif()
 
   add_custom_command(
     OUTPUT "${stage2_object}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${PPCHIBICC_STAGE2_DIR}/obj"
-    COMMAND "$<TARGET_FILE:ppchibicc_stage1>"
-            -c -o "${stage2_object}" "${source_file}"
+    COMMAND ${stage2_command} -c -o "${stage2_object}" "${stage2_input}"
     DEPENDS ppchibicc_stage1
             "${CMAKE_SOURCE_DIR}/${source_file}"
             "${CMAKE_SOURCE_DIR}/src/chibicc.h"
+            "${stage2_input}"
+            ${PPCHIBICC_BOOTSTRAP_HEADERS}
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     COMMENT "Self-compiling ${source_file}"
     VERBATIM
@@ -247,27 +306,6 @@ add_custom_target(test-examples
 
 add_custom_target(test-all)
 add_dependencies(test-all check-stage1 test-stage2 test-examples)
-
-# Emitting textual IR needs no LLVM library. The external tools are optional
-# and used only by explicitly requested LLVM tests and experiments.
-set(PPCHIBICC_LLVM_VERSION "" CACHE STRING
-    "LLVM tool suffix for optional tests (empty prefers unversioned tools)")
-function(find_llvm_tool variable tool)
-  if(PPCHIBICC_LLVM_VERSION)
-    find_program(${variable} NAMES ${tool}-${PPCHIBICC_LLVM_VERSION} ${tool})
-  else()
-    find_program(${variable} NAMES ${tool} ${tool}-23 ${tool}-22 ${tool}-21 ${tool}-20 ${tool}-19)
-  endif()
-endfunction()
-find_llvm_tool(PPCHIBICC_LLVM_AS llvm-as)
-find_llvm_tool(PPCHIBICC_LLVM_OPT opt)
-find_llvm_tool(PPCHIBICC_LLVM_LLC llc)
-find_llvm_tool(PPCHIBICC_LLVM_LINK llvm-link)
-find_llvm_tool(PPCHIBICC_LLVM_PROFDATA llvm-profdata)
-find_llvm_tool(PPCHIBICC_LLVM_CLANG clang)
-find_package(Python3 3.8 QUIET COMPONENTS Interpreter)
-message(STATUS "LLVM tools (optional): llvm-as=${PPCHIBICC_LLVM_AS}; opt=${PPCHIBICC_LLVM_OPT}; llc=${PPCHIBICC_LLVM_LLC}; llvm-link=${PPCHIBICC_LLVM_LINK}")
-message(STATUS "LLVM PGO tools (optional): llvm-profdata=${PPCHIBICC_LLVM_PROFDATA}; clang=${PPCHIBICC_LLVM_CLANG}")
 
 function(add_llvm_target target script compiler dependency output_name description)
   set(tools_found TRUE)
@@ -368,6 +406,101 @@ add_llvm_target(llvm-figures-bench cmake/run-llvm-figures-bench.sh "$<TARGET_FIL
   ppchibicc_stage1 llvm-figures-bench "Measuring collection sorting with held-out PGO workloads"
   "${PPCHIBICC_LLVM_LINK}" "${PPCHIBICC_LLVM_PROFDATA}" "${PPCHIBICC_LLVM_CLANG}"
   "${Python3_EXECUTABLE}")
+
+if(PPCHIBICC_STAGE2_BACKEND STREQUAL "llvm")
+  set(PPCHIBICC_STAGE3_DIR "${CMAKE_BINARY_DIR}/stage3")
+  set(PPCHIBICC_STAGE3_COMPILER "${PPCHIBICC_STAGE3_DIR}/ppchibicc")
+  set(STAGE3_OBJECTS)
+  foreach(source_file IN LISTS PPCHIBICC_SOURCES)
+    get_filename_component(source_name "${source_file}" NAME_WE)
+    set(stage3_ir "${PPCHIBICC_STAGE3_DIR}/ir/${source_name}.ll")
+    set(stage3_object "${PPCHIBICC_STAGE3_DIR}/obj/${source_name}.o")
+    add_custom_command(
+      OUTPUT "${stage3_ir}"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${PPCHIBICC_STAGE3_DIR}/ir"
+      COMMAND "${PPCHIBICC_STAGE2_COMPILER}" -S -emit-llvm -fno-common
+              "-I${CMAKE_SOURCE_DIR}/include" "${source_file}" -o "${stage3_ir}"
+      DEPENDS "${PPCHIBICC_STAGE2_COMPILER}" "${CMAKE_SOURCE_DIR}/${source_file}"
+              "${CMAKE_SOURCE_DIR}/src/chibicc.h" ${PPCHIBICC_BOOTSTRAP_HEADERS}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "Emitting stage3 LLVM IR for ${source_file}"
+      VERBATIM
+    )
+    add_custom_command(
+      OUTPUT "${stage3_object}"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${PPCHIBICC_STAGE3_DIR}/obj"
+      COMMAND "${CMAKE_COMMAND}" -E env
+              "PPCHIBICC_LLVM_OPT=${PPCHIBICC_LLVM_OPT}"
+              "PPCHIBICC_LLVM_LLC=${PPCHIBICC_LLVM_LLC}"
+              "${PPCHIBICC_STAGE2_COMPILER}" --backend=llvm "-O${PPCHIBICC_STAGE2_LLVM_OPTIMIZATION}"
+              -c "${stage3_ir}" -o "${stage3_object}"
+      DEPENDS "${PPCHIBICC_STAGE2_COMPILER}" "${stage3_ir}"
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "Building stage3 LLVM object ${source_name}"
+      VERBATIM
+    )
+    list(APPEND STAGE3_OBJECTS "${stage3_object}")
+  endforeach()
+  add_custom_command(
+    OUTPUT "${PPCHIBICC_STAGE3_COMPILER}"
+    COMMAND "${CMAKE_C_COMPILER}" -std=c11 -g -fno-common -Wall -Wno-switch
+            -o "${PPCHIBICC_STAGE3_COMPILER}" ${STAGE3_OBJECTS}
+    DEPENDS ${STAGE3_OBJECTS}
+    COMMENT "Linking LLVM-built stage3 ppchibicc"
+    VERBATIM
+  )
+  add_custom_target(ppchibicc_stage3 DEPENDS "${PPCHIBICC_STAGE3_COMPILER}")
+  add_ppc_test_binaries(stage3 "${PPCHIBICC_STAGE3_COMPILER}" ppchibicc_stage3
+    "${PPCHIBICC_STAGE3_DIR}/test" STAGE3_TEST_EXECUTABLES)
+  add_custom_target(test-stage3
+    COMMAND "${CMAKE_SOURCE_DIR}/cmake/run-test-suite.sh" "${CMAKE_SOURCE_DIR}"
+            "${PPCHIBICC_STAGE3_COMPILER}" ${STAGE3_TEST_EXECUTABLES}
+    DEPENDS stage3_test_binaries
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    USES_TERMINAL VERBATIM
+  )
+  add_custom_target(test-examples-stage3
+    COMMAND "${CMAKE_SOURCE_DIR}/cmake/run-example-tests.sh"
+            "${CMAKE_SOURCE_DIR}" "${PPCHIBICC_STAGE3_COMPILER}"
+    DEPENDS ppchibicc_stage3
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    USES_TERMINAL VERBATIM
+  )
+  add_llvm_target(test-llvm-stage3 cmake/run-llvm-tests.sh "${PPCHIBICC_STAGE3_COMPILER}"
+    ppchibicc_stage3 llvm-test-stage3 "Checking LLVM IR, execution and ABI from LLVM-built stage3")
+  add_llvm_target(test-llvm-closed-compiler-stage3 cmake/run-llvm-closed-compiler-tests.sh "${PPCHIBICC_STAGE3_COMPILER}"
+    ppchibicc_stage3 llvm-closed-compiler-stage3 "Checking closed programs with LLVM-built stage3"
+    "${PPCHIBICC_LLVM_LINK}" "${Python3_EXECUTABLE}" "${CMAKE_COMMAND}" "${CMAKE_BINARY_DIR}")
+  if(Python3_FOUND AND PPCHIBICC_LLVM_AS)
+    add_custom_target(llvm-selfhost
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/cmake/llvm-selfhost-report.py"
+              --source-dir "${CMAKE_SOURCE_DIR}" --build-dir "${CMAKE_BINARY_DIR}"
+              --seed-compiler "$<TARGET_FILE:ppchibicc_stage1>"
+              --host-cc "${CMAKE_C_COMPILER}"
+              --llvm-as "${PPCHIBICC_LLVM_AS}" --llvm-opt "${PPCHIBICC_LLVM_OPT}"
+              --llvm-llc "${PPCHIBICC_LLVM_LLC}"
+              --optimization "${PPCHIBICC_STAGE2_LLVM_OPTIMIZATION}"
+              --sources ${PPCHIBICC_SOURCES}
+      DEPENDS ppchibicc_stage3
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "Verifying LLVM bootstrap fixed point and writing report"
+      USES_TERMINAL VERBATIM
+    )
+  else()
+    add_custom_target(llvm-selfhost
+      COMMAND "${CMAKE_COMMAND}" -E echo "LLVM bootstrap report requires Python 3.8+ and llvm-as. Set Python3_EXECUTABLE and PPCHIBICC_LLVM_AS."
+      COMMAND "${CMAKE_COMMAND}" -E false VERBATIM)
+  endif()
+  add_custom_target(test-llvm-selfhost)
+  add_dependencies(test-llvm-selfhost llvm-selfhost test-stage3 test-examples-stage3
+    test-llvm-stage3 test-llvm-closed-compiler-stage3)
+else()
+  foreach(target llvm-selfhost test-llvm-selfhost)
+    add_custom_target(${target}
+      COMMAND "${CMAKE_COMMAND}" -E echo "Configure a separate build with -DPPCHIBICC_STAGE2_BACKEND=llvm to use ${target}."
+      COMMAND "${CMAKE_COMMAND}" -E false VERBATIM)
+  endforeach()
+endif()
 
 add_custom_target(distclean
   COMMAND "${CMAKE_COMMAND}"

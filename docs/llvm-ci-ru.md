@@ -1,11 +1,12 @@
 # CI с LLVM
 
 Workflow `.github/workflows/test.yml` запускается при push и pull request.
-Он содержит две независимые проверки на Ubuntu 24.04:
+Он содержит три независимые проверки на Ubuntu 24.04:
 
 | Job | Проверки |
 | --- | --- |
 | `cmake-test-all` | Обычный `test-all`: native stage1, самокомпиляция stage2, тесты C/4П и примеры |
+| `llvm-selfhost-23` | LLVM bootstrap stage2/stage3 при O0; при O2 — сравнение поколений, полный C/4П, LLVM и закрытый набор на stage3 |
 | `llvm-23` | `test-llvm`, `test-llvm-stage2`, `llvm-opt-demo`, `llvm-dispatch-demo`, `llvm-dispatch-report`, `test-llvm-dispatch-report-stage2`, `llvm-static-dispatch-demo`, `test-llvm-static-dispatch-stage2`, `test-llvm-static-dispatch-bench`, `test-llvm-static-dispatch-bench-stage2`, `test-llvm-closed-compiler`, `test-llvm-closed-compiler-stage2`, `llvm-real-programs`, `test-llvm-real-programs-stage2`, `test-llvm-life-bench`, `test-llvm-life-bench-stage2` |
 
 LLVM-набор проверяет IR, выполнение при O0/O2, ABI с системным GCC,
@@ -13,12 +14,14 @@ LLVM-набор проверяет IR, выполнение при O0/O2, ABI с
 диагностики. В него входят скалярный `stdarg` и совместимость `va_list`,
 `.ppc`/`.pph`, пустые списки `()`, switch и
 восемь этапов эволюционного примера фигур с эталонами.
-Сам stage2 пока собирается исходным x86-64 backend, после чего тестируется
-его LLVM-генератор. Полная самокомпиляция через LLVM остаётся отдельной задачей.
+В `llvm-23` stage2 собирается исходным x86-64 backend, после чего тестируется
+его LLVM-генератор. Отдельная job `llvm-selfhost-23` строит stage2 и stage3
+через LLVM, проверяет побайтное совпадение IR/объектов и работу полученного
+компилятора. [Команды и состав проверок](llvm-selfhost-ru.md) описаны отдельно.
 
 ## Инструменты
 
-Обе job используют Python 3.12 и CMake 3.31.6. CMake устанавливается из PyPI;
+Все job используют Python 3.12 и CMake 3.31.6. CMake устанавливается из PyPI;
 GCC, Make, системные заголовки и библиотеки берутся из образа Ubuntu runner.
 Их версии выводятся в лог.
 
