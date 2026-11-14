@@ -162,6 +162,7 @@ static void gen_addr(Node *node) {
     println("  add $%d, %%rax", node->member->offset);
     return;
   case ND_FUNCALL:
+  case ND_VA_ARG:
     if (node->ret_buffer) {
       gen_expr(node);
       return;
@@ -469,6 +470,61 @@ static bool has_flonum2(Type *ty) {
   return has_flonum(ty, 8, 16, 0);
 }
 
+static void aggregate_registers(Type *ty, int *gp, int *fp) {
+  *gp = *fp = 0;
+  for (int i = 0; i < ty->size; i += 8) {
+    if (has_flonum(ty, i, i + 8, 0))
+      (*fp)++;
+    else
+      (*gp)++;
+  }
+}
+
+static void aggregate_va_arg(Node *node) {
+  Type *ty = node->ty;
+  gen_expr(node->lhs);
+  println("  mov %%rax, %%r9");
+  int label = count();
+  if (ty->size <= 16) {
+    int gp, fp;
+    aggregate_registers(ty, &gp, &fp);
+    if (gp) {
+      println("  cmpl $%d, (%%r9)", 48 - gp * 8);
+      println("  ja .L.va.memory.%d", label);
+    }
+    if (fp) {
+      println("  cmpl $%d, 4(%%r9)", 176 - fp * 16);
+      println("  ja .L.va.memory.%d", label);
+    }
+    println("  mov 16(%%r9), %%r10");
+    for (int i = 0; i < ty->size; i += 8) {
+      bool sse = has_flonum(ty, i, i + 8, 0);
+      println("  movl %d(%%r9), %%eax", sse ? 4 : 0);
+      println("  lea (%%r10,%%rax), %%r11");
+      for (int j = 0; j < MIN(8, ty->size - i); j++) {
+        println("  movb %d(%%r11), %%dl", j);
+        println("  movb %%dl, %d(%%rbp)", node->ret_buffer->offset + i + j);
+      }
+      println("  addl $%d, %d(%%r9)", sse ? 16 : 8, sse ? 4 : 0);
+    }
+    println("  jmp .L.va.end.%d", label);
+  }
+  println(".L.va.memory.%d:", label);
+  println("  mov 8(%%r9), %%rax");
+  if (ty->align > 8) {
+    println("  add $%d, %%rax", ty->align - 1);
+    println("  and $%d, %%rax", -ty->align);
+  }
+  println("  lea %d(%%rax), %%r10", align_to(ty->size, 8));
+  println("  mov %%r10, 8(%%r9)");
+  for (int i = 0; i < ty->size; i++) {
+    println("  movb %d(%%rax), %%r10b", i);
+    println("  movb %%r10b, %d(%%rbp)", node->ret_buffer->offset + i);
+  }
+  println(".L.va.end.%d:", label);
+  println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
+}
+
 static void push_struct(Type *ty) {
   int sz = align_to(ty->size, 8);
   println("  sub $%d, %%rsp", sz);
@@ -539,6 +595,7 @@ static int push_args(Node *node) {
   // Load as many arguments to the registers as possible.
   for (Node *arg = node->args; arg; arg = arg->next) {
     Type *ty = arg->ty;
+    arg->pass_by_stack = false;
 
     switch (ty->kind) {
     case TY_STRUCT:
@@ -547,12 +604,11 @@ static int push_args(Node *node) {
         arg->pass_by_stack = true;
         stack += align_to(ty->size, 8) / 8;
       } else {
-        bool fp1 = has_flonum1(ty);
-        bool fp2 = has_flonum2(ty);
-
-        if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
-          fp = fp + fp1 + fp2;
-          gp = gp + !fp1 + !fp2;
+        int need_gp, need_fp;
+        aggregate_registers(ty, &need_gp, &need_fp);
+        if (fp + need_fp <= FP_MAX && gp + need_gp <= GP_MAX) {
+          fp += need_fp;
+          gp += need_gp;
         } else {
           arg->pass_by_stack = true;
           stack += align_to(ty->size, 8) / 8;
@@ -561,20 +617,22 @@ static int push_args(Node *node) {
       break;
     case TY_FLOAT:
     case TY_DOUBLE:
-      if (fp++ >= FP_MAX) {
+      if (fp == FP_MAX) {
         arg->pass_by_stack = true;
         stack++;
-      }
+      } else
+        fp++;
       break;
     case TY_LDOUBLE:
       arg->pass_by_stack = true;
       stack += 2;
       break;
     default:
-      if (gp++ >= GP_MAX) {
+      if (gp == GP_MAX) {
         arg->pass_by_stack = true;
         stack++;
-      }
+      } else
+        gp++;
     }
   }
 
@@ -906,6 +964,10 @@ static void gen_expr(Node *node) {
     gen_expr(node->rhs);
     return;
   case ND_VA_ARG:
+    if (node->ret_buffer) {
+      aggregate_va_arg(node);
+      return;
+    }
     gen_expr(node->lhs);
     return;
   case ND_CAST:
@@ -991,28 +1053,17 @@ static void gen_expr(Node *node) {
 
     for (Node *arg = node->args; arg; arg = arg->next) {
       Type *ty = arg->ty;
+      if (arg->pass_by_stack)
+        continue;
 
       switch (ty->kind) {
       case TY_STRUCT:
       case TY_UNION:
-        if (ty->size > 16)
-          continue;
-
-        bool fp1 = has_flonum1(ty);
-        bool fp2 = has_flonum2(ty);
-
-        if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
-          if (fp1)
+        for (int i = 0; i < ty->size; i += 8) {
+          if (has_flonum(ty, i, i + 8, 0))
             popf(fp++);
           else
             pop(argreg64[gp++]);
-
-          if (ty->size > 8) {
-            if (fp2)
-              popf(fp++);
-            else
-              pop(argreg64[gp++]);
-          }
         }
         break;
       case TY_FLOAT:
@@ -1436,25 +1487,29 @@ static void assign_lvar_offsets(Obj *prog) {
       case TY_STRUCT:
       case TY_UNION:
         if (ty->size <= 16) {
-          bool fp1 = has_flonum(ty, 0, 8, 0);
-          bool fp2 = has_flonum(ty, 8, 16, 8);
-          if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
-            fp = fp + fp1 + fp2;
-            gp = gp + !fp1 + !fp2;
+          int need_gp, need_fp;
+          aggregate_registers(ty, &need_gp, &need_fp);
+          if (fp + need_fp <= FP_MAX && gp + need_gp <= GP_MAX) {
+            fp += need_fp;
+            gp += need_gp;
             continue;
           }
         }
         break;
       case TY_FLOAT:
       case TY_DOUBLE:
-        if (fp++ < FP_MAX)
+        if (fp < FP_MAX) {
+          fp++;
           continue;
+        }
         break;
       case TY_LDOUBLE:
         break;
       default:
-        if (gp++ < GP_MAX)
+        if (gp < GP_MAX) {
+          gp++;
           continue;
+        }
       }
 
       top = align_to(top, 8);

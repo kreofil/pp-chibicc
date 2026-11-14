@@ -21,3 +21,4 @@ trap 'rm -rf "$matrix_tmp"' INT TERM HUP EXIT
 "$source_dir/cmake/run-vla-parameter-tests.sh" "$source_dir" "$compiler" "$matrix_tmp/vla-params"
 "$source_dir/cmake/run-bool-keyword-tests.sh" "$source_dir" "$compiler" "$matrix_tmp/bool-keywords"
 "$source_dir/cmake/run-bitfield-tests.sh" "$source_dir" "$compiler" "$matrix_tmp/bitfields"
+"$source_dir/cmake/run-vararg-record-tests.sh" "$source_dir" "$compiler" "$matrix_tmp/record-varargs"

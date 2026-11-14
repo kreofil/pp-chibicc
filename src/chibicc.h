@@ -249,7 +249,7 @@ typedef enum {
   ND_LABEL,     // Labeled statement
   ND_LABEL_VAL, // [GNU] Labels-as-values
   ND_FUNCALL,   // Function call
-  ND_VA_ARG,    // Typed stdarg access, with a target-specific lowered expression
+  ND_VA_ARG,    // Aggregate: va_list pointer + ret_buffer; scalar: lowered lhs
   ND_EXPR_STMT, // Expression statement
   ND_STMT_EXPR, // Statement expression
   ND_VAR,       // Variable

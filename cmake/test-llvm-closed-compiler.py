@@ -200,6 +200,19 @@ int main(void) { Open.a x; return choose<&x>() != 17; }
                     self.assertEqual(['bit_pair', 'bit_pick', 'bit_scalar', 'bit_variadic']
                                      if name == 'ppc-bitfield' else [], report['selected_families'])
 
+    def test_record_varargs(self):
+        for name, expected in (('stdarg-records', 'record varargs OK\n'),
+                               ('ppc-vararg-records', 'PPC record varargs OK\n')):
+            for mode in ('runtime', 'table', 'switch'):
+                for level in ('0', '2'):
+                    exe = self.out/(name+'-'+mode+'-O'+level+'.exe')
+                    run(options.compiler, '--closed-program', '-O'+level,
+                        '--ppc-dispatch='+mode, self.root/'test'/(name+'.c'), '-o', exe)
+                    self.assertEqual(expected, run(exe).stdout)
+                    report = json.loads(Path(str(exe)+'.closed.json').read_text())
+                    self.assertEqual(['record_pair', 'record_total']
+                                     if name == 'ppc-vararg-records' else [], report['selected_families'])
+
     def test_failed_tools_preserve_outputs(self):
         exe = self.out/'preserve.exe'
         report = Path(str(exe)+'.closed.json')

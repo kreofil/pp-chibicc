@@ -76,6 +76,15 @@ function(add_ppc_test_binaries suite compiler compiler_dependency output_dir out
     file(RELATIVE_PATH test_source_relative "${CMAKE_SOURCE_DIR}" "${test_source}")
     set(test_object "${output_dir}/${test_name}.o")
     set(test_executable "${output_dir}/${test_name}.exe")
+    set(test_headers)
+    if(test_name STREQUAL "stdarg-records" OR test_name STREQUAL "ppc-vararg-records")
+      list(APPEND test_headers "${CMAKE_SOURCE_DIR}/test/stdarg-records.h")
+    endif()
+    if(test_name STREQUAL "stdarg-records")
+      list(APPEND test_headers
+        "${CMAKE_SOURCE_DIR}/test/llvm/support/stdarg-record-functions.h"
+        "${CMAKE_SOURCE_DIR}/test/llvm/support/stdarg-record-checks.h")
+    endif()
 
     add_custom_command(
       OUTPUT "${test_object}"
@@ -84,7 +93,7 @@ function(add_ppc_test_binaries suite compiler compiler_dependency output_dir out
               "-I${CMAKE_SOURCE_DIR}/include"
               "-I${CMAKE_SOURCE_DIR}/test"
               -c -o "${test_object}" "${test_source_relative}"
-      DEPENDS ${compiler_dependency} "${test_source}"
+      DEPENDS ${compiler_dependency} "${test_source}" ${test_headers}
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
       COMMENT "Compiling ${suite} test ${test_name}"
       VERBATIM

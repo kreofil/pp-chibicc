@@ -1,11 +1,12 @@
-#if defined(REJECT_VARARG_AGGREGATE)
-struct S { int x; };
-int take(int n, ...);
-int main(void) { struct S s = {3}; return take(1, s); }
-#elif defined(REJECT_VA_ARG_AGGREGATE)
+#if defined(REJECT_VA_ARG_ATOMIC_RECORD)
 #include <stdarg.h>
-struct S { int n; };
-int pick(int x, ...) { va_list ap; va_start(ap, x); return va_arg(ap, struct S).n; }
+struct S { _Atomic int n; };
+int pick(int x, ...) { va_list ap; va_start(ap,x); return va_arg(ap,struct S).n; }
+int main(void) { return 0; }
+#elif defined(REJECT_VA_ARG_VOLATILE_RECORD)
+#include <stdarg.h>
+struct S { volatile int n; };
+int pick(int x, ...) { va_list ap; va_start(ap,x); return va_arg(ap,struct S).n; }
 int main(void) { return 0; }
 #elif defined(REJECT_UNPROTOTYPED_AGGREGATE)
 struct S { int n; };

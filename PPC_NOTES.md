@@ -3,6 +3,23 @@
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
 
+LLVM now passes structs/unions among unnamed variadic arguments and reads
+them through typed va_arg nodes. The existing INTEGER/SSE/X87 classifier
+controls both call lowering and list consumption. Register pieces are
+reconstructed into reusable function-entry buffers; insufficient GP or SSE
+capacity moves the whole argument to aligned stack storage without consuming
+either register class. va_copy, list sharing across GCC/Clang modules,
+hidden sret parameters, packed/over-aligned/X87 records and PPC variadic
+handlers/multimethods are covered by independent ABI tests at O0/O2.
+Native also reconstructs ordinary GP/SSE aggregate arguments; register
+accounting no longer reserves a second chunk for records of at most eight
+bytes, accepts exact capacity,
+saturates after scalar spills and preserves both budgets on aggregate spills.
+Rebuild native objects exchanging records at those boundaries. Native's
+existing packed/X87/over-aligned/padding ABI limits remain. The 24-byte va_list,
+176-byte save area, PPC registration ABI and metadata v2 are unchanged.
+See docs/llvm-vararg-records-ru.md for use and GCC/Clang bitfield ABI differences.
+
 LLVM supports integer bitfields, including signed/unsigned extraction,
 neighbour-preserving writes, packed 64-bit fields spanning nine bytes,
 initialization, assignment-result truncation and bitfield integer promotions.
@@ -41,9 +58,8 @@ calls and memory fields are supported, including PPC scalar arguments/results.
 IEEE NaN conditions and signed zero are preserved without fast-math flags.
 Floating-point constants use exact LLVM hexadecimal encodings. Scalar SSE
 arguments do not consume the GP register budget used for record ABI.
-External variadic calls accept integer/pointer and float/double arguments,
-including float-to-double default promotion and named aggregate parameters.
-Aggregates among unnamed variadic arguments remain diagnosed by LLVM.
+External variadic calls accept scalar and aggregate arguments, including
+float-to-double default promotion and named aggregate parameters.
 Floating-point semantic and ABI tests use the system C compiler as an
 independent reference, including edge cases with existing native-backend
 limitations (NaN conditions and unsigned 64-bit conversions).

@@ -531,6 +531,95 @@ static char *llvm_argument_slot(Node *arg) {
   error("LLVM backend: aggregate argument has no allocation");
 }
 
+static void llvm_va_arg_memory(char *ap, char *dest, Type *ty) {
+  char *overflow = llvm_offset(ap, 8);
+  char *source = llvm_reg();
+  llvm_print("  %s = load ptr, ptr %s, align 1", source, overflow);
+  if (ty->align > 8) {
+    char *integer = llvm_reg();
+    char *rounded = llvm_reg();
+    char *aligned = llvm_reg();
+    llvm_print("  %s = ptrtoint ptr %s to i64", integer, source);
+    llvm_print("  %s = add i64 %s, %d", rounded, integer, ty->align - 1);
+    llvm_print("  %s = and i64 %s, %d", aligned, rounded, -ty->align);
+    source = llvm_reg();
+    llvm_print("  %s = inttoptr i64 %s to ptr", source, aligned);
+  }
+  char *next = llvm_offset(source, align_to(ty->size, 8));
+  llvm_print("  store ptr %s, ptr %s, align 1", next, overflow);
+  llvm_copy(dest, source, ty);
+}
+
+static char *llvm_va_arg(Node *node) {
+  llvm_check_object(node->ty, node->tok);
+  LlvmAbi abi;
+  llvm_record_abi(node->ty, &abi);
+  char *ap = llvm_expr(node->lhs);
+  char *dest = llvm_addr_var(node->ret_buffer);
+  if (abi.memory || abi.x87) {
+    llvm_va_arg_memory(ap, dest, node->ty);
+    return dest;
+  }
+  if (!abi.count)
+    return dest;
+
+  int needs[2] = {};
+  for (int i = 0; i < abi.count; i++)
+    needs[abi.sse[i]]++;
+  char *cursor_addr[2] = {};
+  char *cursors[2] = {};
+  char *available = NULL;
+  for (int cls = 0; cls < 2; cls++) {
+    if (!needs[cls])
+      continue;
+    cursor_addr[cls] = llvm_offset(ap, cls * 4);
+    cursors[cls] = llvm_reg();
+    llvm_print("  %s = load i32, ptr %s, align 1", cursors[cls], cursor_addr[cls]);
+    char *fits = llvm_reg();
+    llvm_print("  %s = icmp ule i32 %s, %d", fits, cursors[cls],
+               (cls ? 176 : 48) - needs[cls] * (cls ? 16 : 8));
+    if (!available) {
+      available = fits;
+    } else {
+      char *both = llvm_reg();
+      llvm_print("  %s = and i1 %s, %s", both, available, fits);
+      available = both;
+    }
+  }
+  char *registers = llvm_label();
+  char *memory = llvm_label();
+  char *end = llvm_label();
+  llvm_print("  br i1 %s, label %%\"%s\", label %%\"%s\"", available, registers, memory);
+  llvm_terminated = true;
+  llvm_begin(registers);
+  char *save_area = llvm_reg();
+  llvm_print("  %s = load ptr, ptr %s, align 1", save_area, llvm_offset(ap, 16));
+  int used[2] = {};
+  for (int i = 0; i < abi.count; i++) {
+    int cls = abi.sse[i];
+    char *index = llvm_reg();
+    llvm_print("  %s = zext i32 %s to i64", index, cursors[cls]);
+    char *source = llvm_reg();
+    llvm_print("  %s = getelementptr i8, ptr %s, i64 %s", source, save_area, index);
+    source = llvm_offset(source, used[cls]++ * (cls ? 16 : 8));
+    char *value = llvm_reg();
+    llvm_print("  %s = load %s, ptr %s, align 1", value, abi.types[i], source);
+    llvm_store_piece(dest, &abi, i, value);
+  }
+  for (int cls = 0; cls < 2; cls++) {
+    if (!needs[cls])
+      continue;
+    char *next = llvm_reg();
+    llvm_print("  %s = add i32 %s, %d", next, cursors[cls], needs[cls] * (cls ? 16 : 8));
+    llvm_print("  store i32 %s, ptr %s, align 1", next, cursor_addr[cls]);
+  }
+  llvm_branch(end);
+  llvm_begin(memory);
+  llvm_va_arg_memory(ap, dest, node->ty);
+  llvm_begin(end);
+  return dest;
+}
+
 static char *llvm_bool(char *value, Type *ty) {
   llvm_check_scalar(ty, NULL);
   if (ty->kind == TY_VOID)
@@ -793,9 +882,8 @@ static char *llvm_call(Node *node) {
       llvm_unsupported(node->tok, "arguments without a fixed prototype");
     Type *target = param ? param : arg->ty;
     if (llvm_aggregate(target)) {
-      if (!param)
-        llvm_unsupported(arg->tok, node->func_ty->is_unprototyped ?
-                         "aggregate arguments without a prototype" : "aggregate variadic arguments");
+      if (!param && node->func_ty->is_unprototyped)
+        llvm_unsupported(arg->tok, "aggregate arguments without a prototype");
       if (!llvm_aggregate(arg->ty) || !is_assignable(target, arg->ty))
         error_tok(arg->tok, "LLVM backend: incompatible aggregate argument");
       LlvmAbi abi;
@@ -998,7 +1086,7 @@ static char *llvm_expr(Node *node) {
     return llvm_call(node);
   case ND_VA_ARG:
     if (llvm_aggregate(node->ty))
-      llvm_unsupported(node->tok, "aggregate va_arg values");
+      return llvm_va_arg(node);
     llvm_check_scalar(node->ty, node->tok);
     return llvm_expr(node->lhs);
   case ND_MEMZERO:

@@ -4742,9 +4742,17 @@ static Node *primary(Token **rest, Token *tok) {
     if ((ap->ty->kind != TY_PTR && ap->ty->kind != TY_ARRAY && ap->ty->kind != TY_VLA) ||
         !is_compatible(ap->ty->base, fn->ty->params->base))
       error_tok(start, "va_arg requires a va_list argument");
+    ap = new_cast(ap, fn->ty->params);
+    if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+      // Keep the type and list expression for the backend's ABI classifier.
+      // Reuse one entry/local buffer rather than growing the stack in loops.
+      Node *node = new_unary(ND_VA_ARG, ap, start);
+      node->ty = ty;
+      node->ret_buffer = new_lvar("", ty);
+      return node;
+    }
     if (current_fn)
       strarray_push(&current_fn->refs, fn->name);
-    ap = new_cast(ap, fn->ty->params);
     ap->next = new_num(ty->size, start);
     ap->next->next = new_num(ty->align, start);
     Node *call = new_func_call_node(fn, ap, start);
