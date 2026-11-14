@@ -55,6 +55,71 @@ EOF
     check "$name"
 }
 
+expect_fail 'VLA assignment is not allowed' <<'EOF'
+int main(void) { int n = 3; int a[n], b[n]; a = b; return 0; }
+EOF
+grep -q 'not an lvalue' "$tmp/fail.err"
+check 'VLA assignment diagnostic'
+
+expect_fail 'VLA initializer is not allowed' <<'EOF'
+int main(void) { int n = 3; int a[n] = {1}; return 0; }
+EOF
+grep -q 'variable-sized object may not be initialized' "$tmp/fail.err"
+check 'VLA initializer diagnostic'
+
+for code in \
+  'switch (1.0) { case 1: break; }' \
+  'switch ((int *)0) { case 0: break; }' \
+  'switch (x) { case 1.0: break; }' \
+  'switch (x) { case x: break; }' \
+  'switch (x) { case 1: case 1: break; }' \
+  'switch (x) { case -1: case 0xffffffffU: break; }' \
+  'switch ((unsigned)x) { case 0: case 0x100000000UL: break; }' \
+  'switch ((unsigned long)x) { case -1: case 0xffffffffffffffffUL: break; }' \
+  'switch (x) { case 1 ... 5: case 5 ... 7: break; }' \
+  'switch ((unsigned)x) { case -3 ... -1: case 0xffffffffU: break; }' \
+  'switch ((unsigned)x) { case -1 ... 1: break; }' \
+  'switch (x) { default: default: break; }'; do
+    expect_fail "switch rejects $code" <<EOF
+int main(void) { int x = 0; $code return 0; }
+EOF
+done
+
+# Empty C lists retain C11/C17 declaration compatibility and fixed prototypes;
+# empty PPC ordinary lists accept no ordinary arguments.
+for code in \
+  'int f(); int f(float n);' \
+  'int f(); int f(char n);' \
+  'int f(); int f(int n, ...);' \
+  'int f(int n); int f() { return 0; }' \
+  'int f() { return 0; } int f(int n);' \
+  'int f(void); int f(); int g() { return f(1); }' \
+  'int f(int n); int f(); int g() { return f(); }' \
+  'typedef struct X {} case {} X; int f<X *x>() { return 0; } int g() { X x; return f<&x>(1); }' \
+  'typedef struct X {} case {} X; int f<X *x>(); int f<X *x>(int n) { return n; }'; do
+    expect_fail "function parameters reject $code" <<EOF
+$code
+EOF
+done
+
+for type in 'void' 'int[2]' 'int[n]' 'struct Incomplete'; do
+    expect_fail "va_arg rejects $type" <<EOF
+#include <stdarg.h>
+struct Incomplete;
+int f(int n, ...) { va_list ap; va_start(ap, n); va_arg(ap, $type); return 0; }
+EOF
+done
+expect_fail 'va_start requires a variadic function' <<'EOF'
+#include <stdarg.h>
+int f(int n) { va_list ap; va_start(ap, n); return 0; }
+EOF
+for expression in '1' '(void *)0' 'bytes'; do
+    expect_fail "va_arg rejects invalid list $expression" <<EOF
+#include <stdarg.h>
+int f(int n, ...) { char bytes[24]; return va_arg($expression, int); }
+EOF
+done
+
 # Every nullptr constraint violation must produce a diagnostic, not a crash.
 expect_nullptr_fail() {
     name=$1
@@ -241,6 +306,60 @@ check -o
 $chibicc --help 2>&1 | grep -q ppchibicc
 check --help
 
+# Native PPC suffixes use the same frontend as .c and include-only headers.
+mkdir -p "$tmp/extensions"
+cat > "$tmp/extensions/value.pph" <<'EOF'
+#ifndef EXTENSION_VALUE
+#define EXTENSION_VALUE
+typedef struct Value { int common; } case { int number; } Value;
+int measure<Value *v>();
+int helper();
+#endif
+EOF
+echo '#define EXPECTED 12' > "$tmp/extensions/value.h"
+cat > "$tmp/extensions/value.ppc" <<'EOF'
+#include "value.pph"
+int measure<Value *v>() { return v->common; }
+int measure<Value.number *v>() { return v->common + v->number; }
+EOF
+echo 'int helper() { return 5; }' > "$tmp/extensions/helper.c"
+cat > "$tmp/extensions/main.ppc" <<'EOF'
+#include "value.pph"
+#include "value.h"
+int main() { Value.number v = {3, 4}; return measure<&v>() + helper() != EXPECTED; }
+EOF
+$chibicc "$tmp/extensions/main.ppc" "$tmp/extensions/value.ppc" \
+    "$tmp/extensions/helper.c" -o "$tmp/extensions/program"
+check 'automatic .ppc and mixed .c compilation'
+"$tmp/extensions/program"
+check '.pph/.h includes and PPC dispatch'
+$chibicc -M "$tmp/extensions/main.ppc" > "$tmp/extensions/deps"
+grep -q 'value.pph' "$tmp/extensions/deps" && grep -q 'value.h' "$tmp/extensions/deps"
+check '.pph and .h dependencies'
+for suffix in h pph; do
+    header="$tmp/extensions/value.$suffix"
+    $chibicc -E "$header" -o "$tmp/extensions/header-$suffix.i"
+    check "preprocess .$suffix header"
+    $chibicc -M "$header" > "$tmp/extensions/header-$suffix.d"
+    grep -q "value.$suffix" "$tmp/extensions/header-$suffix.d"
+    check "dependencies for .$suffix header"
+    echo preserve > "$tmp/extensions/header.o"
+    $chibicc -c "$header" -o "$tmp/extensions/header.o" 2> "$tmp/extensions/error"
+    [ $? -ne 0 ] && grep -q 'header input' "$tmp/extensions/error" && \
+        [ "$(cat "$tmp/extensions/header.o")" = preserve ]
+    check ".$suffix remains a header"
+    $chibicc -x c -c "$header" -o "$tmp/extensions/header.o"
+    check "explicit -x c for .$suffix"
+done
+cp "$tmp/extensions/helper.c" "$tmp/extensions/helper.custom"
+$chibicc -c "$tmp/extensions/helper.custom" -o "$tmp/extensions/custom.o" 2> "$tmp/extensions/error"
+[ $? -ne 0 ] && grep -q 'unknown file extension' "$tmp/extensions/error"
+check 'unknown suffix requires a language selection'
+$chibicc -x c -c "$tmp/extensions/helper.custom" -o "$tmp/extensions/custom.o"
+check '-x c for another suffix'
+$chibicc -x c -x none -c "$tmp/extensions/value.ppc" -o "$tmp/extensions/reset.o"
+check '-x none restores suffix detection'
+
 # Compiler lookup through PATH must retain the built-in include directory.
 echo '#include <stddef.h>' > $tmp/path-include.c
 echo 'nullptr_t value = nullptr;' >> $tmp/path-include.c
@@ -298,6 +417,31 @@ echo 'int main() {}' > $tmp/foo.c
 (cd $tmp; $chibicc foo.c)
 [ -f $tmp/a.out ]
 check a.out
+
+# Stage boundaries also apply when inputs are already object files.
+mkdir "$tmp/stage-boundaries"
+echo 'int main(void) { return 0; }' > "$tmp/stage-boundaries/main.c"
+"$chibicc" -c "$tmp/stage-boundaries/main.c" -o "$tmp/stage-boundaries/main.o"
+check 'stage-boundary object build'
+(cd "$tmp/stage-boundaries"; "$chibicc" -c main.o && [ ! -e a.out ])
+check '-c object input does not link'
+(cd "$tmp/stage-boundaries"; "$chibicc" -S main.o && [ ! -e a.out ])
+check '-S object input does not link'
+
+# An assembly unit must participate in a mixed C/assembly link.
+echo 'int value(void); int main(void) { return value() != 7; }' > "$tmp/stage-boundaries/caller.c"
+cat > "$tmp/stage-boundaries/value.s" <<'EOF'
+.text
+.globl value
+value:
+  mov $7, %eax
+  ret
+.section .note.GNU-stack,"",@progbits
+EOF
+"$chibicc" "$tmp/stage-boundaries/caller.c" "$tmp/stage-boundaries/value.s" -o "$tmp/stage-boundaries/mixed"
+check 'mixed C/assembly link'
+"$tmp/stage-boundaries/mixed"
+check 'mixed C/assembly result'
 
 # -E
 echo foo > $tmp/out
@@ -816,5 +960,45 @@ EOF
 expect_fail "struct rejects duplicate members from anonymous records" <<'EOF'
 struct Figure { struct { int a; }; union { long a; }; };
 EOF
+
+expect_fail "union rejects nonconstant static value initializer" <<'EOF'
+union Value { int number; } source = {3};
+union Value copy = source;
+EOF
+
+# Only closed-family nonzero indices and extents are integer constants.
+for family in 'case { void first; }' 'enum { first }' \
+              'nullptr { int *first; }' 'union sizeof(16) { int first; }'; do
+  expect_fail "open $family index is not a case constant" <<EOF_OPEN_INDEX
+typedef struct Open {} $family Open;
+int main(void) {
+  switch (0) { case get_subtype_index(Open.first): return 1; }
+  return 0;
+}
+EOF_OPEN_INDEX
+  expect_fail "open $family size is not an enum constant" <<EOF_OPEN_SIZE
+typedef struct Open {} $family Open;
+enum { size = get_spec_size(Open) };
+int main(void) { return 0; }
+EOF_OPEN_SIZE
+done
+expect_fail 'closed indices diagnose duplicate cases after constant folding' <<'EOF'
+typedef struct Closed {} enum { first } const Closed;
+int main(void) {
+  switch (1) { case 1: return 0; case get_subtype_index(Closed.first): return 1; }
+}
+EOF
+
+expect_fail 'closed enum features preserve the TLS initialization diagnostic' <<'EOF'
+typedef struct Closed {} enum { first } const Closed;
+_Thread_local Closed value = Closed.first;
+EOF
+
+if $chibicc --ppc-dispatch=unknown -c "$tmp/empty.c" -o "$tmp/dispatch.o" >"$tmp/dispatch.stdout" 2>"$tmp/dispatch.stderr"; then
+  echo 'invalid PPC dispatch mode was accepted'
+  exit 1
+fi
+grep -q 'unknown PPC dispatch mode' "$tmp/dispatch.stderr"
+check 'PPC dispatch mode diagnostic'
 
 echo OK

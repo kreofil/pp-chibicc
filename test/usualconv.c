@@ -27,6 +27,16 @@ int main() {
 
   ASSERT(10, (1 ? ret10 : (void *)0)());
 
+  ASSERT(4, sizeof(~(unsigned char)0));
+  ASSERT(4, sizeof((unsigned short)1 << 1));
+  ASSERT(4, sizeof((_Bool)1 >> 1));
+  ASSERT(-1, ({ unsigned char c = 0; ~c; }));
+  ASSERT(0, ({ unsigned char c = 1; c >> 8; }));
+  ASSERT(0, ({ unsigned short s = 1; s >> 16; }));
+  ASSERT(256, ({ unsigned char c = 1; c << 8; }));
+  ASSERT(65536, ({ unsigned short s = 1; s << 16; }));
+  ASSERT(-16384, ({ unsigned short s = 65535; ~s >> 2; }));
+
   printf("OK\n");
   return 0;
 }

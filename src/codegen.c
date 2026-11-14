@@ -162,6 +162,7 @@ static void gen_addr(Node *node) {
     println("  add $%d, %%rax", node->member->offset);
     return;
   case ND_FUNCALL:
+  case ND_VA_ARG:
     if (node->ret_buffer) {
       gen_expr(node);
       return;
@@ -232,6 +233,21 @@ static void store(Type *ty) {
   switch (ty->kind) {
   case TY_STRUCT:
   case TY_UNION:
+    // Expanding every byte makes assignments of large arrays-in-records
+    // generate enormous functions. Keep the source value in %rax and
+    // preserve the registers that the byte-at-a-time path leaves intact.
+    if (ty->size > 64) {
+      println("  push %%rdi");
+      println("  push %%rsi");
+      println("  push %%rcx");
+      println("  mov %%rax, %%rsi");
+      println("  mov $%d, %%ecx", ty->size);
+      println("  rep movsb");
+      println("  pop %%rcx");
+      println("  pop %%rsi");
+      println("  pop %%rdi");
+      return;
+    }
     for (int i = 0; i < ty->size; i++) {
       println("  mov %d(%%rax), %%r8b", i);
       println("  mov %%r8b, %d(%%rdi)", i);
@@ -361,12 +377,18 @@ static char f64f80[] = "movsd %xmm0, -8(%rsp); fldl -8(%rsp)";
 
 static char f80i8[] = FROM_F80_1 "fistps" FROM_F80_2 "movsbl -24(%rsp), %eax";
 static char f80u8[] = FROM_F80_1 "fistps" FROM_F80_2 "movzbl -24(%rsp), %eax";
-static char f80i16[] = FROM_F80_1 "fistps" FROM_F80_2 "movzbl -24(%rsp), %eax";
-static char f80u16[] = FROM_F80_1 "fistpl" FROM_F80_2 "movswl -24(%rsp), %eax";
+static char f80i16[] = FROM_F80_1 "fistps" FROM_F80_2 "movswl -24(%rsp), %eax";
+static char f80u16[] = FROM_F80_1 "fistpl" FROM_F80_2 "movzwl -24(%rsp), %eax";
 static char f80i32[] = FROM_F80_1 "fistpl" FROM_F80_2 "mov -24(%rsp), %eax";
-static char f80u32[] = FROM_F80_1 "fistpl" FROM_F80_2 "mov -24(%rsp), %eax";
+static char f80u32[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %eax";
 static char f80i64[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %rax";
-static char f80u64[] = FROM_F80_1 "fistpq" FROM_F80_2 "mov -24(%rsp), %rax";
+// x87 has only signed integer stores. Subtract 2^63 before converting the
+// upper half of uint64_t, then restore its top bit (also used by stage2's
+// compile-time floating evaluator).
+static char f80u64[] = FROM_F80_1
+  "movl $1593835520, -32(%rsp); flds -32(%rsp); fucomip %st(1), %st; ja 1f; "
+  "fsubs -32(%rsp); fistpq -24(%rsp); mov -24(%rsp), %rax; btc $63, %rax; jmp 2f; "
+  "1: fistpq -24(%rsp); mov -24(%rsp), %rax; 2: fldcw -10(%rsp)";
 static char f80f32[] = "fstps -8(%rsp); movss -8(%rsp), %xmm0";
 static char f80f64[] = "fstpl -8(%rsp); movsd -8(%rsp), %xmm0";
 
@@ -394,6 +416,12 @@ static void cast(Type *from, Type *to) {
   if (to->kind == TY_BOOL) {
     cmp_zero(from);
     println("  setne %%al");
+    if (is_flonum(from)) {
+      // An unordered comparison also represents a nonzero scalar: NaN
+      // converts to true, while both signed zeroes convert to false.
+      println("  setp %%dl");
+      println("  or %%dl, %%al");
+    }
     println("  movzx %%al, %%eax");
     return;
   }
@@ -440,6 +468,61 @@ static bool has_flonum1(Type *ty) {
 
 static bool has_flonum2(Type *ty) {
   return has_flonum(ty, 8, 16, 0);
+}
+
+static void aggregate_registers(Type *ty, int *gp, int *fp) {
+  *gp = *fp = 0;
+  for (int i = 0; i < ty->size; i += 8) {
+    if (has_flonum(ty, i, i + 8, 0))
+      (*fp)++;
+    else
+      (*gp)++;
+  }
+}
+
+static void aggregate_va_arg(Node *node) {
+  Type *ty = node->ty;
+  gen_expr(node->lhs);
+  println("  mov %%rax, %%r9");
+  int label = count();
+  if (ty->size <= 16) {
+    int gp, fp;
+    aggregate_registers(ty, &gp, &fp);
+    if (gp) {
+      println("  cmpl $%d, (%%r9)", 48 - gp * 8);
+      println("  ja .L.va.memory.%d", label);
+    }
+    if (fp) {
+      println("  cmpl $%d, 4(%%r9)", 176 - fp * 16);
+      println("  ja .L.va.memory.%d", label);
+    }
+    println("  mov 16(%%r9), %%r10");
+    for (int i = 0; i < ty->size; i += 8) {
+      bool sse = has_flonum(ty, i, i + 8, 0);
+      println("  movl %d(%%r9), %%eax", sse ? 4 : 0);
+      println("  lea (%%r10,%%rax), %%r11");
+      for (int j = 0; j < MIN(8, ty->size - i); j++) {
+        println("  movb %d(%%r11), %%dl", j);
+        println("  movb %%dl, %d(%%rbp)", node->ret_buffer->offset + i + j);
+      }
+      println("  addl $%d, %d(%%r9)", sse ? 16 : 8, sse ? 4 : 0);
+    }
+    println("  jmp .L.va.end.%d", label);
+  }
+  println(".L.va.memory.%d:", label);
+  println("  mov 8(%%r9), %%rax");
+  if (ty->align > 8) {
+    println("  add $%d, %%rax", ty->align - 1);
+    println("  and $%d, %%rax", -ty->align);
+  }
+  println("  lea %d(%%rax), %%r10", align_to(ty->size, 8));
+  println("  mov %%r10, 8(%%r9)");
+  for (int i = 0; i < ty->size; i++) {
+    println("  movb %d(%%rax), %%r10b", i);
+    println("  movb %%r10b, %d(%%rbp)", node->ret_buffer->offset + i);
+  }
+  println(".L.va.end.%d:", label);
+  println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
 }
 
 static void push_struct(Type *ty) {
@@ -512,6 +595,7 @@ static int push_args(Node *node) {
   // Load as many arguments to the registers as possible.
   for (Node *arg = node->args; arg; arg = arg->next) {
     Type *ty = arg->ty;
+    arg->pass_by_stack = false;
 
     switch (ty->kind) {
     case TY_STRUCT:
@@ -520,12 +604,11 @@ static int push_args(Node *node) {
         arg->pass_by_stack = true;
         stack += align_to(ty->size, 8) / 8;
       } else {
-        bool fp1 = has_flonum1(ty);
-        bool fp2 = has_flonum2(ty);
-
-        if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
-          fp = fp + fp1 + fp2;
-          gp = gp + !fp1 + !fp2;
+        int need_gp, need_fp;
+        aggregate_registers(ty, &need_gp, &need_fp);
+        if (fp + need_fp <= FP_MAX && gp + need_gp <= GP_MAX) {
+          fp += need_fp;
+          gp += need_gp;
         } else {
           arg->pass_by_stack = true;
           stack += align_to(ty->size, 8) / 8;
@@ -534,20 +617,22 @@ static int push_args(Node *node) {
       break;
     case TY_FLOAT:
     case TY_DOUBLE:
-      if (fp++ >= FP_MAX) {
+      if (fp == FP_MAX) {
         arg->pass_by_stack = true;
         stack++;
-      }
+      } else
+        fp++;
       break;
     case TY_LDOUBLE:
       arg->pass_by_stack = true;
       stack += 2;
       break;
     default:
-      if (gp++ >= GP_MAX) {
+      if (gp == GP_MAX) {
         arg->pass_by_stack = true;
         stack++;
-      }
+      } else
+        gp++;
     }
   }
 
@@ -654,16 +739,33 @@ static void copy_struct_mem(void) {
 
   println("  mov %d(%%rbp), %%rdi", var->offset);
 
+  if (ty->size > 64) {
+    println("  mov %%rax, %%rsi");
+    println("  mov %%rdi, %%rax");
+    println("  mov $%d, %%ecx", ty->size);
+    println("  rep movsb");
+    return;
+  }
+
   for (int i = 0; i < ty->size; i++) {
     println("  mov %d(%%rax), %%dl", i);
     println("  mov %%dl, %d(%%rdi)", i);
   }
+  // SysV memory returns also return the caller's result-buffer address.
+  // Returning the source address can expose a dead callee frame or argument
+  // area to a following aggregate assignment.
+  println("  mov %%rdi, %%rax");
 }
 
-static void builtin_alloca(void) {
-  // Align size to 16 bytes.
-  println("  add $15, %%rdi");
-  println("  and $0xfffffff0, %%edi");
+static void builtin_alloca(int align) {
+  // Align the result address, including over-aligned VLA elements. Compute
+  // the displacement from alloca_bottom so pending expression temporaries
+  // can be moved by the same amount. Keep the full size_t width throughout.
+  println("  mov %d(%%rbp), %%rax", current_fn->alloca_bottom->offset);
+  println("  sub %%rdi, %%rax");
+  println("  and $%d, %%rax", -MAX(16, align));
+  println("  mov %d(%%rbp), %%rdi", current_fn->alloca_bottom->offset);
+  println("  sub %%rax, %%rdi");
 
   // Shift the temporary area by %rdi.
   println("  mov %d(%%rbp), %%rcx", current_fn->alloca_bottom->offset);
@@ -686,6 +788,79 @@ static void builtin_alloca(void) {
   println("  mov %d(%%rbp), %%rax", current_fn->alloca_bottom->offset);
   println("  sub %%rdi, %%rax");
   println("  mov %%rax, %d(%%rbp)", current_fn->alloca_bottom->offset);
+}
+
+// Normalize the value of the field, including the assignment expression.
+static void normalize_bitfield(Member *mem) {
+  if (mem->bit_width == 64)
+    return;
+  println("  shl $%d, %%rax", 64 - mem->bit_width);
+  println("  %s $%d, %%rax",
+          mem->ty->is_unsigned || mem->ty->kind == TY_BOOL ? "shr" : "sar",
+          64 - mem->bit_width);
+}
+
+static void load_bitfield(Member *mem) {
+  int bytes = (mem->bit_offset + mem->bit_width + 7) / 8;
+  println("  mov %%rax, %%r10");
+  if (bytes == 1)
+    println("  movzbl (%%r10), %%eax");
+  else if (bytes == 2)
+    println("  movzwl (%%r10), %%eax");
+  else if (bytes == 4)
+    println("  movl (%%r10), %%eax");
+  else if (bytes >= 8)
+    println("  movq (%%r10), %%rax");
+  else {
+    println("  xor %%eax, %%eax");
+    for (int i = 0; i < bytes; i++) {
+      println("  movzbl %d(%%r10), %%edx", i);
+      if (i)
+        println("  shl $%d, %%rdx", i * 8);
+      println("  or %%rdx, %%rax");
+    }
+  }
+  if (mem->bit_offset)
+    println("  shr $%d, %%rax", mem->bit_offset);
+  if (bytes == 9) {
+    println("  movzbl 8(%%r10), %%edx");
+    println("  shl $%d, %%rdx", 64 - mem->bit_offset);
+    println("  or %%rdx, %%rax");
+  }
+  normalize_bitfield(mem);
+}
+
+static void store_bitfield(Member *mem) {
+  normalize_bitfield(mem);
+  int bytes = (mem->bit_offset + mem->bit_width + 7) / 8;
+  pop("%rdi");
+  if (!mem->bit_offset && mem->bit_width == bytes * 8 &&
+      (bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8)) {
+    println("  mov %s, (%%rdi)", reg_ax(bytes));
+    return;
+  }
+  println("  mov %%rax, %%r8");
+  for (int i = 0; i < bytes; i++) {
+    int low = MAX(mem->bit_offset, i * 8) - i * 8;
+    int high = MIN(mem->bit_offset + mem->bit_width, (i + 1) * 8) - i * 8;
+    int mask = ((1 << (high - low)) - 1) << low;
+    int shift = i * 8 - mem->bit_offset;
+    println("  mov %%r8, %%rdx");
+    if (shift > 0)
+      println("  shr $%d, %%rdx", shift);
+    else if (shift < 0)
+      println("  shl $%d, %%rdx", -shift);
+    if (mask == 255) {
+      println("  mov %%dl, %d(%%rdi)", i);
+    } else {
+      println("  and $%d, %%edx", mask);
+      println("  movzbl %d(%%rdi), %%ecx", i);
+      println("  and $%d, %%ecx", 255 ^ mask);
+      println("  or %%edx, %%ecx");
+      println("  mov %%cl, %d(%%rdi)", i);
+    }
+  }
+  println("  mov %%r8, %%rax");
 }
 
 // Generate code for a given node.
@@ -754,16 +929,11 @@ static void gen_expr(Node *node) {
     return;
   case ND_MEMBER: {
     gen_addr(node);
-    load(node->ty);
-
     Member *mem = node->member;
-    if (mem->is_bitfield) {
-      println("  shl $%d, %%rax", 64 - mem->bit_width - mem->bit_offset);
-      if (mem->ty->is_unsigned)
-        println("  shr $%d, %%rax", 64 - mem->bit_width);
-      else
-        println("  sar $%d, %%rax", 64 - mem->bit_width);
-    }
+    if (mem->is_bitfield)
+      load_bitfield(mem);
+    else
+      load(node->ty);
     return;
   }
   case ND_DEREF:
@@ -779,24 +949,7 @@ static void gen_expr(Node *node) {
     gen_expr(node->rhs);
 
     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
-      println("  mov %%rax, %%r8");
-
-      // If the lhs is a bitfield, we need to read the current value
-      // from memory and merge it with a new value.
-      Member *mem = node->lhs->member;
-      println("  mov %%rax, %%rdi");
-      println("  and $%ld, %%rdi", (1L << mem->bit_width) - 1);
-      println("  shl $%d, %%rdi", mem->bit_offset);
-
-      println("  mov (%%rsp), %%rax");
-      load(mem->ty);
-
-      long mask = ((1L << mem->bit_width) - 1) << mem->bit_offset;
-      println("  mov $%ld, %%r9", ~mask);
-      println("  and %%r9, %%rax");
-      println("  or %%rdi, %%rax");
-      store(node->ty);
-      println("  mov %%r8, %%rax");
+      store_bitfield(node->lhs->member);
       return;
     }
 
@@ -809,6 +962,13 @@ static void gen_expr(Node *node) {
   case ND_COMMA:
     gen_expr(node->lhs);
     gen_expr(node->rhs);
+    return;
+  case ND_VA_ARG:
+    if (node->ret_buffer) {
+      aggregate_va_arg(node);
+      return;
+    }
+    gen_expr(node->lhs);
     return;
   case ND_CAST:
     gen_expr(node->lhs);
@@ -877,7 +1037,7 @@ static void gen_expr(Node *node) {
     if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca")) {
       gen_expr(node->args);
       println("  mov %%rax, %%rdi");
-      builtin_alloca();
+      builtin_alloca(node->alloca_align);
       return;
     }
 
@@ -893,28 +1053,17 @@ static void gen_expr(Node *node) {
 
     for (Node *arg = node->args; arg; arg = arg->next) {
       Type *ty = arg->ty;
+      if (arg->pass_by_stack)
+        continue;
 
       switch (ty->kind) {
       case TY_STRUCT:
       case TY_UNION:
-        if (ty->size > 16)
-          continue;
-
-        bool fp1 = has_flonum1(ty);
-        bool fp2 = has_flonum2(ty);
-
-        if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
-          if (fp1)
+        for (int i = 0; i < ty->size; i += 8) {
+          if (has_flonum(ty, i, i + 8, 0))
             popf(fp++);
           else
             pop(argreg64[gp++]);
-
-          if (ty->size > 8) {
-            if (fp2)
-              popf(fp++);
-            else
-              pop(argreg64[gp++]);
-          }
         }
         break;
       case TY_FLOAT:
@@ -1240,15 +1389,24 @@ static void gen_stmt(Node *node) {
       char *di = (node->cond->ty->size == 8) ? "%rdi" : "%edi";
 
       if (n->begin == n->end) {
-        println("  cmp $%ld, %s", n->begin, ax);
+        if (node->cond->ty->size == 8 && n->begin != (int)n->begin) {
+          println("  mov $%ld, %%rdi", n->begin);
+          println("  cmp %%rdi, %%rax");
+        } else {
+          println("  cmp $%ld, %s", n->begin, ax);
+        }
         println("  je %s", n->label);
         continue;
       }
 
       // [GNU] Case ranges
+      char *r8 = (node->cond->ty->size == 8) ? "%r8" : "%r8d";
+      unsigned long span = (unsigned long)n->end - (unsigned long)n->begin;
       println("  mov %s, %s", ax, di);
-      println("  sub $%ld, %s", n->begin, di);
-      println("  cmp $%ld, %s", n->end - n->begin, di);
+      println("  mov $%ld, %s", n->begin, r8);
+      println("  sub %s, %s", r8, di);
+      println("  mov $%ld, %s", (long)span, r8);
+      println("  cmp %s, %s", r8, di);
       println("  jbe %s", n->label);
     }
 
@@ -1329,25 +1487,29 @@ static void assign_lvar_offsets(Obj *prog) {
       case TY_STRUCT:
       case TY_UNION:
         if (ty->size <= 16) {
-          bool fp1 = has_flonum(ty, 0, 8, 0);
-          bool fp2 = has_flonum(ty, 8, 16, 8);
-          if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
-            fp = fp + fp1 + fp2;
-            gp = gp + !fp1 + !fp2;
+          int need_gp, need_fp;
+          aggregate_registers(ty, &need_gp, &need_fp);
+          if (fp + need_fp <= FP_MAX && gp + need_gp <= GP_MAX) {
+            fp += need_fp;
+            gp += need_gp;
             continue;
           }
         }
         break;
       case TY_FLOAT:
       case TY_DOUBLE:
-        if (fp++ < FP_MAX)
+        if (fp < FP_MAX) {
+          fp++;
           continue;
+        }
         break;
       case TY_LDOUBLE:
         break;
       default:
-        if (gp++ < GP_MAX)
+        if (gp < GP_MAX) {
+          gp++;
           continue;
+        }
       }
 
       top = align_to(top, 8);
@@ -1372,6 +1534,9 @@ static void assign_lvar_offsets(Obj *prog) {
       var->offset = -bottom;
     }
 
+    // Six GP slots and eight 16-byte SSE slots, separate from the va_list record.
+    if (fn->va_area)
+      bottom = align_to(bottom, 16) + 176;
     fn->stack_size = align_to(bottom, 16);
   }
 }
@@ -1399,6 +1564,8 @@ static void emit_data(Obj *prog) {
     if (var->init_data) {
       if (var->is_tls)
         println("  .section .tdata,\"awT\",@progbits");
+      else if (var->is_readonly)
+        println("  .section .data.rel.ro,\"aw\",@progbits");
       else
         println("  .data");
 
@@ -1497,38 +1664,41 @@ static void emit_text(Obj *prog) {
     // Save arg registers if function is variadic
     if (fn->va_area) {
       int gp = 0, fp = 0;
+      int overflow = 16;
       for (Obj *var = fn->params; var; var = var->next) {
-        if (is_flonum(var->ty))
+        Type *ty = var->ty;
+        if (var->offset > 0) {
+          overflow = MAX(overflow, var->offset + align_to(ty->size, 8));
+          continue;
+        }
+        if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+          for (int i = 0; i < ty->size; i += 8) {
+            if (has_flonum(ty, i, i + 8, 0)) fp++;
+            else gp++;
+          }
+        } else if (is_flonum(ty)) {
           fp++;
-        else
+        } else {
           gp++;
+        }
       }
 
       int off = fn->va_area->offset;
+      int reg_save = -fn->stack_size;
 
       // va_elem
-      println("  movl $%d, %d(%%rbp)", gp * 8, off);          // gp_offset
-      println("  movl $%d, %d(%%rbp)", fp * 8 + 48, off + 4); // fp_offset
-      println("  movq %%rbp, %d(%%rbp)", off + 8);            // overflow_arg_area
-      println("  addq $16, %d(%%rbp)", off + 8);
-      println("  movq %%rbp, %d(%%rbp)", off + 16);           // reg_save_area
-      println("  addq $%d, %d(%%rbp)", off + 24, off + 16);
+      println("  movl $%d, %d(%%rbp)", MIN(gp, GP_MAX) * 8, off);
+      println("  movl $%d, %d(%%rbp)", MIN(fp, FP_MAX) * 16 + 48, off + 4);
+      println("  lea %d(%%rbp), %%rax", overflow);
+      println("  movq %%rax, %d(%%rbp)", off + 8);
+      println("  lea %d(%%rbp), %%rax", reg_save);
+      println("  movq %%rax, %d(%%rbp)", off + 16);
 
       // __reg_save_area__
-      println("  movq %%rdi, %d(%%rbp)", off + 24);
-      println("  movq %%rsi, %d(%%rbp)", off + 32);
-      println("  movq %%rdx, %d(%%rbp)", off + 40);
-      println("  movq %%rcx, %d(%%rbp)", off + 48);
-      println("  movq %%r8, %d(%%rbp)", off + 56);
-      println("  movq %%r9, %d(%%rbp)", off + 64);
-      println("  movsd %%xmm0, %d(%%rbp)", off + 72);
-      println("  movsd %%xmm1, %d(%%rbp)", off + 80);
-      println("  movsd %%xmm2, %d(%%rbp)", off + 88);
-      println("  movsd %%xmm3, %d(%%rbp)", off + 96);
-      println("  movsd %%xmm4, %d(%%rbp)", off + 104);
-      println("  movsd %%xmm5, %d(%%rbp)", off + 112);
-      println("  movsd %%xmm6, %d(%%rbp)", off + 120);
-      println("  movsd %%xmm7, %d(%%rbp)", off + 128);
+      for (int i = 0; i < GP_MAX; i++)
+        println("  movq %s, %d(%%rbp)", argreg64[i], reg_save + i * 8);
+      for (int i = 0; i < FP_MAX; i++)
+        store_fp(i, reg_save + 48 + i * 16, 8);
     }
 
     // Save passed-by-register arguments to the stack

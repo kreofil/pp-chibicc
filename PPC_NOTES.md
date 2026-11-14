@@ -3,7 +3,598 @@
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
 
+LLVM self-hosting is verified without further frontend/backend changes.
+The optional CMake PPCHIBICC_STAGE2_BACKEND=llvm mode builds stage2 through
+LLVM, then stage2 builds stage3 with the same optimization level and tools.
+llvm-selfhost checks identical raw IR and objects for all compiler modules,
+generation of C/4P fixtures by seed/stage2/stage3, diagnostics and executions.
+test-llvm-selfhost adds the complete native, LLVM, example and closed-program
+stage3 suites. O0/O2 bootstrap reports and full O2 stage3 checks run in CI;
+focused LLVM 19/21/23 checks pass locally. The default stage2 remains native,
+and bin/installation still use stage1. Public 4P semantics, registration ABI
+and metadata v2 are unchanged. See docs/llvm-selfhost-ru.md.
+
+LLVM now passes structs/unions among unnamed variadic arguments and reads
+them through typed va_arg nodes. The existing INTEGER/SSE/X87 classifier
+controls both call lowering and list consumption. Register pieces are
+reconstructed into reusable function-entry buffers; insufficient GP or SSE
+capacity moves the whole argument to aligned stack storage without consuming
+either register class. va_copy, list sharing across GCC/Clang modules,
+hidden sret parameters, packed/over-aligned/X87 records and PPC variadic
+handlers/multimethods are covered by independent ABI tests at O0/O2.
+Native also reconstructs ordinary GP/SSE aggregate arguments; register
+accounting no longer reserves a second chunk for records of at most eight
+bytes, accepts exact capacity,
+saturates after scalar spills and preserves both budgets on aggregate spills.
+Rebuild native objects exchanging records at those boundaries. Native's
+existing packed/X87/over-aligned/padding ABI limits remain. The 24-byte va_list,
+176-byte save area, PPC registration ABI and metadata v2 are unchanged.
+See docs/llvm-vararg-records-ru.md for use and GCC/Clang bitfield ABI differences.
+
+LLVM supports integer bitfields, including signed/unsigned extraction,
+neighbour-preserving writes, packed 64-bit fields spanning nine bytes,
+initialization, assignment-result truncation and bitfield integer promotions.
+Named bitfield bytes contribute INTEGER to the aggregate ABI; anonymous
+padding does not consume registers. Shared frontend/native corrections cover
+packed/anonymous field layout, positional initialization, Boolean fields and
+prefix/postfix wraparound with one evaluation of the containing expression.
+GNU typeof of compound bitfield expressions yields the full underlying type,
+matching Clang, without leaking an expression's width into declared variables.
+Rebuild all objects exchanging affected records. PPC tag values and handler
+registration ABI are unchanged. Runtime/table/switch and closed-program tests
+exercise bitfields in polymorphic handlers. GCC/Clang disagree on some rare
+packed nested and mixed X87 shapes; see docs/llvm-bitfields-ru.md for the
+interop boundaries and diagnostics.
+
+The experimental `-S -emit-llvm` backend emits LLVM IR for a limited C subset
+on Linux x86-64, alongside the original assembly backend. It now supports
+struct/union storage, member access and copying, plus the existing PPC runtime
+lowering through `llvm.global_ctors` and `llvm.global_dtors` with unchanged
+registration priorities and common symbols. Existing PPC semantics and ABI
+remain unchanged. Aggregates with integer, pointer, float and double fields
+pass and return by value using the Linux x86-64 System V ABI: INTEGER/SSE
+eightbytes, whole-argument spill on register exhaustion, byval memory arguments
+and sret result buffers. INTEGER wins when overlapping or adjacent fields
+share an eightbyte; two floats in an SSE eightbyte use LLVM <2 x float>.
+The six GP and eight SSE argument registers are counted independently, and
+spilling an aggregate leaves both budgets available to later arguments.
+Packed records with unaligned fields use memory; padding-only eightbytes do
+not consume registers. Argument snapshots are allocated once in function entry.
+The parser records explicit hidden result parameters, also for generated PPC
+abort handlers returning large records. Local union initialization from a union
+value or function result is supported; static union expression initializers
+are diagnosed. Ordinary C and PPC ABI interoperability is covered by tests.
+Scalar float/double arithmetic, comparisons, conversions, direct/indirect
+calls and memory fields are supported, including PPC scalar arguments/results.
+IEEE NaN conditions and signed zero are preserved without fast-math flags.
+Floating-point constants use exact LLVM hexadecimal encodings. Scalar SSE
+arguments do not consume the GP register budget used for record ABI.
+External variadic calls accept scalar and aggregate arguments, including
+float-to-double default promotion and named aggregate parameters.
+Floating-point semantic and ABI tests use the system C compiler as an
+independent reference, including edge cases with existing native-backend
+limitations (NaN conditions and unsigned 64-bit conversions).
+Tests cover case/enum dispatch, startup completeness,
+runtime errors, separate compilation and mixed native/LLVM objects, with
+LLVM 19, 21 and 23. The ppc-floating example exercises double payloads, ordinary
+double arguments/results and printf output. The ppc-floating-by-value example
+adds ordinary double-aggregate arguments/results and mixed integer/SSE results
+of PPC handlers. Multifile tests exchange these records across native/LLVM
+objects; record ABI tests cover nested arrays, unions, register rollback,
+packed/aligned records and calls in both directions with the system compiler.
+Interoperability was also checked with Clang 21 and 23 at LLVM O0 and O2.
+See `docs/llvm-backend-ru.md` for examples and limitations.
+LLVM now lowers ordinary switch/case/default to the LLVM switch instruction,
+preserving fallthrough, nested loops, break/continue and goto entry into cases.
+GNU case ranges use modular subtraction and unsigned bounds checks without
+expanding the range. The shared parser applies integer promotions, retains
+64-bit case values, converts labels to the condition type and rejects duplicate
+or overlapping labels/defaults. Constant folding now preserves the width and
+signedness of intermediate integers; unsigned arithmetic avoids host signed
+overflow. Native 64-bit switch comparisons also load constants that do not fit
+an immediate, and range spans are computed without signed overflow. These C
+semantic corrections leave the PPC ABI unchanged. Shared native/LLVM tests
+cover narrow/wide types, boundary values, ranges, Duff's device and diagnostics.
+All 15 units of direct-classic/01-start now compile through LLVM, with CTest
+fixture checks. See `docs/llvm-switch-ru.md`, including the reproducible audit
+of the other standalone CMake examples and the remaining compatibility gaps.
+The eight CMake projects blocked by empty ordinary argument lists now use
+explicit (void) in the relevant PPC declarations, definitions and handlers,
+including ppList_sort, FigurePerimeter, DrawCell/isLife, FigureDestroy and
+RunThread. Calls still use empty parentheses after the PPC arguments. The
+example migration changes no PPC dispatch rules or ABI. The LLVM suites
+now reuse all eight evolutionary figure fixtures at O0/O2, including stage2.
+A repeated audit builds 23 of 38 standalone CMake projects through LLVM 23;
+15 figure outputs match their fixtures. The remaining 15 failures concern
+CMake language/header settings. See docs/llvm-void-signatures-ru.md.
+Empty () signatures now work directly in ordinary C and PPC LLVM definitions,
+declarations and indirect calls. Type.is_unprototyped separates the C11/C17
+unspecified-parameter type from true ellipsis varargs. Empty C definitions
+have zero parameters; unprototyped scalar calls retain default promotions
+and the System V call ABI. Later prototypes refine earlier declarations
+without replacing a known prototype with an unspecified list. Compatibility
+checks account for default promotions. Empty PPC ordinary lists are fixed
+zero-argument lists, interchangeable with (void), while procedural arguments
+remain explicit. LLVM emits fixed definitions and variadic-spelled C
+declarations/calls where parameter types are unspecified, and for actual
+ellipsis signatures. Aggregate arguments without a prototype remain diagnosed.
+Native/stage2 and LLVM 19/21/23 tests cover function pointers, type/refinement
+rules, scalar host ABI, small/large aggregate results, multimethods, strict
+enum dispatch, and mixed native/LLVM modules. PPC ABI is unchanged.
+The compiler now recognizes .ppc implementation files automatically alongside
+.c in both backends. It classifies .h/.pph as headers for includes and direct
+-E/-M processing; separate compilation requires an explicit -x c override.
+There is no PCH generation. Include lookup itself remains suffix-independent.
+Unknown implementation suffixes still require -x c; -x none restores detection.
+Native/stage2 and LLVM driver tests cover mixed .c/.ppc units, .pph/.h includes,
+dependencies, raw IR, header diagnostics and explicit overrides. CMake still
+needs LANGUAGE C for .ppc and HEADER_FILE_ONLY for headers; examples' CMake
+files are left for their separate maintenance step.
+GitHub Actions now has separate native and LLVM 23 jobs on Ubuntu 24.04.
+The LLVM job runs stage1/stage2 O0/O2/ABI/driver checks plus optimization and
+dispatch demos. Python 3.12/CMake 3.31.6 and checksum-pinned LLVM 23.1.6
+packages provide a reproducible setup without system APT updates. Official
+LLVM packages are extracted without root and the compressed downloads are
+cached; tools verify the expected version. Failure artifacts preserve LLVM
+diagnostics. See docs/llvm-ci-ru.md. Stage2 itself is still built natively.
+Variadic C and PPC definitions now support scalar va_start/va_arg/va_copy/va_end
+and forwarding va_list to libc or other GCC/Clang modules. LLVM initializes a
+private 24-byte va_list through llvm.va_start and ends it on each normal return
+or fallthrough. Typed ND_VA_ARG accesses retain diagnostics for aggregate retrieval while
+lowering scalar accesses through stdarg helpers.
+The native backend now uses the System V register-save layout: six 8-byte GP
+slots and eight 16-byte SSE slots. It reserves that area separately, accounts
+for named stack arguments and named register classes, and clamps the offsets.
+stdarg.h shares this ABI in both backends; long double uses stack memory.
+Existing native objects creating/reading/passing va_list need a clean rebuild
+because the earlier private SSE layout used 8-byte slots. PPC tags, tables and
+dispatch ABI are unchanged. Native/stage2 and LLVM 19/21/23 tests cover register
+exhaustion, interleaving, pointers, promotions, independent cursors/restarts,
+libc forwarding, named records and sret, strict/PPC multimethods, and mixed
+native/LLVM units. See docs/llvm-varargs-ru.md.
+LLVM now supports long double as x86_fp80 (64-bit significand, 80 value bits,
+16-byte storage/alignment), including exact 0xK constants, scalar arithmetic,
+conversions, IEEE conditions, direct/indirect/unprototyped calls and stdarg.
+Scalar long-double arguments use the stack without consuming GP/SSE budgets;
+results use st(0). Record ABI classification merges X87/X87UP with INTEGER/SSE:
+X87 records use byval arguments and x86_fp80 results, other records use the
+appropriate integer pieces or memory/sret. GCC/Clang helpers check both call
+directions, named stack arguments, variadic cursors/copies/forwarding and
+small/large/packed aggregates. PPC tests cover long-double payloads, scalar
+and aggregate parameters/results, variadic dispatch and mixed native/LLVM
+scalar modules. Existing native small-record X87 ABI remains a separate limit;
+exchange these records through pointers or compile their functions with LLVM.
+The shared constant evaluator now preserves long-double precision, rounds
+intermediate floating types/casts, evaluates floating comparisons/truths,
+and converts unsigned floating results without passing through int64_t.
+Global long-double initializers serialize ten value bytes and zero padding.
+Native long-double-to-short/unsigned-short/unsigned-int/unsigned-long casts
+are corrected, including the upper uint64_t half used by self-hosted stage2.
+Public PPC tags, registration and dispatch rules are unchanged. See
+`docs/llvm-long-double-ru.md` for the ABI and regression commands.
+Closed case/enum/nullptr/union families now have declaration-order constant
+indices: zero/default is 0, nonzero alternatives are 1..N, and get_spec_size
+includes zero. get_subtype_index and get_spec_size are integer constant
+expressions for visible closed definitions (case labels, C enums, array bounds
+and static initializers). Member.ppc_tag_base retains the owning family through
+specialization/nested-type copies, so tag reads, enum feature assignments,
+local/global initialization, create_spec/init_spec and handler registration
+agree. Explicit global initializers serialize fixed tags directly; tentative
+and implicit-static objects retain startup initialization to preserve common
+symbol merging. Shared tag/count metadata remains available to opaque modules;
+closed registration writes fixed values instead of startup-order increments.
+All objects/libraries exchanging closed PPC types must be clean rebuilt.
+Open-family nonzero tags/extents remain runtime values. Dispatch tables and
+handler registration remain dynamic at this stage, including mixed open/closed
+multimethods. The guarded local stage below builds on these constants; future multimethod
+optimization is restricted to functions whose procedural families are all
+closed and whose handler set is known; no automatic macros or source-closing utility are introduced. Native,
+stage2, LLVM and independent host startup tests cover all four forms, empty and
+named zero cases, static data, nesting, mutable enum tags, side effects, strict
+completeness, opaque declarations and mixed native/LLVM modules. See
+`docs/ppc-closed-indices-ru.md`.
+Closed dispatch now has a guarded local optimization, including multimethods
+when every procedural parameter family is closed. After parsing the unit,
+complete local coverage produces a private immutable pointer-array catalog.
+A real all-general default fills holes and concrete tuples override it,
+independent of source order. Generated abort stubs do not count as defaults.
+The limit is 16 cells in the product of all extents, including zero on each
+axis; the product is checked before multiplication. The flattened selector
+uses the same row-major coordinates as the shared runtime table.
+Bodies can be in other units, and declarations after a call are considered.
+Each optimized call snapshots the object tags and active runtime handler once,
+then checks that handler against the catalog. A match uses the catalog/table
+call or an explicit switch of direct calls; a mismatch retains the active
+indirect call. Runtime tables/constructors and ABI remain available for other
+units, including private handlers registered from native/LLVM modules. Closed
+types do not imply a closed handler registry. Partial sets without a real
+default, any open/opaque parameter and over-limit grids retain runtime dispatch.
+--ppc-dispatch=auto|runtime|table|switch selects the representation; auto uses
+switch for LLVM and runtime natively. Existing LLVM opt can inline known switch
+branches while retaining the guard/fallback. Generic typed AST lowering covers
+void/scalars, records/sret and varargs. Arguments are snapshotted before
+branching so nested dispatch labels are emitted once; array/VLA/function arguments
+decay to pointers and records are copied without aggregate casts. Catalogs
+use LLVM internal constant pointer arrays and native .data.rel.ro; function
+roots referenced by them are retained. Native/stage2 and LLVM tests cover all
+modes, late definitions, all four families, tag mutation, argument side effects,
+record/variadic ABI and separately registered overriding handlers in both link
+orders and mixed backends. New multimethod fixtures cover every cell in 2x3,
+2x3x2 and 2x2 grids, early/late defaults, records, sret plus variadic stack
+arguments, all six orders of three objects, and a third opaque unit.
+Removing the external real default must abort for closed incompleteness before
+main, regardless of object order; opaque error stubs cannot mask that check.
+A VLA fixture verifies variadic pointer decay in native/LLVM and closed mode.
+
+The startup registration protocol has changed for both native and LLVM PPC
+objects: priority 201 only allocates a zeroed table, priority 301 concrete
+registrations overwrite their cells and actual defaults fill only null cells,
+priority 351 checks closed families without a local actual default, and
+priority 361 fills remaining open/opaque holes with abort stubs. Thus real
+defaults work before or after concrete handlers and across translation units.
+All objects/libraries containing PPC functions/registrations must be cleanly
+rebuilt together. Old constructors prefill tables and must not be mixed with
+this protocol; ordinary C libraries require no rebuild. Closed tag numbers,
+object layouts and function calling conventions are unchanged. See
+`docs/ppc-closed-dispatch-ru.md`.
+LLVM modules now carry descriptive !ppchibicc.dispatch named metadata with
+the ppchibicc.dispatch.v2 schema (the report reader also accepts v1).
+A frontend snapshot exposes each family;
+fixed axes, alternative names/order, type size/alignment, lowered ABI and
+handler coordinates are emitted only for all-closed procedural arguments.
+Open/opaque participants contribute exclusion records. Unit markers include
+ordinary C units. Handler/table operands are real LLVM pointer references,
+preserving internal symbol renaming across llvm-as/opt/llvm-link. Definition
+and original linkage flags distinguish declarations and private registrations.
+This adds no runtime ABI or registration changes.
+
+cmake/ppc-dispatch-report.py collects raw or linked textual IR into JSON and
+Markdown matrices. Concrete coordinates override generic defaults; repeated
+external declarations resolve to definitions, while different private
+registrations stay distinct and order-dependent. Missing definitions/IR
+bodies, removed pointers, opaque participants, inconsistent axes/ABI and
+duplicate definitions prevent a resolved conclusion. Matrix expansion is
+bounded separately from local switch optimization (4096 report cells by
+default). The report explicitly does not establish whole-program completeness
+and does not apply optimization. Supplied modules may still omit other native
+objects, archives or registrations. Runtime allocation, constructors and guards
+remain necessary until a later whole-program validation stage.
+
+llvm-dispatch-report and test-llvm-dispatch-report-stage2 require Python 3.8+
+and matching LLVM tools including llvm-link. The three-unit closed-registry
+example verifies all six object orders; regression cases cover all four type
+forms, external bodies, private overrides/defaults, incomplete/inconsistent
+metadata, bitcode and O2, quoted UTF-8 paths and input-error preservation.
+Both targets are included in LLVM CI. See docs/ppc-dispatch-report-ru.md.
+
+The separate ppc-static-dispatch.py executable mode now accepts an explicitly
+complete set of raw ppchibicc v2 LLVM units and --closed-program. Resolved
+all-closed families can be frozen into private immutable pointer arrays and
+internal constant table cells. The frontend describes allocate/release,
+concrete/default registration and completeness-check functions as real LLVM
+references. The tool checks counts, definitions, ownership and actual startup
+priorities, audits table loads and derived addresses for writes/escapes, and
+rejects unknown application dependencies (only the supported C/POSIX runtime
+and LLVM intrinsics may remain external). Open/opaque participants, missing
+cells/definitions, conflicting registrations and inconsistent axes/ABI exclude
+a family; explicitly requesting it fails. Native application objects, merged
+or preoptimized inputs and old metadata cannot establish this contract.
+
+After validation, the selected table lifecycle entries/bodies are removed,
+actual handler definitions are internalized, and the output is assembled and
+verified before atomic publication. Input SHA256s, selected matrices, removed
+functions and output SHA256 are recorded; an explicit-input-set manifest hash
+is also embedded in !ppchibicc.closed_program. This is an explicit complete-
+input contract, not automatic discovery of every possible library. Adding a
+handler module requires rebuilding the closed program. Unselected/open tables
+and required tag/carrier/global initialization retain their runtime behavior.
+
+Compiler-owned table-slot additions now carry a Node marker and use byte GEP
+without inbounds in LLVM. This exposes constant entries without changing
+ordinary C pointer/integer lowering or native code generation. The 2x3 example
+removes 11 lifecycle functions and LLVM O2 reduces registry_known to ret i32
+507, while runtime dispatch retains an indirect call. Current LLVM 23 dispatch
+demo raw/O2 counts are 101/45 (known), 139/64 (closed), 201/87 (multi), and
+99/43 (open); these are static metrics, not speed measurements. ABI/tag values
+are unchanged. Static-dispatch stage1/stage2 CI tests cover all three modes,
+six module orders, records/sret/varargs, all four closed forms, a private handler
+that overrides a locally known default, adjacent open/opaque runtime families,
+metadata/priority completeness, unknown dependencies and table address escapes.
+See docs/ppc-static-dispatch-ru.md.
+The optional llvm-static-dispatch-bench compares runtime, guarded switch,
+static-table and static-switch with all-closed 2x3/2x3x2 families, short and
+six-step unsigned-mixing handlers, and shuffled uniform/hot90 records.
+Checksums and default/concrete counters are independently checked in scalar
+C and Python: 256 cases include empty/single/small/full batches and boundary
+seeds, plus 52 invalid argument cases. Every calibration/timing sample is also
+checked. Existing llvm_bench.py supplies affinity, equal work per workload,
+shuffled repeats, calibration and median/MAD/CPU statistics.
+
+The timer's raw LLVM unit participates in the complete input set at closure.
+Code generation then partitions that same registry-free unit into one shared
+timer object and lowers the remaining core into four objects, without linker
+LTO. Four noinline batch kernels preserve a common boundary while handlers
+remain available for inlining. Catalogs, timer clock/call boundaries, closure
+lifecycle removal and retained batch calls are checked. This respects the
+complete-input contract without adding an unknown native application module.
+Commands/versions, source SHA256s, input histograms/snapshots, IR metrics,
+assembler and per-kernel/whole-core code sizes are retained. Compiler
+internals, ABI and tag semantics are unchanged. Default timing runs 224 samples;
+stage1/stage2 CI uses check-only without performance gates. See
+docs/llvm-static-dispatch-benchmark-ru.md.
+Real application checks now compare three unchanged source subsets from
+kreofil/4P-examples at 9e8f1f1c07ef08e845f877c8dac7a804ef9c0af4:
+specialized ordinary parameters/results (spec-param), the open two-argument
+visitor-mm, and the three-unit integer ppVector example. Source paths and
+SHA256s are pinned; no network is needed. A separate adapter covers and invokes
+Figure.void before calling the unchanged spec-param main. The original is
+also tested: its missing tag-0 Print handler must abort before main, or fail at
+build time when explicitly required with --closed-family=Print. This preserves
+the existing completeness rules rather than silently accepting an empty slot.
+
+Each compiler builds and runs 30 programs: native, per-unit LLVM O0/O2 and
+whole-program O0/O2 for five successful cases plus the historical negative
+case. The current repository spec-param (open Figure) and an adapter calling
+its own Figure.void handler are successful runtime cases; the pinned closed
+4P-examples version and its independent adapter remain separate checks. Expected output is specified independently, with a scalar Python vector
+reference. Raw matrices, frozen IR and public-compiler manifests are checked;
+Print freezes into three addresses and loses six lifecycle functions, while
+both open examples retain their runtime tables. Reports keep input/executable
+SHA256s, tools, commands, stdout/stderr and complete ELF section sizes. An
+optional --examples-dir checks a separate upstream checkout with actual hashes
+and its Git HEAD. Stage1/stage2 targets llvm-real-programs and
+test-llvm-real-programs-stage2 are included in LLVM CI.
+
+The vector revealed that the strict closed-program runtime allowlist omitted
+libc reallocarray; it is now included. A C execution regression and the closed
+compiler suite check allocation/growth and multiplication-overflow failure,
+including preserved contents and ENOMEM. Unknown application dependencies
+still require their IR. No compiler ABI, type/tag semantics or source-project
+CMake changes are introduced. LLVM 19/21/23 focused checks pass. These short
+printing demos are not timed; executable .text can grow under whole-program
+O2, as it does for the open vector. See docs/llvm-real-programs-ru.md.
+
+The optional llvm-life-bench measures the original toroidal Life simulation
+(map.c/eworld.c unchanged) in native, per-unit LLVM O2 and combined LLVM O2.
+A finite harness replaces animation/file loading/sleep, seeds initial maps,
+cycles eight single-cell perturbations, restores both maps, runs 32 generations
+and hashes the final board/population. The four original Cell families remain
+open/excluded, with no lifecycle removal; no source closure is performed.
+The timer is compiled by the selected pipeline, not shared machine code.
+The LLVM life_run round boundary is marked noinline and verified after O2.
+
+A Python model independently counts eight neighbours (the PPC code counts
+nine including self), checks all eight phases, input/final fingerprints,
+population/counter invariants and aggregate warmup/sample results. Six map
+sizes including 1x1/3x5, 0/1/7/32 generations, boundary seeds and 1/9 rounds
+produce 144 execution checks plus 45 bad-argument checks per compiler. The
+shared benchmark protocol supplies CPU affinity, equal calibrated work per
+workload, shuffled repeats, median/MAD and CPU statistics: default 84 samples.
+Both compilers run check-only in CI, with no performance gates. Snapshots,
+tools/commands/SHA256, raw/O2 IR, matrices, manifests and ELF sizes are retained.
+
+This workload exposed pathological native code growth from byte-unrolled
+large record assignments. Native stores above 64 bytes now use rep movsb,
+preserving rax and rdi/rsi/rcx; the Life executable .text fell from 1702904 to
+24926 bytes. Memory-class returns also copy large results compactly and now
+return the hidden result-buffer address in rax as required by SysV, fixing a
+latent bug that returned a pointer into a dead source/argument frame.
+Native objects containing these memory-return definitions should be rebuilt;
+their old generated code still violates the required return-pointer rule. A new
+large-copy C regression checks unaligned guarded records, odd tails, unions,
+self/chained/value assignments, stack arguments and aggregate returns, in
+native stage1/stage2, LLVM and system GCC. Type/tag layout and signatures are
+unchanged. See docs/llvm-life-benchmark-ru.md.
+
+PPC matrix size and mixed-radix handler indices now use unsigned 64-bit
+arithmetic before multiplication. The old int products could wrap 4^16 to
+zero, allocate an empty table and silently skip filling/completeness checks.
+The default/stub fill loop counter is widened too; tiny local catalogs keep
+an int switch index because their existing bound is 16 cells.
+
+All-closed table products are validated at compilation against SIZE_MAX/8.
+If any axis is open, constructor 201 checks each extent/product before
+multiplication, then checks calloc before registration or table iteration.
+A zero extent or unrepresentable byte size aborts with a named size-overflow
+diagnostic; allocation failure reports the full unsigned slot count. No new
+arbitrary runtime size cap is imposed. Tag values, public introspection types,
+object layout, symbol names and priorities are unchanged. Rebuild PPC objects
+and raw IR to replace the old arithmetic; update the sealer with the compiler.
+
+The sealer admits allocation-error dprintf/abort calls and diagnostic strings
+in the owned allocate role, retaining the other call/global-reference audits.
+Tests insert valid assembled IR with an unrelated global store or puts call
+and verify rejection by the runtime-side-effect audit. Metadata stays v2.
+
+The new ppc-table-size source checks a 2x3 matrix and one-time argument
+capture. Its fault modes cover open/closed 4^16 allocation under RLIMIT_AS,
+a small deterministic calloc failure, 4^31 slot-to-byte overflow and 4^32
+slot-product overflow. Native stage1/stage2 and LLVM O0/O2 run the cases;
+no huge physical allocation is attempted. Focused LLVM 19/21/23 and full
+stage1/stage2/static/application checks pass. See docs/ppc-table-dimensions-ru.md.
+
+LLVM now supports local variable-length arrays and direct alloca calls through
+dynamic byte allocas, keeping a separate pointer slot for each VLA. Array
+decay, addresses of whole arrays and multi-dimensional row operations use the
+allocated payload. PPC runtime tag-initialization loops work for open/closed
+case/enum/nullptr/union elements and nested fields, with unchanged dispatch
+eligibility, tags and ABI. Direct alloca memory still requires explicit init_spec.
+
+Shared frontend corrections capture VLA typedef bounds at declaration and
+reuse them, widen size multiplications before calculation, divide pointer
+differences by the saved runtime row size, and retain the element alignment
+for _Alignof. VLA typedef parameters decay to pointers; array assignment is
+rejected except for the compiler-owned pointer initialization node.
+Generated allocations carry the element/declaration alignment. The built-in
+alloca parameter is size_t-width; native allocation keeps 64-bit arithmetic,
+aligns the result address (also above 16 bytes), and moves pending expression
+temporaries by the same displacement. PPC layouts and calling conventions
+are unchanged. Rebuild affected VLA/alloca functions to use these corrections.
+
+Dynamic storage currently lasts until function return in both backends; no
+block-exit VLA stack restoration is emitted.
+New checks cover saved typedef sizes/side effects, 4-GiB sizeof without
+allocation, 1D/2D/3D addressing, alignment, recursion and nested/loop alloca.
+Existing VLA sources and an expanded all-form PPC fixture run in LLVM O0/O2,
+native and stage2. All dispatch modes and closed builds cover VLA pointer
+arguments to a variadic multimethod. See docs/llvm-vla-ru.md.
+
+Function parameter VLA bounds now share real parameter objects with the
+definition. Each list has an isolated scope, temporary locals and function
+references. Earlier parameter names (including polymorphic parameters of PPC
+handlers) are visible to later bounds; prototypes and nested callback types
+do not execute those bounds or leak their names/references. Definitions reuse
+their own parameter objects, retain bound-expression temporaries separately
+from ABI parameters and prepend saved-size evaluation before the body.
+Renamed declarations/handlers keep their own bounds and runtime side effects.
+Polymorphic parameter descriptors are private even when declared through one
+pointer typedef. Polymorphic calls inside bounds retain the runtime path;
+the whole-program sealer can still freeze their eligible tables.
+
+Array parameters decay to pointers without copying or reinitializing PPC tags.
+Pointer-to-VLA, multidimensional arrays, sizeof/stride after parameter changes,
+callbacks, named records, sret and variadic functions use the existing native
+and LLVM ABI. Array compatibility now compares element types and constant
+lengths, allowing a variable or unspecified bound to match a compatible array.
+Prototype [*] and outermost static/const/restrict array qualifiers are parsed;
+[*] definitions, misplaced qualifiers, duplicate/escaped names and incompatible
+PPC row types are diagnosed. LLVM volatile limitations are retained.
+
+Native/stage2, LLVM O0/O2 and closed-mode checks cover C and polymorphic
+handlers (including all dispatch representations), host calls in both
+directions, entry-only side effects, memory-result bound calls, nested scopes,
+unused prototype dependencies and all-closed/open multimethods. PPC layouts,
+tags, metadata v2 and calling conventions are unchanged; rebuild affected
+definitions to use the new parameter-bound lowering. Russian guides use
+polymorphic parameters/arguments for the <...> list, retaining the name
+procedural-parametric programming. See docs/llvm-vla-ru.md.
+
+The public compiler now integrates this closure pipeline through
+--closed-program (implicitly LLVM). A final executable command accepts all
+source units, raw ppchibicc .ll units and marked closed-program .o files.
+--closed-program -c saves raw textual IR with a versioned comment header,
+without Python or external LLVM tools; ordinary compilation still produces
+ELF objects. Final closure checks matching LLVM as/opt/link/llc versions,
+uses the existing strict input/table audits, optimizes the combined IR at the
+requested level, lowers it and links with the existing system ELF toolchain.
+--closed-family is repeatable and requires a uniquely resolved closed matrix;
+--closed-report selects the JSON manifest (default OUTPUT.closed.json).
+Unselected/open families retain runtime behavior and their statuses appear
+in the report. A complete pure-C/all-open program is allowed with no frozen
+tables; standalone freezing still requires a selected table by default.
+
+Native application objects, archives/shared libraries, bitcode/assembly and
+arbitrary linker options cannot establish this complete-input contract and
+are rejected in closed mode; the supported C runtime and -lm are permitted.
+Ordinary mixed compilation is unchanged. There is no PPC ABI/tag change;
+clean rebuilds or separate directories are needed when changing the object
+mode. Dependency prerequisites now use the existing Makefile quoting helper,
+including paths with spaces. Final output/report are prepared in sibling
+temporary files before publication; tool or linker failure preserves existing
+results. -S -emit-llvm emits combined verified pre-optimization IR; normal
+single-unit raw IR remains tool-free.
+
+PpchibiccClosedProgram.cmake enables this mode on standard CMake executable
+and OBJECT library targets, with final-link optimization/family/report options.
+Python helpers and the module install under share/ppchibicc and are discovered
+relative to the compiler; moved prefixes and explicit helper overrides work.
+The closed-build example covers object libraries, incremental builds and CTest.
+Stage1/stage2 CI adds 14 regression tests for these paths, all dispatch modes,
+O0/O2/O3/Os/Oz, source/IR/object combinations, .ppc/.pph, dependency output,
+empty closure, native/external-module rejection and output preservation.
+Focused checks pass with LLVM 19, 21 and 23. See docs/llvm-closed-compiler-ru.md.
+
+The public driver now accepts --backend=llvm to compile C, .ll or .bc through
+external opt/llc, produce objects directly and use the existing ELF linker.
+-S selects machine assembly; -S -emit-llvm retains tool-free raw IR output.
+O0/O1/O2/O3 use standard pipelines; Os/Oz use forceattrs with optsize/minsize
+and O2, including LLVM 23 where default<Os>/default<Oz> were removed. Tools
+are selected through PATH or PPCHIBICC_LLVM_OPT/PPCHIBICC_LLVM_LLC environment
+variables. Compilation remains per translation unit, with PIC machine output.
+source_filename preserves the escaped C source name across temporary IR files.
+The native backend remains the default; preprocessing and object-only linking
+need no LLVM tools. Assembly inputs are included in the link, and -c/-S stop
+before linking existing object inputs. Tests cover the driver at stage1/stage2,
+ABI fixtures, mixed PPC objects, archives, shared/static linking, size modes,
+IR/stdin/stdout, dependency files, path escaping and failed-tool cleanup. A
+standalone CMake application example is in examples/llvm/build-demo. See
+`docs/llvm-compiler-ru.md` for commands and the optimization/tool selection rules.
+The optional llvm-opt-demo target compares verify-only IR, mem2reg,
+sroa/mem2reg and default<O2> from one bitcode input with fixed llc settings.
+It validates execution against known results and native output, saves IR,
+assembly, pass pipelines and tool/source checksums, and reports static counts
+for local aggregate code and PPC runtime dispatch. See
+`docs/llvm-optimization-ru.md` for the LLVM 19/21/23 observations.
+The current toolchain line is Clang/LLVM 23.1.x. Full native, self-hosted
+stage2, LLVM O0/O2 and optimization-demo checks pass with Clang/LLVM 23.1.6;
+LLVM 23 object interoperability also passes against GCC 14.2.0. CMake searches
+versioned tools through -23 and prints the selected paths. Existing cache
+entries remain explicit selections; separate build directories keep toolchains
+apart. The demo emits objects directly with llc, so .prefalign in LLVM 23's
+assembly listing does not require a newer system GNU assembler.
+The llvm-dispatch-demo target compares known-specialization, closed-family
+and open multifile calls, with a plain C function-pointer control. It tests
+separate objects, per-unit O2, linked O2 and explicit internalization while
+preserving inspectable public probe functions. An extension replaces one
+object without rebuilding callers. On LLVM 23.1.6 the PPC call sites remain
+indirect in all these modes; O2 eliminates the control's indirect call.
+See `docs/llvm-dispatch-ru.md` for assumptions and reproducible results.
+The optional llvm-pgo-demo target uses real IR instrumentation, compiler-rt
+and llvm-profdata with LLVM/Clang 23. Training observes 4096 rectangle calls;
+the standard PGO O2 pipeline promotes that target with an address guard and
+inlines it while keeping the general indirect path. The optimized core is
+also linked with unseen handlers that modify data and retag an object with
+init_spec. Native, O2 and PGO outputs agree. main and extension objects stay
+outside the profiled module; internalization is not required. See
+`docs/llvm-pgo-ru.md` for the LLVM 23.1.6 results and runtime requirements.
+The optional llvm-pgo-bench target reuses these production objects in a
+checked microbenchmark: rectangle, square, mixed and an unseen mutating
+extension. A shared ordinary-C timer excludes startup and warmup; Python 3.8+
+calibrates equal work, pins the process CPU by default, randomizes repeated
+runs, and reports medians, MAD and raw wall/CPU times without speed thresholds.
+See `docs/llvm-pgo-benchmark-ru.md` for reproduction and interpretation.
+The optional llvm-figures-bench target exercises the existing ppVector and
+ppvector-figures perimeter code on shuffled collections, restoring and sorting
+the vector on every round. Two independent profiles (90% rectangles and 50%)
+are evaluated on new seeds and larger collections. A shared C timer and Python
+measurement protocol check sortedness and exact position-weighted checksums;
+the original ten-figure program is also compared between native and LLVM O2.
+No-argument ppVector_sort and selected FigurePerimeter signatures now use
+explicit (void), including the vector examples sharing that interface, so
+they fit the supported LLVM function subset. See `docs/llvm-figures-benchmark-ru.md`.
+While adding it, the shared type pass was corrected to apply C integer
+promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
+and the result type follows the promoted left operand. Regression coverage
+is included in `test/usualconv.c` and the LLVM differential tests.
+The frontend also retains `volatile` qualifiers so the LLVM MVP can diagnose
+unsupported volatile accesses rather than silently optimize them. This does
+not add volatile lowering to the native backend.
+
 Implemented so far:
+
+- C23 bool/true/false keywords in the default mode, alongside _Bool, without
+  requiring stdbool.h; literals have bool type, size/alignment 1, ordinary
+  integer promotions and the existing _Bool object/call ABI. Preprocessor
+  expressions map remaining true/false to 1/0 after macro expansion; defined
+  and undef still concern macros. The public header preserves keywords for
+  ppchibicc/C23 and legacy macros for foreign C11/C17. __STDC_VERSION__ stays
+  201112L; this is selective C23 support rather than a full language-mode claim.
+- bool initializers now receive the same normalization cast as assignments,
+  including static scalars and record fields. Constant address-to-bool casts
+  consume their relocation locally and serialize a byte 1 instead of an
+  8-byte pointer; nonzero integers/fractions no longer truncate to zero.
+  Native float/double/long-double casts include unordered comparisons, so NaN
+  becomes true. Constant truth conversion uses that cast too, preserving NaN
+  in the self-hosted constant evaluator. Rebuild affected initializer/cast
+  definitions; public _Bool/PPC layouts, tags, metadata and ABI are unchanged.
+- Native/stage2, LLVM O0/O2 and closed-mode regressions cover Boolean keywords
+  before/after stdbool, type/size/constant expressions, preprocessing, arrays,
+  promotion/varargs, static pointer/scalar/record data and runtime/constant NaN.
+  Host C23 references and a separate C11 _Bool module check both call directions,
+  stack arguments, callbacks and records. PPC checks cover all dispatch modes,
+  multimethods, record results, varargs and one-time arguments; invalid keyword
+  uses give diagnostics. See docs/bool-keywords-ru.md and the saved options in
+  docs/llvm-next-steps-ru.md.
 
 - C23 `nullptr` and the distinct scalar type `nullptr_t`, declared by
   `<stddef.h>` as `typeof(nullptr)`; this feature is available in the default
@@ -241,14 +832,14 @@ Current implementation strategy:
   Feature assignment does not apply to ordinary `case` or pointer lists.
 - Initializing an enum object from a feature initializes its common fields to
   zero. Feature initializers work for automatic, global and local `static`
-  objects, arrays, nested aggregate members and automatic compound literals. Global and
-  static feature tags are initialized at startup from registered runtime tag
-  cells, including for specializations declared in other translation units.
+  objects, arrays, nested aggregate members and automatic compound literals. Explicit closed-family global/static initializers contain fixed tag bytes;
+  open-family feature tags are initialized at startup from registered tag
+  cells, including specializations declared in other translation units.
 - A `const` generalization has a closed specialization set. Later `+`
   extensions of such a generalization are rejected.
 - The hidden tag field is the first struct member. The generalization uses
-  tag 0; concrete non-default specializations receive tags 1..N at program
-  startup. A named default specialization also uses tag 0 and does not need a
+  tag 0; concrete non-default specializations have declaration-order tags 1..N
+  for closed definitions and startup-assigned tags for open families. A named default specialization also uses tag 0 and does not need a
   runtime tag cell.
 - Each generalization has a common runtime counter:
   `__ppc_<type>_count`.
@@ -257,8 +848,8 @@ Current implementation strategy:
   `__ppc_<type>_spec_ptr_tags`.
 - Each specialization has a common runtime tag cell:
   `__ppc_<type>_<specialization>_tag`.
-- Specialization constructors in `.init_array.101` assign tags by incrementing
-  the common counter. They are idempotent, so a PPC header included by several
+- Specialization constructors in `.init_array.101` increment the counter for
+  open families, or store fixed indices/counts for closed families. They are idempotent, so a PPC header included by several
   translation units does not register the same specialization more than once.
 - Tag-carrier constructors in `.init_array.151` allocate and fill the
   `get_spec_ptr` array after specialization tags have been assigned and before
@@ -275,15 +866,22 @@ Current implementation strategy:
   wildcard mask. Thus `struct Figure *` and `struct Figure.void *` are distinct:
   the former is the all-table default coordinate, while the latter is the
   concrete zero tag coordinate.
-- Table constructors in `.init_array.201` allocate and fill the table with the
-  all-generalizing/default handler, for example
-  `FigurePair<struct Figure *a, struct Figure *b>() { ... }`. If the
-  generalizing handler is abstract or missing, the table is filled with a
-  generated diagnostic handler.
+- Table constructors in `.init_array.201` allocate a zeroed table once. All
+  slots remain null until registration. Real all-general defaults, such as
+  `FigurePair<struct Figure *a, struct Figure *b>() { ... }`, register at
+  `.init_array.301` by filling only null slots. Concrete registrations always
+  overwrite their coordinate, so their priority does not depend on whether
+  they execute before or after the default registration, even across units.
 - If every PPC parameter of a function belongs to a closed generalization and
-  the function has no concrete all-general default handler, the table
-  constructor leaves cells empty and a later `.init_array.351` completeness
+  the function has no local concrete all-general default handler, a later
+  `.init_array.351` completeness
   checker aborts before `main` if any specialization tuple is still uncovered.
+  Actual defaults from other units have already filled holes by this phase.
+- Non-strict open/opaque declarations without a real default fill remaining
+  null slots with generated diagnostic handlers at `.init_array.361`, after
+  all closed completeness checks. Such a stub cannot hide a closed hole or
+  block a real default registered in another unit. Global PPC initialization
+  at priority 401 still happens after all these phases.
 - The diagnostic handler has the same generic PPC signature as the table entry.
   It prints the PPC function name and the actual runtime tag coordinates, for
   example `PPC dispatch error: uncovered handler for Missing<0, 1>()`, and then
@@ -311,8 +909,8 @@ Current implementation strategy:
 - `init_spec(Shape.color.rect[2], ptr)` casts `ptr` to the corresponding
   element pointer type, initializes the tag chain in every fixed-size array
   element, and still accepts `void *` for arbitrary caller-provided memory.
-- `get_spec_size(struct Figure)` lowers to `__ppc_Figure_count + 1`, so the
-  returned size always includes the zero coordinate.
+- `get_spec_size(struct Figure)` is a literal for a visible closed definition,
+  otherwise `__ppc_Figure_count + 1`; both include the zero coordinate.
 - `get_spec_ptr(struct Figure, i)` stores `i` in a local temporary, checks that
   `0 <= i < get_spec_size(struct Figure)`, and returns
   `(struct Figure *)&__ppc_Figure_spec_ptr_tags[i]`. The returned pointer is a
@@ -326,7 +924,7 @@ Current implementation strategy:
 - Tag-carrier finalizers in `.fini_array.151` free arrays allocated for
   `get_spec_ptr` and reset the common pointer to zero.
 - Handler constructors in `.init_array.301` write specialization handler
-  pointers into the table by reading the runtime tag cell. A `Base.void`
+  pointers into the table using literal closed indices or open runtime tags. A `Base.void`
   handler, or a named default-specialization handler, contributes a literal
   zero coordinate.
 - PPC handler implementation symbols follow ordinary C linkage rules. A
@@ -336,8 +934,8 @@ Current implementation strategy:
 - PPC specialization types receive stable internal names derived from their
   source-level path, for example `Figure_rect`, `Figure_trian`, and
   `Shape_color_rect`. These names are used for generated handler symbols;
-  runtime dispatch table coordinates still use the constructor-assigned numeric
-  tags.
+  runtime dispatch table coordinates use literal closed indices or
+  constructor-assigned open tags.
 - A named incomplete struct used in PPC syntax is treated as an external PPC
   generalization. The compiler emits the common runtime symbols needed for the
   family and reads the hidden first tag through the pointer ABI, without

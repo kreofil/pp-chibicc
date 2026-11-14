@@ -1,0 +1,46 @@
+{
+  "repository": "https://github.com/kreofil/4P-examples",
+  "commit": "9e8f1f1c07ef08e845f877c8dac7a804ef9c0af4",
+  "files": [
+    {
+      "path": "ppc-new-syntax/simplest/spec-param/main.c",
+      "sha256": "dbca8f657452b08199bef23e064d667442c727ce638be25238fabf532b867b32"
+    },
+    {
+      "path": "ppc-new-syntax/patterns/shvets-patterns/visitor-mm.ppc",
+      "sha256": "048e26e3d131bef6bbc8645c2482cdfc59af295b37690d96bd5b46b3eacb9bd3"
+    },
+    {
+      "path": "ppc-new-syntax/containers/vector-list-lib/examples/ppvector-sum-int/ppvector-sum-int.c",
+      "sha256": "5e440404a87b3ce908d4367b05bbc247d5e895d3c364402c6578c4ebe7281e81"
+    },
+    {
+      "path": "ppc-new-syntax/containers/vector-list-lib/src/ppvector/ppvector.c",
+      "sha256": "25988a273d6bfe261885f054149a21756cac00f9d061008a7051ad17c3015222"
+    },
+    {
+      "path": "ppc-new-syntax/containers/vector-list-lib/src/ppvector/ppgeneral.c",
+      "sha256": "d81db7947e687ae6fa8fc28d3d17bb2c07f8e6266cb8b089e46ebbb96007a7ce"
+    },
+    {
+      "path": "ppc-new-syntax/containers/vector-list-lib/src/include/ppvector.h",
+      "sha256": "f3a7db3437211fe123e142976fbea1b1375e3bb0b6dbf37df5bd9fbbcecfc822"
+    },
+    {
+      "path": "ppc-new-syntax/containers/vector-list-lib/src/include/ppvector/data.h",
+      "sha256": "fd68f340217e39500820e157ee7f403f66634b0f4f70e5f5dad1509eff4bffd9"
+    },
+    {
+      "path": "ppc-new-syntax/containers/vector-list-lib/src/include/ppvector/general.h",
+      "sha256": "423acf7ca287e06780d2f5aec9b18cab0bd7635c52e0d280f06d9181edb3bb00"
+    },
+    {
+      "path": "ppc-new-syntax/containers/vector-list-lib/src/include/ppvector/interface.h",
+      "sha256": "153c0938b63f473a3bc4e2aaacdf64149eb3d70b3f634d505536b2d6acca3d81"
+    },
+    {
+      "path": "ppc-new-syntax/containers/vector-list-lib/src/include/ppvector/macro.h",
+      "sha256": "7adce20ed00c604068e331079fd16022d0184012f47a85a21c991e946dc9f7ae"
+    }
+  ]
+}

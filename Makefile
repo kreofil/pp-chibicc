@@ -1,7 +1,7 @@
 BUILD_DIR ?= build
 CMAKE ?= cmake
 
-.PHONY: all configure build test test-stage2 test-examples test-all clean distclean rebuild
+.PHONY: all configure build test test-stage2 test-examples test-llvm test-llvm-driver llvm-opt-demo llvm-dispatch-demo llvm-dispatch-report llvm-static-dispatch-demo llvm-static-dispatch-bench llvm-pgo-demo llvm-pgo-bench llvm-figures-bench test-all clean distclean rebuild
 
 all: build
 
@@ -19,6 +19,36 @@ test-stage2: configure
 
 test-examples: configure
 	$(CMAKE) --build $(BUILD_DIR) --target test-examples
+
+test-llvm: configure
+	$(CMAKE) --build $(BUILD_DIR) --target test-llvm
+
+test-llvm-driver: configure
+	$(CMAKE) --build $(BUILD_DIR) --target test-llvm-driver
+
+llvm-opt-demo: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-opt-demo
+
+llvm-dispatch-demo: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-dispatch-demo
+
+llvm-dispatch-report: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-dispatch-report
+
+llvm-static-dispatch-demo: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-static-dispatch-demo
+
+llvm-static-dispatch-bench: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-static-dispatch-bench
+
+llvm-pgo-demo: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-pgo-demo
+
+llvm-pgo-bench: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-pgo-bench
+
+llvm-figures-bench: configure
+	$(CMAKE) --build $(BUILD_DIR) --target llvm-figures-bench
 
 test-all: configure
 	$(CMAKE) --build $(BUILD_DIR) --target test-all

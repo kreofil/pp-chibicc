@@ -30,6 +30,7 @@ typedef struct Node Node;
 typedef struct Member Member;
 typedef struct Relocation Relocation;
 typedef struct Hideset Hideset;
+typedef struct Scope Scope;
 
 //
 // strings.c
@@ -145,12 +146,14 @@ struct Obj {
   // Global variable
   bool is_tentative;
   bool is_tls;
+  bool is_readonly; // Compiler-owned immutable dispatch catalogs
   char *init_data;
   Relocation *rel;
 
   // Function
   bool is_inline;
   Obj *params;
+  Obj *ret_param; // Hidden result-buffer parameter created for large records
   Node *body;
   Obj *locals;
   Obj *va_area;
@@ -162,6 +165,38 @@ struct Obj {
   bool is_root;
   StringArray refs;
 };
+
+// A read-only snapshot for LLVM dispatch metadata. An open/opaque family
+// contributes only its name and all_closed=false, never fixed coordinates.
+typedef struct PpcDispatchHandlerInfo PpcDispatchHandlerInfo;
+struct PpcDispatchHandlerInfo {
+  PpcDispatchHandlerInfo *next;
+  Obj *fn;
+  int *indices;
+  bool is_default;
+};
+
+typedef struct PpcDispatchRuntimeInfo PpcDispatchRuntimeInfo;
+struct PpcDispatchRuntimeInfo {
+  PpcDispatchRuntimeInfo *next;
+  char *role;
+  Obj *fn;
+};
+
+typedef struct PpcDispatchInfo PpcDispatchInfo;
+struct PpcDispatchInfo {
+  PpcDispatchInfo *next;
+  char *name;
+  Obj *table;
+  Type *function_ty;
+  Type **bases;
+  int arity;
+  bool all_closed;
+  PpcDispatchHandlerInfo *handlers;
+  PpcDispatchRuntimeInfo *runtime;
+};
+
+PpcDispatchInfo *ppc_dispatch_info(void);
 
 // Global variable can be initialized either by a constant expression
 // or a pointer to another global variable. This struct represents the
@@ -214,6 +249,7 @@ typedef enum {
   ND_LABEL,     // Labeled statement
   ND_LABEL_VAL, // [GNU] Labels-as-values
   ND_FUNCALL,   // Function call
+  ND_VA_ARG,    // Aggregate: va_list pointer + ret_buffer; scalar: lowered lhs
   ND_EXPR_STMT, // Expression statement
   ND_STMT_EXPR, // Statement expression
   ND_VAR,       // Variable
@@ -229,6 +265,7 @@ typedef enum {
 // AST node type
 struct Node {
   NodeKind kind; // Node kind
+  bool is_ppc_table_access; // Compiler-owned byte offset, suitable for LLVM GEP
   Node *next;    // Next node
   Type *ty;      // Type, e.g. int or pointer to int
   Token *tok;    // Representative token
@@ -258,6 +295,7 @@ struct Node {
   Node *args;
   bool pass_by_stack;
   Obj *ret_buffer;
+  int alloca_align; // Required alignment for a generated VLA allocation
 
   // Goto or labeled statement, or labels-as-values
   char *label;
@@ -327,6 +365,8 @@ struct Type {
   int align;          // alignment
   bool is_unsigned;   // unsigned or signed
   bool is_atomic;     // true if _Atomic
+  bool is_volatile;   // retained so unsupported backends can diagnose access
+  int bitfield_width; // Value-expression range; zero for ordinary types
   Type *origin;       // for type compatibility check
 
   // Pointer-to or array-of type. We intentionally use the same member
@@ -342,13 +382,19 @@ struct Type {
   // Declaration
   Token *name;
   Token *name_pos;
+  Obj *param_var;          // Parameter object shared with bound expressions
+  Type *param_decl;        // Parameter type before array/function adjustment
+  Node *param_vla_setup;   // Bounds evaluated only by a function definition
 
   // Array
   int array_len;
+  bool param_array_qualifiers;
+  bool param_array_volatile;
 
   // Variable-length array
   Node *vla_len; // # of elements
   Obj *vla_size; // sizeof() value
+  bool is_vla_star; // [*] is allowed only in a function prototype
 
   // Struct
   Member *members;
@@ -380,7 +426,10 @@ struct Type {
   // Function type
   Type *return_ty;
   Type *params;
+  Scope *param_scope;
+  Obj *param_context; // Temporaries and references owned by the parameter list
   bool is_variadic;
+  bool is_unprototyped; // C () leaves parameter types unspecified, unlike ...
   Type *next;
 };
 
@@ -405,10 +454,11 @@ struct Member {
   // Hidden specialization-index field inserted at the beginning of
   // PPC generalizations and generated specialization types.
   bool is_ppc_tag;
+  Type *ppc_tag_base; // Owning family, also on specialization-list members
   int ppc_index;
   Obj *ppc_tag_var;
 
-  // Bitfield
+  // Bitfield: offset is the first occupied byte, bit_offset is within it.
   bool is_bitfield;
   int bit_offset;
   int bit_width;
@@ -433,6 +483,7 @@ extern Type *ty_double;
 extern Type *ty_ldouble;
 
 bool is_integer(Type *ty);
+Type *integer_promotion(Type *ty);
 bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);
 bool is_compatible(Type *t1, Type *t2);
@@ -451,6 +502,7 @@ void add_type(Node *node);
 //
 
 void codegen(Obj *prog, FILE *out);
+void codegen_llvm(Obj *prog, FILE *out);
 int align_to(int n, int align);
 
 //
@@ -496,4 +548,7 @@ bool file_exists(char *path);
 extern StringArray include_paths;
 extern bool opt_fpic;
 extern bool opt_fcommon;
+typedef enum { PPC_DISPATCH_AUTO, PPC_DISPATCH_RUNTIME,
+               PPC_DISPATCH_TABLE, PPC_DISPATCH_SWITCH } PpcDispatchMode;
+extern PpcDispatchMode opt_ppc_dispatch;
 extern char *base_file;

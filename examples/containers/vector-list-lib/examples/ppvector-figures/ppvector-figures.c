@@ -21,7 +21,7 @@ void ppVector_element_print<ppVector.figure_ptr* v>(FILE* f) {
 
 //------------------------------------------------------------------------------
 // Прототип обобщенной функции вычисление периметра для текущей фигуры
-double FigurePerimeter<Figure *f>();
+double FigurePerimeter<Figure *f>(void);
 
 //------------------------------------------------------------------------------
 // Функция, используемая для сравнения фигур по длине переметра
@@ -35,7 +35,7 @@ int cmp_figure_perimeter(const void *pf1, const void *pf2) {
 
 //------------------------------------------------------------------------------
 // Обработчик специализации, осуществляющий обработку целочисленного вектора
-void ppVector_sort<ppVector.figure_ptr* v>()  {
+void ppVector_sort<ppVector.figure_ptr* v>(void)  {
   // Получение указателя на массив указателей на целые чисел
   void* v_ptr = ppVector_data((ppVector*)v);
   qsort(v_ptr, ppVector_size((ppVector*)v), sizeof(Figure*), cmp_figure_perimeter);

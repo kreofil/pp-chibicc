@@ -1,0 +1,27 @@
+{
+  "version": "23.1.6",
+  "distribution": "ubuntu-24.04",
+  "architecture": "amd64",
+  "packages": [
+    {
+      "name": "libllvm23",
+      "url": "https://apt.llvm.org/noble/pool/main/l/llvm-toolchain-23/libllvm23_23.1.6~++20261108033755+c47d7823685a-1~exp1~20261108153854.96_amd64.deb",
+      "sha256": "332ba668de23216ff9f1e4625b03b2d0e6a3f13b603e2df3abfc3f795b5ede05"
+    },
+    {
+      "name": "llvm-23",
+      "url": "https://apt.llvm.org/noble/pool/main/l/llvm-toolchain-23/llvm-23_23.1.6~++20261108033755+c47d7823685a-1~exp1~20261108153854.96_amd64.deb",
+      "sha256": "ad84a75f4cb12dd518aefa5415813b9e356cf4a445af3c24cd9fc3b0186c0da7"
+    },
+    {
+      "name": "llvm-23-runtime",
+      "url": "https://apt.llvm.org/noble/pool/main/l/llvm-toolchain-23/llvm-23-runtime_23.1.6~++20261108033755+c47d7823685a-1~exp1~20261108153854.96_amd64.deb",
+      "sha256": "c0f067e60dc6a6c9dbd57b389de1ebcc36d14e6046f7f2295301590b941a58b2"
+    },
+    {
+      "name": "llvm-23-linker-tools",
+      "url": "https://apt.llvm.org/noble/pool/main/l/llvm-toolchain-23/llvm-23-linker-tools_23.1.6~++20261108033755+c47d7823685a-1~exp1~20261108153854.96_amd64.deb",
+      "sha256": "618c864e3d7d2dfc018294e73b0728d20976e160331b7c129458aaecfaa1babb"
+    }
+  ]
+}

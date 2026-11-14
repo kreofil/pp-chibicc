@@ -1,5 +1,13 @@
 #include "test.h"
 
+union Result { long value; };
+static int result_calls;
+static union Result next_result(union Result value) {
+  result_calls++;
+  value.value++;
+  return value;
+}
+
 int main() {
   ASSERT(8, ({ union { int a; char b[6]; } x; sizeof(x); }));
   ASSERT(3, ({ union { int a; char b[4]; } x; x.a = 515; x.b[0]; }));
@@ -17,6 +25,10 @@ int main() {
 
   ASSERT(3, ({struct { union { int a,b; }; union { int c,d; }; } x; x.a=3; x.b; }));
   ASSERT(5, ({struct { union { int a,b; }; union { int c,d; }; } x; x.d=5; x.c; }));
+
+  ASSERT(7, ({ union Result source = {7}; union Result copy = source; copy.value; }));
+  ASSERT(8, ({ union Result source = {7}; union Result copy = next_result(source); copy.value; }));
+  ASSERT(1, result_calls);
 
   printf("OK\n");
   return 0;
