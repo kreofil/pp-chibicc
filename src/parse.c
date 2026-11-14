@@ -998,6 +998,13 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
     if (node->kind == ND_MEMBER && node->member->is_bitfield)
       error_tok(node->tok, "typeof applied to a bitfield");
     ty = node->ty;
+    // Width belongs to a value expression, not to a declared integer type.
+    // Like Clang, typeof of a comma/assignment/postfix expression uses the
+    // underlying type; variables of that type have its full integer range.
+    if (ty->bitfield_width) {
+      ty = copy_type(ty);
+      ty->bitfield_width = 0;
+    }
   }
   *rest = skip(tok, ")");
   return ty;

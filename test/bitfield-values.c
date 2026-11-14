@@ -70,6 +70,17 @@ int main(void) {
   CHECK(_Generic(+v.u32, unsigned int:1, default:0));
   CHECK(_Generic(+v.s32, int:1, default:0));
   CHECK(-1 < v.u && (v.u-2)==-1 && (v.u>>1)==0 && ~v.u==-2);
+#if defined(__chibicc__) || defined(__clang__)
+  // Clang's typeof uses the underlying type for these expressions. GCC
+  // instead exposes an extended narrow integer type, so compare separately.
+  __typeof__((0,v.u)) ordinary=7;
+  __typeof__(v.u++) postfix_type=7;
+  CHECK(_Generic(+ordinary, unsigned int:1, default:0));
+  CHECK(_Generic(+postfix_type, unsigned int:1, default:0));
+  CHECK(!(ordinary > -1) && v.u==1);
+  ordinary=0xffffffffU;
+  CHECK(ordinary==0xffffffffU && sizeof(ordinary)==4);
+#endif
   v.u31=0x7fffffffU; v.u32=0xffffffffU; v.s32=-1;
   CHECK(v.u31==0x7fffffffU && v.u32==0xffffffffU && v.s32==-1);
   CHECK((v.u32>>31)==1 && (v.s32>>31)==-1);

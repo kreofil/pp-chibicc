@@ -10,6 +10,8 @@ Named bitfield bytes contribute INTEGER to the aggregate ABI; anonymous
 padding does not consume registers. Shared frontend/native corrections cover
 packed/anonymous field layout, positional initialization, Boolean fields and
 prefix/postfix wraparound with one evaluation of the containing expression.
+GNU typeof of compound bitfield expressions yields the full underlying type,
+matching Clang, without leaking an expression's width into declared variables.
 Rebuild all objects exchanging affected records. PPC tag values and handler
 registration ABI are unchanged. Runtime/table/switch and closed-program tests
 exercise bitfields in polymorphic handlers. GCC/Clang disagree on some rare
