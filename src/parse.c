@@ -474,7 +474,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
   hashmap_put2(&scope->tags, tok->loc, tok->len, ty);
 }
 
-// declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
+// declspec = ("void" | "_Bool" | "bool" | "char" | "short" | "int" | "long"
 //             | "typedef" | "static" | "extern" | "inline"
 //             | "_Thread_local" | "__thread"
 //             | "signed" | "unsigned"
@@ -611,7 +611,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     // Handle built-in types.
     if (equal(tok, "void"))
       counter += VOID;
-    else if (equal(tok, "_Bool"))
+    else if (equal(tok, "_Bool") || equal(tok, "bool"))
       counter += BOOL;
     else if (equal(tok, "char"))
       counter += CHAR;
@@ -1534,7 +1534,8 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
 
   init->expr = assign(rest, tok);
   add_type(init->expr);
-  if (init->ty->kind == TY_NULLPTR || init->expr->ty->kind == TY_NULLPTR)
+  if (init->ty->kind == TY_BOOL || init->ty->kind == TY_NULLPTR ||
+      init->expr->ty->kind == TY_NULLPTR)
     init->expr = new_cast(init->expr, init->ty);
 }
 
@@ -2068,7 +2069,7 @@ static bool is_typename(Token *tok) {
 
   if (map.capacity == 0) {
     static char *kw[] = {
-      "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+      "void", "_Bool", "bool", "char", "short", "int", "long", "struct", "union",
       "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
       "const", "volatile", "auto", "register", "restrict", "__restrict",
       "__restrict__", "_Noreturn", "float", "double", "typeof", "inline",
@@ -2467,7 +2468,7 @@ static int64_t eval2(Node *node, char ***label) {
 }
 
 static bool eval_truth(Node *node) {
-  return is_flonum(node->ty) ? eval_float(node) != 0 : eval(node) != 0;
+  return is_flonum(node->ty) ? (bool)eval_float(node) : eval(node) != 0;
 }
 
 static int64_t eval2_raw(Node *node, char ***label) {
@@ -2537,7 +2538,16 @@ static int64_t eval2_raw(Node *node, char ***label) {
     return eval_truth(node->lhs) || eval_truth(node->rhs);
   case ND_CAST: {
     if (node->ty->kind == TY_BOOL && is_flonum(node->lhs->ty))
-      return eval_float(node->lhs) != 0;
+      return (bool)eval_float(node->lhs);
+    if (node->ty->kind == TY_BOOL) {
+      // An address constant converts to true, not to a byte relocation.
+      // Keep any symbol reference local to this conversion.
+      char **symbol = NULL;
+      int64_t value = eval2(node->lhs, &symbol);
+      if (symbol && !label)
+        error_tok(node->tok, "not a compile-time constant");
+      return symbol || value != 0;
+    }
     int64_t val;
     if (is_integer(node->ty) && is_flonum(node->lhs->ty)) {
       if (node->ty->is_unsigned)
@@ -2547,8 +2557,6 @@ static int64_t eval2_raw(Node *node, char ***label) {
     } else {
       val = eval2(node->lhs, label);
     }
-    if (node->ty->kind == TY_BOOL)
-      return val != 0;
     if (is_integer(node->ty)) {
       switch (node->ty->size) {
       case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
@@ -4591,6 +4599,13 @@ static Node *generic_selection(Token **rest, Token *tok) {
 //         | num
 static Node *primary(Token **rest, Token *tok) {
   Token *start = tok;
+
+  if (equal(tok, "true") || equal(tok, "false")) {
+    Node *node = new_num(equal(tok, "true"), tok);
+    node->ty = ty_bool;
+    *rest = tok->next;
+    return node;
+  }
 
   if (equal(tok, "nullptr")) {
     Node *node = new_num(0, tok);

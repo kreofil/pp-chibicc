@@ -288,11 +288,12 @@ static long eval_const_expr(Token **rest, Token *tok) {
   // [https://www.sigbus.info/n1570#6.10.1p4] The standard requires
   // we replace remaining non-macro identifiers with "0" before
   // evaluating a constant expression. For example, `#if foo` is
-  // equivalent to `#if 0` if foo is not defined.
+  // equivalent to `#if 0` if foo is not defined. C23 true/false instead
+  // become 1/0, after macro expansion and without becoming defined macros.
   for (Token *t = expr; t->kind != TK_EOF; t = t->next) {
     if (t->kind == TK_IDENT) {
       Token *next = t->next;
-      *t = *new_num_token(0, t);
+      *t = *new_num_token(equal(t, "true") ? 1 : 0, t);
       t->next = next;
     }
   }

@@ -415,6 +415,12 @@ static void cast(Type *from, Type *to) {
   if (to->kind == TY_BOOL) {
     cmp_zero(from);
     println("  setne %%al");
+    if (is_flonum(from)) {
+      // An unordered comparison also represents a nonzero scalar: NaN
+      // converts to true, while both signed zeroes convert to false.
+      println("  setp %%dl");
+      println("  or %%dl, %%al");
+    }
     println("  movzx %%al, %%eax");
     return;
   }

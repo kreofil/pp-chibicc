@@ -174,6 +174,19 @@ int main(void) { Open.a x; return choose<&x>() != 17; }
                         self.assertEqual(['vla_sum'] if name == 'ppc-multimethod-vla' else [],
                                          report['selected_families'])
 
+    def test_bool_keywords(self):
+        for name, expected in (('bool-keywords', 'bool keywords OK\n'),
+                               ('ppc-bool', 'PPC bool OK\n')):
+            for mode in ('runtime', 'table', 'switch'):
+                for level in ('0', '2'):
+                    exe = self.out/(name+'-'+mode+'-O'+level+'.exe')
+                    run(options.compiler, '--closed-program', '-O'+level,
+                        '--ppc-dispatch='+mode, self.root/'test'/(name+'.c'), '-o', exe)
+                    self.assertEqual(expected, run(exe).stdout)
+                    report = json.loads(Path(str(exe)+'.closed.json').read_text())
+                    self.assertEqual(['bool_pair', 'bool_pick', 'bool_result', 'bool_variadic']
+                                     if name == 'ppc-bool' else [], report['selected_families'])
+
     def test_failed_tools_preserve_outputs(self):
         exe = self.out/'preserve.exe'
         report = Path(str(exe)+'.closed.json')

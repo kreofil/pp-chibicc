@@ -53,7 +53,8 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$source_dir"/examples/llvm/ppc-floating.c \
     "$source_dir"/examples/llvm/ppc-floating-by-value.c \
     "$source_dir"/examples/llvm/ppc-vla-array.c \
-    "$source_dir"/examples/llvm/ppc-vla-matrix.c; do
+    "$source_dir"/examples/llvm/ppc-vla-matrix.c \
+    "$source_dir"/examples/llvm/ppc-bool-flags.c; do
   name=$(basename "$source" .c)
   prefix=$result_dir/$name
   expected_status=0
@@ -67,6 +68,10 @@ for source in "$source_dir"/test/llvm/valid/*.c \
   set --
   if [ "$name" = abi ]; then
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/abi-host.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
+  elif [ "$name" = bool-keywords ]; then
+    "$host_cc" -std=c11 -O2 -c "$source_dir/test/llvm/support/bool-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
   elif [ "$name" = records ]; then
@@ -120,7 +125,9 @@ for source in "$source_dir"/test/llvm/valid/*.c \
   # Use the system compiler as an independent reference for ABI boundaries
   # and IEEE floating-point edge cases. The native backend has existing
   # limitations here (notably NaN conditions and unsigned 64-bit conversions).
-  if [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ] || [ "$name" = switch ] || [ "$name" = empty-params ] || [ "$name" = stdarg-abi ] || [ "$name" = long-double ] || [ "$name" = long-double-abi ] || [ "$name" = vla-params ]; then
+  if [ "$name" = bool-keywords ]; then
+    "$host_cc" -std=c2x -O2 -c "$source" -o "$prefix.x86.o"
+  elif [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ] || [ "$name" = switch ] || [ "$name" = empty-params ] || [ "$name" = stdarg-abi ] || [ "$name" = long-double ] || [ "$name" = long-double-abi ] || [ "$name" = vla-params ]; then
     "$host_cc" -std=c11 -O2 -c "$source" -o "$prefix.x86.o"
   else
     "$compiler" -c "$source" -o "$prefix.x86.o"
@@ -158,6 +165,8 @@ done
 
 "$source_dir/cmake/run-vla-parameter-tests.sh" "$source_dir" "$compiler" \
   "$result_dir/vla-params-modes" "$llvm_opt" "$llvm_llc"
+"$source_dir/cmake/run-bool-keyword-tests.sh" "$source_dir" "$compiler" \
+  "$result_dir/bool-keywords-modes" "$llvm_opt" "$llvm_llc" "$host_cc"
 
 # VLA constraints are shared frontend diagnostics in both backends.
 for statement in 'int a[n], b[n]; a = b;' 'int a[n] = {1};'; do

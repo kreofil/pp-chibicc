@@ -457,7 +457,7 @@ and OBJECT library targets, with final-link optimization/family/report options.
 Python helpers and the module install under share/ppchibicc and are discovered
 relative to the compiler; moved prefixes and explicit helper overrides work.
 The closed-build example covers object libraries, incremental builds and CTest.
-Stage1/stage2 CI adds 13 regression tests for these paths, all dispatch modes,
+Stage1/stage2 CI adds 14 regression tests for these paths, all dispatch modes,
 O0/O2/O3/Os/Oz, source/IR/object combinations, .ppc/.pph, dependency output,
 empty closure, native/external-module rejection and output preservation.
 Focused checks pass with LLVM 19, 21 and 23. See docs/llvm-closed-compiler-ru.md.
@@ -529,6 +529,30 @@ unsupported volatile accesses rather than silently optimize them. This does
 not add volatile lowering to the native backend.
 
 Implemented so far:
+
+- C23 bool/true/false keywords in the default mode, alongside _Bool, without
+  requiring stdbool.h; literals have bool type, size/alignment 1, ordinary
+  integer promotions and the existing _Bool object/call ABI. Preprocessor
+  expressions map remaining true/false to 1/0 after macro expansion; defined
+  and undef still concern macros. The public header preserves keywords for
+  ppchibicc/C23 and legacy macros for foreign C11/C17. __STDC_VERSION__ stays
+  201112L; this is selective C23 support rather than a full language-mode claim.
+- bool initializers now receive the same normalization cast as assignments,
+  including static scalars and record fields. Constant address-to-bool casts
+  consume their relocation locally and serialize a byte 1 instead of an
+  8-byte pointer; nonzero integers/fractions no longer truncate to zero.
+  Native float/double/long-double casts include unordered comparisons, so NaN
+  becomes true. Constant truth conversion uses that cast too, preserving NaN
+  in the self-hosted constant evaluator. Rebuild affected initializer/cast
+  definitions; public _Bool/PPC layouts, tags, metadata and ABI are unchanged.
+- Native/stage2, LLVM O0/O2 and closed-mode regressions cover Boolean keywords
+  before/after stdbool, type/size/constant expressions, preprocessing, arrays,
+  promotion/varargs, static pointer/scalar/record data and runtime/constant NaN.
+  Host C23 references and a separate C11 _Bool module check both call directions,
+  stack arguments, callbacks and records. PPC checks cover all dispatch modes,
+  multimethods, record results, varargs and one-time arguments; invalid keyword
+  uses give diagnostics. See docs/bool-keywords-ru.md and the saved options in
+  docs/llvm-next-steps-ru.md.
 
 - C23 `nullptr` and the distinct scalar type `nullptr_t`, declared by
   `<stddef.h>` as `typeof(nullptr)`; this feature is available in the default
