@@ -100,8 +100,6 @@ static void llvm_check_object(Type *ty, Token *tok) {
   }
   if (llvm_aggregate(ty)) {
     for (Member *mem = ty->members; mem; mem = mem->next) {
-      if (mem->is_bitfield)
-        llvm_unsupported(tok, "bitfields");
       llvm_check_object(mem->ty, tok);
     }
     return;
@@ -204,9 +202,23 @@ static bool llvm_abi_fields(Type *ty, int offset, int *ends, int *classes,
   if (offset % MAX(1, ty->align))
     return false;
   if (llvm_aggregate(ty)) {
-    for (Member *mem = ty->members; mem; mem = mem->next)
-      if (!llvm_abi_fields(mem->ty, offset + mem->offset, ends, classes, fp64))
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+      if (mem->is_bitfield) {
+        // Anonymous fields are padding. Named fields contribute INTEGER
+        // only for bytes they occupy, regardless of the declared unit size.
+        if (!mem->name)
+          continue;
+        int first = offset + mem->offset;
+        int bytes = (mem->bit_offset + mem->bit_width + 7) / 8;
+        for (int i = first; i < first + bytes; i++) {
+          if (i < 0 || i >= 16)
+            return false;
+          ends[i / 8] = MAX(ends[i / 8], i % 8 + 1);
+          classes[i / 8] = llvm_merge_class(classes[i / 8], LLVM_ABI_INTEGER);
+        }
+      } else if (!llvm_abi_fields(mem->ty, offset + mem->offset, ends, classes, fp64))
         return false;
+    }
   } else if (ty->kind == TY_ARRAY) {
     for (int i = 0; i < ty->array_len; i++)
       if (!llvm_abi_fields(ty->base, offset + i * ty->base->size, ends, classes, fp64))
@@ -249,6 +261,8 @@ static void llvm_record_abi(Type *ty, LlvmAbi *abi) {
     abi->types[0] = "x86_fp80";
     return;
   }
+  if (classes[0] == LLVM_ABI_X87 || classes[1] == LLVM_ABI_X87UP)
+    llvm_unsupported(NULL, "mixed X87 aggregate ABI");
   for (int i = 0; i < 2; i++)
     if (ends[i]) {
       int piece = abi->count++;
@@ -595,14 +609,13 @@ static char *llvm_addr(Node *node) {
   case ND_COMMA:
     llvm_expr(node->lhs);
     return llvm_addr(node->rhs);
-  case ND_MEMBER:
-    if (node->member->is_bitfield)
-      llvm_unsupported(node->tok, "bitfields");
+  case ND_MEMBER: {
     char *base = llvm_expr(node->lhs);
     char *addr = llvm_reg();
     llvm_print("  %s = getelementptr i8, ptr %s, i64 %d", addr, base,
                node->member->offset);
     return addr;
+  }
   }
   llvm_unsupported(node->tok, "this lvalue");
   return NULL;
@@ -618,6 +631,73 @@ static char *llvm_load(char *addr, Type *ty, Token *tok) {
     return addr;
   char *result = llvm_reg();
   llvm_print("  %s = load %s, ptr %s, align 1", result, llvm_type(ty), addr);
+  return result;
+}
+
+// Access exactly the bytes occupied by a field. Packed 64-bit fields may
+// straddle nine bytes, so LLVM's arbitrary-width integers are useful here.
+static char *llvm_bitfield_extend(char *value, Member *mem) {
+  int width = mem->bit_width;
+  if (width == mem->ty->size * 8)
+    return value;
+  char *result = llvm_reg();
+  llvm_print("  %s = %s i%d %s to %s", result,
+             mem->ty->is_unsigned || mem->ty->kind == TY_BOOL ? "zext" : "sext",
+             width, value, llvm_type(mem->ty));
+  return result;
+}
+
+static char *llvm_load_bitfield(char *addr, Member *mem) {
+  int bits = (mem->bit_offset + mem->bit_width + 7) / 8 * 8;
+  char *value = llvm_reg();
+  llvm_print("  %s = load i%d, ptr %s, align 1", value, bits, addr);
+  if (mem->bit_offset) {
+    char *shifted = llvm_reg();
+    llvm_print("  %s = lshr i%d %s, %d", shifted, bits, value, mem->bit_offset);
+    value = shifted;
+  }
+  if (bits != mem->bit_width) {
+    char *narrow = llvm_reg();
+    llvm_print("  %s = trunc i%d %s to i%d", narrow, bits, value, mem->bit_width);
+    value = narrow;
+  }
+  return llvm_bitfield_extend(value, mem);
+}
+
+static char *llvm_store_bitfield(char *addr, char *value, Member *mem) {
+  int width = mem->bit_width;
+  int bits = (mem->bit_offset + width + 7) / 8 * 8;
+  char *narrow = value;
+  if (width != mem->ty->size * 8) {
+    narrow = llvm_reg();
+    llvm_print("  %s = trunc %s %s to i%d", narrow, llvm_type(mem->ty), value, width);
+  }
+  char *result = llvm_bitfield_extend(narrow, mem);
+  value = narrow;
+  if (bits != width) {
+    value = llvm_reg();
+    llvm_print("  %s = zext i%d %s to i%d", value, width, narrow, bits);
+    char *mask = llvm_reg();
+    llvm_print("  %s = lshr i%d -1, %d", mask, bits, bits - width);
+    if (mem->bit_offset) {
+      char *shifted = llvm_reg();
+      llvm_print("  %s = shl i%d %s, %d", shifted, bits, value, mem->bit_offset);
+      value = shifted;
+      shifted = llvm_reg();
+      llvm_print("  %s = shl i%d %s, %d", shifted, bits, mask, mem->bit_offset);
+      mask = shifted;
+    }
+    char *inverse = llvm_reg();
+    char *old = llvm_reg();
+    char *kept = llvm_reg();
+    char *merged = llvm_reg();
+    llvm_print("  %s = xor i%d %s, -1", inverse, bits, mask);
+    llvm_print("  %s = load i%d, ptr %s, align 1", old, bits, addr);
+    llvm_print("  %s = and i%d %s, %s", kept, bits, old, inverse);
+    llvm_print("  %s = or i%d %s, %s", merged, bits, kept, value);
+    value = merged;
+  }
+  llvm_print("  store i%d %s, ptr %s, align 1", bits, value, addr);
   return result;
 }
 
@@ -732,8 +812,8 @@ static char *llvm_call(Node *node) {
             llvm_load_piece(slot, &abi, i)));
       }
     } else {
-      if (!param && is_integer(target) && target->size < ty_int->size)
-        target = ty_int;
+      if (!param && is_integer(target))
+        target = integer_promotion(target);
       if (!param && target->kind == TY_FLOAT)
         target = ty_double;
       if (target->kind == TY_VOID)
@@ -878,6 +958,8 @@ static char *llvm_expr(Node *node) {
     }
     llvm_check_scalar(node->ty, node->tok);
     char *value = llvm_cast(llvm_expr(node->rhs), node->rhs->ty, node->ty, node->tok);
+    if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield)
+      return llvm_store_bitfield(addr, value, node->lhs->member);
     llvm_print("  store %s %s, ptr %s, align 1", llvm_type(node->ty), value, addr);
     return value;
   }
@@ -950,6 +1032,10 @@ static char *llvm_expr(Node *node) {
   case ND_LE:
     return llvm_binary(node);
   case ND_MEMBER:
+    if (node->member->is_bitfield) {
+      llvm_check_scalar(node->ty, node->tok);
+      return llvm_load_bitfield(llvm_addr(node), node->member);
+    }
     return llvm_load(llvm_addr(node), node->ty, node->tok);
   case ND_CAS:
   case ND_EXCH:

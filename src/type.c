@@ -228,6 +228,20 @@ Type *struct_type(void) {
   return new_type(TY_STRUCT, 0, 1);
 }
 
+Type *integer_promotion(Type *ty) {
+  if (!is_integer(ty))
+    return ty;
+  if (ty->bitfield_width && ty->bitfield_width <= 32)
+    return ty->bitfield_width < 32 || !ty->is_unsigned ? ty_int : ty_uint;
+  if (ty->size < 4)
+    return ty_int;
+  if (ty->bitfield_width) {
+    ty = copy_type(ty);
+    ty->bitfield_width = 0;
+  }
+  return ty;
+}
+
 static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
     return pointer_to(ty1->base);
@@ -244,10 +258,8 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->kind == TY_FLOAT || ty2->kind == TY_FLOAT)
     return ty_float;
 
-  if (ty1->size < 4)
-    ty1 = ty_int;
-  if (ty2->size < 4)
-    ty2 = ty_int;
+  ty1 = integer_promotion(ty1);
+  ty2 = integer_promotion(ty2);
 
   if (ty1->size != ty2->size)
     return (ty1->size < ty2->size) ? ty2 : ty1;
@@ -380,10 +392,9 @@ void add_type(Node *node) {
       error_tok(node->tok, "invalid nullptr_t operands");
     // These operators apply integer promotions independently, rather than
     // the usual arithmetic conversions between their two operands.
-    if (is_integer(node->lhs->ty) && node->lhs->ty->size < ty_int->size)
-      node->lhs = new_cast(node->lhs, ty_int);
-    if (node->rhs && is_integer(node->rhs->ty) && node->rhs->ty->size < ty_int->size)
-      node->rhs = new_cast(node->rhs, ty_int);
+    node->lhs = new_cast(node->lhs, integer_promotion(node->lhs->ty));
+    if (node->rhs)
+      node->rhs = new_cast(node->rhs, integer_promotion(node->rhs->ty));
     node->ty = node->lhs->ty;
     return;
   case ND_VAR:
@@ -412,6 +423,10 @@ void add_type(Node *node) {
     return;
   case ND_MEMBER:
     node->ty = node->member->ty;
+    if (node->member->is_bitfield) {
+      node->ty = copy_type(node->ty);
+      node->ty->bitfield_width = node->member->bit_width;
+    }
     return;
   case ND_ADDR: {
     Type *ty = node->lhs->ty;

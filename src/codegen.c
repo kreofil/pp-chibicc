@@ -732,6 +732,79 @@ static void builtin_alloca(int align) {
   println("  mov %%rax, %d(%%rbp)", current_fn->alloca_bottom->offset);
 }
 
+// Normalize the value of the field, including the assignment expression.
+static void normalize_bitfield(Member *mem) {
+  if (mem->bit_width == 64)
+    return;
+  println("  shl $%d, %%rax", 64 - mem->bit_width);
+  println("  %s $%d, %%rax",
+          mem->ty->is_unsigned || mem->ty->kind == TY_BOOL ? "shr" : "sar",
+          64 - mem->bit_width);
+}
+
+static void load_bitfield(Member *mem) {
+  int bytes = (mem->bit_offset + mem->bit_width + 7) / 8;
+  println("  mov %%rax, %%r10");
+  if (bytes == 1)
+    println("  movzbl (%%r10), %%eax");
+  else if (bytes == 2)
+    println("  movzwl (%%r10), %%eax");
+  else if (bytes == 4)
+    println("  movl (%%r10), %%eax");
+  else if (bytes >= 8)
+    println("  movq (%%r10), %%rax");
+  else {
+    println("  xor %%eax, %%eax");
+    for (int i = 0; i < bytes; i++) {
+      println("  movzbl %d(%%r10), %%edx", i);
+      if (i)
+        println("  shl $%d, %%rdx", i * 8);
+      println("  or %%rdx, %%rax");
+    }
+  }
+  if (mem->bit_offset)
+    println("  shr $%d, %%rax", mem->bit_offset);
+  if (bytes == 9) {
+    println("  movzbl 8(%%r10), %%edx");
+    println("  shl $%d, %%rdx", 64 - mem->bit_offset);
+    println("  or %%rdx, %%rax");
+  }
+  normalize_bitfield(mem);
+}
+
+static void store_bitfield(Member *mem) {
+  normalize_bitfield(mem);
+  int bytes = (mem->bit_offset + mem->bit_width + 7) / 8;
+  pop("%rdi");
+  if (!mem->bit_offset && mem->bit_width == bytes * 8 &&
+      (bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8)) {
+    println("  mov %s, (%%rdi)", reg_ax(bytes));
+    return;
+  }
+  println("  mov %%rax, %%r8");
+  for (int i = 0; i < bytes; i++) {
+    int low = MAX(mem->bit_offset, i * 8) - i * 8;
+    int high = MIN(mem->bit_offset + mem->bit_width, (i + 1) * 8) - i * 8;
+    int mask = ((1 << (high - low)) - 1) << low;
+    int shift = i * 8 - mem->bit_offset;
+    println("  mov %%r8, %%rdx");
+    if (shift > 0)
+      println("  shr $%d, %%rdx", shift);
+    else if (shift < 0)
+      println("  shl $%d, %%rdx", -shift);
+    if (mask == 255) {
+      println("  mov %%dl, %d(%%rdi)", i);
+    } else {
+      println("  and $%d, %%edx", mask);
+      println("  movzbl %d(%%rdi), %%ecx", i);
+      println("  and $%d, %%ecx", 255 ^ mask);
+      println("  or %%edx, %%ecx");
+      println("  mov %%cl, %d(%%rdi)", i);
+    }
+  }
+  println("  mov %%r8, %%rax");
+}
+
 // Generate code for a given node.
 static void gen_expr(Node *node) {
   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
@@ -798,16 +871,11 @@ static void gen_expr(Node *node) {
     return;
   case ND_MEMBER: {
     gen_addr(node);
-    load(node->ty);
-
     Member *mem = node->member;
-    if (mem->is_bitfield) {
-      println("  shl $%d, %%rax", 64 - mem->bit_width - mem->bit_offset);
-      if (mem->ty->is_unsigned)
-        println("  shr $%d, %%rax", 64 - mem->bit_width);
-      else
-        println("  sar $%d, %%rax", 64 - mem->bit_width);
-    }
+    if (mem->is_bitfield)
+      load_bitfield(mem);
+    else
+      load(node->ty);
     return;
   }
   case ND_DEREF:
@@ -823,24 +891,7 @@ static void gen_expr(Node *node) {
     gen_expr(node->rhs);
 
     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
-      println("  mov %%rax, %%r8");
-
-      // If the lhs is a bitfield, we need to read the current value
-      // from memory and merge it with a new value.
-      Member *mem = node->lhs->member;
-      println("  mov %%rax, %%rdi");
-      println("  and $%ld, %%rdi", (1L << mem->bit_width) - 1);
-      println("  shl $%d, %%rdi", mem->bit_offset);
-
-      println("  mov (%%rsp), %%rax");
-      load(mem->ty);
-
-      long mask = ((1L << mem->bit_width) - 1) << mem->bit_offset;
-      println("  mov $%ld, %%r9", ~mask);
-      println("  and %%r9, %%rax");
-      println("  or %%rdi, %%rax");
-      store(node->ty);
-      println("  mov %%r8, %%rax");
+      store_bitfield(node->lhs->member);
       return;
     }
 

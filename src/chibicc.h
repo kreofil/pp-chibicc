@@ -366,6 +366,7 @@ struct Type {
   bool is_unsigned;   // unsigned or signed
   bool is_atomic;     // true if _Atomic
   bool is_volatile;   // retained so unsupported backends can diagnose access
+  int bitfield_width; // Value-expression range; zero for ordinary types
   Type *origin;       // for type compatibility check
 
   // Pointer-to or array-of type. We intentionally use the same member
@@ -457,7 +458,7 @@ struct Member {
   int ppc_index;
   Obj *ppc_tag_var;
 
-  // Bitfield
+  // Bitfield: offset is the first occupied byte, bit_offset is within it.
   bool is_bitfield;
   int bit_offset;
   int bit_width;
@@ -482,6 +483,7 @@ extern Type *ty_double;
 extern Type *ty_ldouble;
 
 bool is_integer(Type *ty);
+Type *integer_promotion(Type *ty);
 bool is_flonum(Type *ty);
 bool is_numeric(Type *ty);
 bool is_compatible(Type *t1, Type *t2);

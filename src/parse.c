@@ -264,10 +264,6 @@ static bool is_function(Token *tok);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
 
-static int align_down(int n, int align) {
-  return align_to(n - align + 1, align);
-}
-
 static void enter_scope(void) {
   Scope *sc = calloc(1, sizeof(Scope));
   sc->next = scope;
@@ -999,6 +995,8 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
   } else {
     Node *node = expr(&tok, tok);
     add_type(node);
+    if (node->kind == ND_MEMBER && node->member->is_bitfield)
+      error_tok(node->tok, "typeof applied to a bitfield");
     ty = node->ty;
   }
   *rest = skip(tok, ")");
@@ -1441,14 +1439,18 @@ static void union_initializer(Token **rest, Token *tok, Initializer *init) {
     return;
   }
 
-  init->mem = init->ty->members;
+  init->mem = next_user_member(init->ty->members);
+  if (!init->mem) {
+    *rest = skip(skip(tok, "{"), "}");
+    return;
+  }
 
   if (equal(tok, "{")) {
-    initializer2(&tok, tok->next, init->children[0]);
+    initializer2(&tok, tok->next, init->children[init->mem->idx]);
     consume(&tok, tok, ",");
     *rest = skip(tok, "}");
   } else {
-    initializer2(rest, tok, init->children[0]);
+    initializer2(rest, tok, init->children[init->mem->idx]);
   }
 }
 
@@ -1609,6 +1611,8 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
     Node *node = new_node(ND_NULL_EXPR, tok);
 
     for (Member *mem = ty->members; mem; mem = mem->next) {
+      if (mem->is_bitfield && !mem->name)
+        continue;
       InitDesg desg2 = {desg, 0, mem};
 
       if (mem->is_ppc_tag) {
@@ -1626,7 +1630,9 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
   }
 
   if (ty->kind == TY_UNION && !init->expr) {
-    Member *mem = init->mem ? init->mem : ty->members;
+    Member *mem = init->mem;
+    if (!mem)
+      return new_node(ND_NULL_EXPR, tok);
     InitDesg desg2 = {desg, 0, mem};
     return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
   }
@@ -1939,16 +1945,16 @@ static void ppc_gvar_tag_initializer(Obj *var, Initializer *init, Token *tok) {
   add_type(fn->body);
 }
 
-static uint64_t read_buf(char *buf, int sz) {
-  if (sz == 1)
-    return *buf;
-  if (sz == 2)
-    return *(uint16_t *)buf;
-  if (sz == 4)
-    return *(uint32_t *)buf;
-  if (sz == 8)
-    return *(uint64_t *)buf;
-  unreachable();
+static void write_bitfield(char *buf, Member *mem, Node *expr) {
+  if (!expr)
+    return;
+  uint64_t value = eval(new_cast(expr, mem->ty));
+  for (int i = 0; i < mem->bit_width; i++) {
+    int bit = mem->bit_offset + i;
+    unsigned char mask = 1 << (bit % 8);
+    char *byte = buf + mem->offset + bit / 8;
+    *byte = (*byte & ~mask) | (((value >> i) & 1) ? mask : 0);
+  }
 }
 
 static void write_buf(char *buf, uint64_t val, int sz) {
@@ -1983,16 +1989,8 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
       }
 
       if (mem->is_bitfield) {
-        Node *expr = init->children[mem->idx]->expr;
-        if (!expr)
-          break;
-
-        char *loc = buf + offset + mem->offset;
-        uint64_t oldval = read_buf(loc, mem->ty->size);
-        uint64_t newval = eval(expr);
-        uint64_t mask = (1L << mem->bit_width) - 1;
-        uint64_t combined = oldval | ((newval & mask) << mem->bit_offset);
-        write_buf(loc, combined, mem->ty->size);
+        if (mem->name)
+          write_bitfield(buf + offset, mem, init->children[mem->idx]->expr);
       } else {
         cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf,
                               offset + mem->offset);
@@ -2006,6 +2004,10 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
       error_tok(init->expr->tok, "union expression initializer is not supported for static storage");
     if (!init->mem)
       return cur;
+    if (init->mem->is_bitfield) {
+      write_bitfield(buf + offset, init->mem, init->children[init->mem->idx]->expr);
+      return cur;
+    }
     return write_gvar_data(cur, init->children[init->mem->idx],
                            init->mem->ty, buf, offset);
   }
@@ -2169,8 +2171,7 @@ static Node *stmt(Token **rest, Token *tok) {
     add_type(node->cond);
     if (!is_integer(node->cond->ty))
       error_tok(node->cond->tok, "switch condition must have integer type");
-    if (node->cond->ty->size < 4)
-      node->cond = new_cast(node->cond, ty_int);
+    node->cond = new_cast(node->cond, integer_promotion(node->cond->ty));
     tok = skip(tok, ")");
 
     Node *sw = current_switch;
@@ -3263,7 +3264,7 @@ static Node *unary(Token **rest, Token *tok) {
     add_type(node);
     if (node->ty->kind == TY_NULLPTR)
       error_tok(tok, "invalid nullptr_t operand");
-    return node;
+    return new_cast(node, integer_promotion(node->ty));
   }
 
   if (equal(tok, "-"))
@@ -3332,6 +3333,26 @@ static void check_duplicate_members(HashMap *names, Member *members) {
   }
 }
 
+static void bitfield_width(Token **rest, Token *tok, Member *mem, VarAttr *attr) {
+  Node *width = conditional(rest, tok);
+  add_type(width);
+  if (!is_integer_constant_expr(width, false))
+    error_tok(tok, "bitfield width must be an integer constant expression");
+  if (!is_integer(mem->ty) || mem->ty->size < 1 || mem->ty->size > 8 ||
+      mem->ty->is_atomic)
+    error_tok(mem->tok, "bitfield requires a non-atomic integer type");
+  int max = mem->ty->kind == TY_BOOL ? 1 : mem->ty->size * 8;
+  int64_t n = eval(width);
+  if (n < 0 || n > max)
+    error_tok(tok, "bitfield width must be between 0 and %d", max);
+  if (!n && mem->name)
+    error_tok(mem->tok, "named bitfield must have nonzero width");
+  if (attr->align)
+    error_tok(mem->tok, "alignment cannot be specified for a bitfield");
+  mem->is_bitfield = true;
+  mem->bit_width = n;
+}
+
 // struct-members = (declspec declarator (","  declarator)* ";")*
 static void struct_members(Token **rest, Token *tok, Type *ty) {
   Member head = {};
@@ -3375,8 +3396,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       mem->align = attr.align ? attr.align : mem->ty->align;
 
       if (consume(&tok, tok, ":")) {
-        mem->is_bitfield = true;
-        mem->bit_width = const_expr(&tok, tok);
+        bitfield_width(&tok, tok, mem, &attr);
       }
 
       cur = cur->next = mem;
@@ -3426,8 +3446,7 @@ static void ppc_spec_members(Token **rest, Token *tok, Type *ty, bool pointers_o
       mem->align = attr.align ? attr.align : mem->ty->align;
 
       if (consume(&tok, tok, ":")) {
-        mem->is_bitfield = true;
-        mem->bit_width = const_expr(&tok, tok);
+        bitfield_width(&tok, tok, mem, &attr);
       }
 
       if (pointers_only && (mem->ty->kind != TY_PTR || mem->is_bitfield ||
@@ -3457,8 +3476,7 @@ static Member *ppc_default_spec_member(Token **rest, Token *tok) {
   mem->align = attr.align ? attr.align : mem->ty->align;
 
   if (consume(&tok, tok, ":")) {
-    mem->is_bitfield = true;
-    mem->bit_width = const_expr(&tok, tok);
+    bitfield_width(&tok, tok, mem, &attr);
   }
 
   *rest = skip(tok, ";");
@@ -3567,7 +3585,7 @@ static bool tok_eq(Token *a, Token *b) {
 
 static Member *next_user_member(Member *mem) {
   while (mem && (mem->is_ppc_tag || mem->is_ppc_union_storage ||
-                 mem->is_ppc_union_padding))
+                 mem->is_ppc_union_padding || (mem->is_bitfield && !mem->name)))
     mem = mem->next;
   return mem;
 }
@@ -3659,20 +3677,20 @@ static void layout_struct_members(Type *ty) {
       bits = align_to(bits, mem->ty->size * 8);
     } else if (mem->is_bitfield) {
       int sz = mem->ty->size;
-      if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
+      if (!ty->is_packed &&
+          bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
         bits = align_to(bits, sz * 8);
 
-      mem->offset = align_down(bits / 8, sz);
-      mem->bit_offset = bits % (sz * 8);
+      mem->offset = bits / 8;
+      mem->bit_offset = bits % 8;
       bits += mem->bit_width;
     } else {
-      if (!ty->is_packed)
-        bits = align_to(bits, mem->align * 8);
+      bits = align_to(bits, ty->is_packed ? 8 : mem->align * 8);
       mem->offset = bits / 8;
       bits += mem->ty->size * 8;
     }
 
-    if (!ty->is_packed && ty->align < mem->align)
+    if (!ty->is_packed && (!mem->is_bitfield || mem->name) && ty->align < mem->align)
       ty->align = mem->align;
   }
 
@@ -4331,10 +4349,11 @@ static Type *union_decl(Token **rest, Token *tok) {
   // are already initialized to zero. We need to compute the
   // alignment and the size though.
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    if (ty->align < mem->align)
+    if (!ty->is_packed && (!mem->is_bitfield || mem->name) && ty->align < mem->align)
       ty->align = mem->align;
-    if (ty->size < mem->ty->size)
-      ty->size = mem->ty->size;
+    int size = mem->is_bitfield ? (mem->bit_width + 7) / 8 : mem->ty->size;
+    if (ty->size < size)
+      ty->size = size;
   }
   ty->size = align_to(ty->size, ty->align);
   return ty;
@@ -4398,6 +4417,21 @@ static Node *struct_ref(Node *node, Token *tok) {
 // Convert A++ to `(typeof A)((A += 1) - 1)`
 static Node *new_inc_dec(Node *node, Token *tok, int addend) {
   add_type(node);
+  if (node->kind == ND_MEMBER && node->member->is_bitfield) {
+    Obj *base = new_lvar("", pointer_to(node->lhs->ty));
+    Obj *old = new_lvar("", node->ty);
+    Node *save_base = new_binary(ND_ASSIGN, new_var_node(base, tok),
+                                new_unary(ND_ADDR, node->lhs, tok), tok);
+    Node *field = new_unary(ND_MEMBER,
+                           new_unary(ND_DEREF, new_var_node(base, tok), tok), tok);
+    field->member = node->member;
+    Node *save_old = new_binary(ND_ASSIGN, new_var_node(old, tok), field, tok);
+    Node *update = new_binary(ND_ASSIGN, field,
+                             new_add(new_var_node(old, tok), new_num(addend, tok), tok), tok);
+    return new_binary(ND_COMMA, save_base,
+      new_binary(ND_COMMA, save_old,
+        new_binary(ND_COMMA, update, new_var_node(old, tok), tok), tok), tok);
+  }
   return new_cast(new_add(to_assign(new_add(node, new_num(addend, tok), tok)),
                           new_num(-addend, tok), tok),
                   node->ty);
@@ -4517,8 +4551,8 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
       // If parameter type is omitted (e.g. in "..."), float
       // arguments are promoted to double.
       arg = new_cast(arg, ty_double);
-    } else if (is_integer(arg->ty) && arg->ty->size < ty_int->size) {
-      arg = new_cast(arg, ty_int);
+    } else if (is_integer(arg->ty)) {
+      arg = new_cast(arg, integer_promotion(arg->ty));
     }
 
     cur = cur->next = arg;
@@ -4647,6 +4681,8 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "sizeof")) {
     Node *node = unary(rest, tok->next);
     add_type(node);
+    if (node->kind == ND_MEMBER && node->member->is_bitfield)
+      error_tok(node->tok, "sizeof applied to a bitfield");
     if (node->ty->kind == TY_VLA)
       return new_var_node(node->ty->vla_size, tok);
     return new_ulong(node->ty->size, tok);
@@ -4661,6 +4697,8 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "_Alignof")) {
     Node *node = unary(rest, tok->next);
     add_type(node);
+    if (node->kind == ND_MEMBER && node->member->is_bitfield)
+      error_tok(node->tok, "_Alignof applied to a bitfield");
     return new_ulong(node->ty->align, tok);
   }
 
@@ -6617,8 +6655,8 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
       param_ty = param_ty->next;
     } else if (copy->ty->kind == TY_FLOAT) {
       copy = new_cast(copy, ty_double);
-    } else if (is_integer(copy->ty) && copy->ty->size < ty_int->size) {
-      copy = new_cast(copy, ty_int);
+    } else if (is_integer(copy->ty)) {
+      copy = new_cast(copy, integer_promotion(copy->ty));
     }
 
     arg_cur = arg_cur->next = copy;

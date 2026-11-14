@@ -3,6 +3,19 @@
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
 
+LLVM supports integer bitfields, including signed/unsigned extraction,
+neighbour-preserving writes, packed 64-bit fields spanning nine bytes,
+initialization, assignment-result truncation and bitfield integer promotions.
+Named bitfield bytes contribute INTEGER to the aggregate ABI; anonymous
+padding does not consume registers. Shared frontend/native corrections cover
+packed/anonymous field layout, positional initialization, Boolean fields and
+prefix/postfix wraparound with one evaluation of the containing expression.
+Rebuild all objects exchanging affected records. PPC tag values and handler
+registration ABI are unchanged. Runtime/table/switch and closed-program tests
+exercise bitfields in polymorphic handlers. GCC/Clang disagree on some rare
+packed nested and mixed X87 shapes; see docs/llvm-bitfields-ru.md for the
+interop boundaries and diagnostics.
+
 The experimental `-S -emit-llvm` backend emits LLVM IR for a limited C subset
 on Linux x86-64, alongside the original assembly backend. It now supports
 struct/union storage, member access and copying, plus the existing PPC runtime

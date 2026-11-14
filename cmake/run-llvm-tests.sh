@@ -54,7 +54,8 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$source_dir"/examples/llvm/ppc-floating-by-value.c \
     "$source_dir"/examples/llvm/ppc-vla-array.c \
     "$source_dir"/examples/llvm/ppc-vla-matrix.c \
-    "$source_dir"/examples/llvm/ppc-bool-flags.c; do
+    "$source_dir"/examples/llvm/ppc-bool-flags.c \
+    "$source_dir"/examples/llvm/ppc-bitfields.c; do
   name=$(basename "$source" .c)
   prefix=$result_dir/$name
   expected_status=0
@@ -80,6 +81,10 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     set -- "$prefix.host.o"
   elif [ "$name" = record-abi ]; then
     "$host_cc" -std=c11 -O2 -c "$source_dir/test/llvm/support/record-abi-host.c" \
+      -o "$prefix.host.o"
+    set -- "$prefix.host.o"
+  elif [ "$name" = bitfield-abi ]; then
+    "$host_cc" -std=c11 -O2 -c "$source_dir/test/llvm/support/bitfield-abi-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
   elif [ "$name" = floating-abi ]; then
@@ -112,7 +117,7 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/long-double-abi-host.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
-  elif [ "$name" = vla ] || [ "$name" = ppc-vla ]; then
+  elif [ "$name" = vla ] || [ "$name" = ppc-vla ] || [ "$name" = bitfield ]; then
     "$host_cc" -std=c11 -c "$source_dir/test/llvm/support/assert-quiet.c" \
       -o "$prefix.host.o"
     set -- "$prefix.host.o"
@@ -127,7 +132,7 @@ for source in "$source_dir"/test/llvm/valid/*.c \
   # limitations here (notably NaN conditions and unsigned 64-bit conversions).
   if [ "$name" = bool-keywords ]; then
     "$host_cc" -std=c2x -O2 -c "$source" -o "$prefix.x86.o"
-  elif [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ] || [ "$name" = switch ] || [ "$name" = empty-params ] || [ "$name" = stdarg-abi ] || [ "$name" = long-double ] || [ "$name" = long-double-abi ] || [ "$name" = vla-params ]; then
+  elif [ "$name" = bitfield-abi ] || [ "$name" = record-abi ] || [ "$name" = floating-abi ] || [ "$name" = floating ] || [ "$name" = switch ] || [ "$name" = empty-params ] || [ "$name" = stdarg-abi ] || [ "$name" = long-double ] || [ "$name" = long-double-abi ] || [ "$name" = vla-params ]; then
     "$host_cc" -std=c11 -O2 -c "$source" -o "$prefix.x86.o"
   else
     "$compiler" -c "$source" -o "$prefix.x86.o"
@@ -167,6 +172,8 @@ done
   "$result_dir/vla-params-modes" "$llvm_opt" "$llvm_llc"
 "$source_dir/cmake/run-bool-keyword-tests.sh" "$source_dir" "$compiler" \
   "$result_dir/bool-keywords-modes" "$llvm_opt" "$llvm_llc" "$host_cc"
+"$source_dir/cmake/run-bitfield-tests.sh" "$source_dir" "$compiler" \
+  "$result_dir/bitfields-modes" "$llvm_opt" "$llvm_llc"
 
 # VLA constraints are shared frontend diagnostics in both backends.
 for statement in 'int a[n], b[n]; a = b;' 'int a[n] = {1};'; do
@@ -256,7 +263,7 @@ done
 
 # Unsupported source constructs must produce a compiler diagnostic instead
 # of invalid IR or a silently different executable.
-for feature in VARARG_AGGREGATE BITFIELD VA_ARG_AGGREGATE UNPROTOTYPED_AGGREGATE TLS ATOMIC VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF VOLATILE_VLA_PARAMETER VOLATILE_VLA_ELEMENT ASM COMPUTED_GOTO; do
+for feature in VARARG_AGGREGATE VA_ARG_AGGREGATE UNPROTOTYPED_AGGREGATE TLS ATOMIC MIXED_X87_BITFIELD VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF VOLATILE_VLA_PARAMETER VOLATILE_VLA_ELEMENT ASM COMPUTED_GOTO; do
   echo "testing LLVM diagnostic $feature"
   if "$compiler" -S -emit-llvm -DREJECT_$feature \
       "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \
@@ -303,7 +310,7 @@ expect_driver_error assembler-input -S -emit-llvm "$driver_dir/input.s"
 
 printf 'preserve existing output\n' >"$driver_dir/preserved.ll"
 cp "$driver_dir/preserved.ll" "$driver_dir/preserved.expected"
-expect_driver_error unsupported-output -S -emit-llvm -DREJECT_BITFIELD \
+expect_driver_error unsupported-output -S -emit-llvm -DREJECT_ATOMIC \
   "$source_dir/test/llvm/reject.c" -o "$driver_dir/preserved.ll"
 cmp "$driver_dir/preserved.expected" "$driver_dir/preserved.ll" ||
   fail "an emission failure overwrote an existing output file"
