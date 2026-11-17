@@ -45,7 +45,7 @@ void ppList_print(FILE* f, ppList* l) {
 //------------------------------------------------------------------------------
 // Функция, осуществляющая сортировку элементов списка.
 // Операция сортировки задается непосредственно для каждой специализации.
-void ppList_sort<ppList* v>()  {
+void ppList_sort<ppList* v>(void)  {
   printf("There is no specialization for sorting!\n"
   "You need to write special function for your data type."
   );

@@ -4,6 +4,16 @@ typedef struct VLAWeekDay { int week_number; } enum {
   Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday
 } const VLAWeekDay;
 
+typedef struct VLAOpen { int value; } enum { early } VLAOpen;
+VLAOpen + { late };
+typedef struct VLAPointer {} nullptr { int *number; } const VLAPointer;
+typedef struct VLAUnion {} union { int number; double real; } const VLAUnion;
+typedef struct VLACase {} case { int number; } const VLACase;
+typedef struct VLANested {
+  VLAWeekDay.Monday fixed[2];
+  VLAOpen.late opened;
+} VLANested;
+
 static int bound_calls;
 
 static int runtime_bound(int n) {
@@ -58,6 +68,30 @@ int main() {
     ASSERT(6, code<&saturdays[i]>());
   }
   ASSERT(1, bound_calls);
+
+  // Open tags come from startup metadata; closed tags remain constants.
+  VLAOpen.late opened[n];
+  VLAPointer.number pointers[n];
+  VLAUnion.real unions[n];
+  VLACase.number cases[n];
+  VLANested nested[n];
+  for (int i = 0; i < n; ++i) {
+    ASSERT(get_subtype_index(VLAOpen.late), get_spec_var_index(&opened[i]));
+    ASSERT(get_subtype_index(VLAPointer.number), get_spec_var_index(&pointers[i]));
+    ASSERT(get_subtype_index(VLAUnion.real), get_spec_var_index(&unions[i]));
+    ASSERT(get_subtype_index(VLACase.number), get_spec_var_index(&cases[i]));
+    ASSERT(monday, get_spec_var_index(&nested[i].fixed[0]));
+    ASSERT(monday, get_spec_var_index(&nested[i].fixed[1]));
+    ASSERT(get_subtype_index(VLAOpen.late), get_spec_var_index(&nested[i].opened));
+    unions[i].real = i + 0.5;
+    ASSERT(1, unions[i].real == i + 0.5);
+  }
+  VLAPointer zero_pointers[n];
+  VLAUnion zero_unions[n];
+  for (int i = 0; i < n; ++i) {
+    ASSERT(0, get_spec_var_index(&zero_pointers[i]));
+    ASSERT(0, get_spec_var_index(&zero_unions[i]));
+  }
 
   printf("OK\n");
   return 0;

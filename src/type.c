@@ -97,6 +97,12 @@ bool is_compatible(Type *t1, Type *t2) {
   if (t2->origin)
     return is_compatible(t1, t2->origin);
 
+  if ((t1->kind == TY_ARRAY || t1->kind == TY_VLA) &&
+      (t2->kind == TY_ARRAY || t2->kind == TY_VLA))
+    return is_compatible(t1->base, t2->base) &&
+           (t1->kind == TY_VLA || t2->kind == TY_VLA ||
+            t1->array_len < 0 || t2->array_len < 0 || t1->array_len == t2->array_len);
+
   if (t1->kind != t2->kind)
     return false;
 
@@ -116,6 +122,17 @@ bool is_compatible(Type *t1, Type *t2) {
   case TY_FUNC: {
     if (!is_compatible(t1->return_ty, t2->return_ty))
       return false;
+    if (t1->is_unprototyped || t2->is_unprototyped) {
+      Type *prototype = t1->is_unprototyped ? t2 : t1;
+      if (prototype->is_variadic)
+        return false;
+      // A C11/C17 prototype is compatible with f() only when its parameter
+      // types survive the default argument promotions unchanged.
+      for (Type *p = prototype->params; p; p = p->next)
+        if (p->kind == TY_FLOAT || (is_integer(p) && p->size < ty_int->size))
+          return false;
+      return true;
+    }
     if (t1->is_variadic != t2->is_variadic)
       return false;
 
@@ -126,11 +143,6 @@ bool is_compatible(Type *t1, Type *t2) {
         return false;
     return p1 == NULL && p2 == NULL;
   }
-  case TY_ARRAY:
-    if (!is_compatible(t1->base, t2->base))
-      return false;
-    return t1->array_len < 0 && t2->array_len < 0 &&
-           t1->array_len == t2->array_len;
   }
   return false;
 }
@@ -200,7 +212,9 @@ Type *array_of(Type *base, int len) {
 }
 
 Type *vla_of(Type *base, Node *len) {
-  Type *ty = new_type(TY_VLA, 8, 8);
+  // The object is represented by a local pointer slot, but C _Alignof still
+  // describes the array's elements rather than that implementation detail.
+  Type *ty = new_type(TY_VLA, 8, base->align);
   ty->base = base;
   ty->vla_len = len;
   return ty;
@@ -212,6 +226,20 @@ Type *enum_type(void) {
 
 Type *struct_type(void) {
   return new_type(TY_STRUCT, 0, 1);
+}
+
+Type *integer_promotion(Type *ty) {
+  if (!is_integer(ty))
+    return ty;
+  if (ty->bitfield_width && ty->bitfield_width <= 32)
+    return ty->bitfield_width < 32 || !ty->is_unsigned ? ty_int : ty_uint;
+  if (ty->size < 4)
+    return ty_int;
+  if (ty->bitfield_width) {
+    ty = copy_type(ty);
+    ty->bitfield_width = 0;
+  }
+  return ty;
 }
 
 static Type *get_common_type(Type *ty1, Type *ty2) {
@@ -230,10 +258,8 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->kind == TY_FLOAT || ty2->kind == TY_FLOAT)
     return ty_float;
 
-  if (ty1->size < 4)
-    ty1 = ty_int;
-  if (ty2->size < 4)
-    ty2 = ty_int;
+  ty1 = integer_promotion(ty1);
+  ty2 = integer_promotion(ty2);
 
   if (ty1->size != ty2->size)
     return (ty1->size < ty2->size) ? ty2 : ty1;
@@ -323,7 +349,8 @@ void add_type(Node *node) {
     return;
   }
   case ND_ASSIGN:
-    if (node->lhs->ty->kind == TY_ARRAY)
+    if (node->lhs->ty->kind == TY_ARRAY ||
+        (node->lhs->ty->kind == TY_VLA && node->lhs->kind != ND_VLA_PTR))
       error_tok(node->lhs->tok, "not an lvalue");
     if (is_aggregate(node->lhs->ty) || is_aggregate(node->rhs->ty)) {
       if (!is_assignable(node->lhs->ty, node->rhs->ty))
@@ -349,6 +376,9 @@ void add_type(Node *node) {
   case ND_FUNCALL:
     node->ty = node->func_ty->return_ty;
     return;
+  case ND_VA_ARG:
+    node->ty = node->lhs->ty;
+    return;
   case ND_NOT:
   case ND_LOGOR:
   case ND_LOGAND:
@@ -360,6 +390,11 @@ void add_type(Node *node) {
     if (node->lhs->ty->kind == TY_NULLPTR ||
         (node->rhs && node->rhs->ty->kind == TY_NULLPTR))
       error_tok(node->tok, "invalid nullptr_t operands");
+    // These operators apply integer promotions independently, rather than
+    // the usual arithmetic conversions between their two operands.
+    node->lhs = new_cast(node->lhs, integer_promotion(node->lhs->ty));
+    if (node->rhs)
+      node->rhs = new_cast(node->rhs, integer_promotion(node->rhs->ty));
     node->ty = node->lhs->ty;
     return;
   case ND_VAR:
@@ -388,6 +423,10 @@ void add_type(Node *node) {
     return;
   case ND_MEMBER:
     node->ty = node->member->ty;
+    if (node->member->is_bitfield) {
+      node->ty = copy_type(node->ty);
+      node->ty->bitfield_width = node->member->bit_width;
+    }
     return;
   case ND_ADDR: {
     Type *ty = node->lhs->ty;

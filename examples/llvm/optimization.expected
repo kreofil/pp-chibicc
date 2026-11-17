@@ -1,0 +1,5 @@
+n=0 locals=0.00 dispatch=0.00
+n=1 locals=5.00 dispatch=15.00
+n=4 locals=26.00 dispatch=66.00
+n=7 locals=56.00 dispatch=114.00
+n=31 locals=620.00 dispatch=510.00

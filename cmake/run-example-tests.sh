@@ -3,6 +3,7 @@ set -eu
 
 source_dir=$1
 compiler=$(realpath "$2")
+shift 2
 tmp=$(mktemp -d /tmp/ppchibicc-examples-XXXXXX)
 trap 'rm -rf "$tmp"' INT TERM HUP EXIT
 
@@ -33,7 +34,8 @@ for name in $steps; do
 
   # Word splitting is intentional for the compiler argument lists assembled
   # from the example CMake files above.
-  "$compiler" $incs -o "$out" $files
+  # Optional arguments select the backend/optimization level for LLVM checks.
+  "$compiler" "$@" $incs -o "$out" $files
   "$out" "$dir/data/input1.txt" "$result" >"$tmp/$name.stdout"
   diff -u "$dir/data/output1.txt" "$result"
 done

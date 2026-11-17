@@ -288,11 +288,12 @@ static long eval_const_expr(Token **rest, Token *tok) {
   // [https://www.sigbus.info/n1570#6.10.1p4] The standard requires
   // we replace remaining non-macro identifiers with "0" before
   // evaluating a constant expression. For example, `#if foo` is
-  // equivalent to `#if 0` if foo is not defined.
+  // equivalent to `#if 0` if foo is not defined. C23 true/false instead
+  // become 1/0, after macro expansion and without becoming defined macros.
   for (Token *t = expr; t->kind != TK_EOF; t = t->next) {
     if (t->kind == TK_IDENT) {
       Token *next = t->next;
-      *t = *new_num_token(0, t);
+      *t = *new_num_token(equal(t, "true") ? 1 : 0, t);
       t->next = next;
     }
   }
@@ -792,9 +793,19 @@ static char *detect_include_guard(Token *tok) {
   return NULL;
 }
 
+// Paths may name the same file through relative/absolute names or links.
+// Keep source names intact for diagnostics, __FILE__ and include resolution.
+static char *pragma_once_key(char *path) {
+  struct stat st;
+  if (stat(path, &st))
+    return NULL;
+  return format("%ju:%ju", (uintmax_t)st.st_dev, (uintmax_t)st.st_ino);
+}
+
 static Token *include_file(Token *tok, char *path, Token *filename_tok) {
   // Check for "#pragma once"
-  if (hashmap_get(&pragma_once, path))
+  char *key = pragma_once_key(path);
+  if (key && hashmap_get(&pragma_once, key))
     return tok;
 
   // If we read the same file before, and if the file was guarded
@@ -964,7 +975,9 @@ static Token *preprocess2(Token *tok) {
     }
 
     if (equal(tok, "pragma") && equal(tok->next, "once")) {
-      hashmap_put(&pragma_once, tok->file->name, (void *)1);
+      char *key = pragma_once_key(tok->file->name);
+      if (key)
+        hashmap_put(&pragma_once, key, (void *)1);
       tok = skip_line(tok->next->next);
       continue;
     }

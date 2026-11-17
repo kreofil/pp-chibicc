@@ -41,7 +41,7 @@ int cmp_int_ptr(const void *a, const void *b) {
 //             void base[n * size], size_t n, size_t size,
 //             typeof(int (const void [size], const void [size]))
 //             *compar);
-void ppVector_sort<ppVector.int_ptr* v>()  {
+void ppVector_sort<ppVector.int_ptr* v>(void)  {
   // Получение указателя на массив указателей на целые чисел
   void* v_ptr = ppVector_data((ppVector*)v);
   qsort(v_ptr, ppVector_size((ppVector*)v), sizeof(int*), cmp_int_ptr);

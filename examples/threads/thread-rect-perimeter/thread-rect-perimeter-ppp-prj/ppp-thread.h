@@ -19,7 +19,7 @@ typedef struct ThreadData {pthread_t threadId;} case{} ThreadData;
 // Обобщенная функция, задающая формат для передачи аргументов
 // и подменяемая на соответствующий обработчик специализации.
 // Часто он может бытьтолько один
-void RunThread <ThreadData* d>();
+void RunThread <ThreadData* d>(void);
 
 // POSIX функция, вызвывающая обработчик обобщения
 // подменяемый обработчиком специализации

@@ -28,7 +28,6 @@ typedef struct {
 } VarScope;
 
 // Represents a block scope.
-typedef struct Scope Scope;
 struct Scope {
   Scope *next;
 
@@ -79,8 +78,25 @@ struct PpcFunc {
   Type *fnptr_ty;
   Obj *table_var;
   Obj *default_fn;
+  Obj *candidates;
+  Obj **targets;
+  int target_count;
   PpcHandler *handlers;
+  PpcDispatchRuntimeInfo *runtime;
 };
+
+typedef struct PpcCall PpcCall;
+struct PpcCall {
+  PpcCall *next;
+  PpcFunc *family;
+  Obj *owner;
+  Node *call;
+  Obj *tag;
+  Obj *active;
+  Node *prefix;
+  Node *runtime_callee;
+};
+static PpcCall *ppc_calls;
 
 struct PpcGen {
   PpcGen *next;
@@ -149,6 +165,7 @@ static Scope *scope = &(Scope){};
 
 // Points to the function object the parser is currently parsing.
 static Obj *current_fn;
+static int in_param_list;
 
 // Lists of all goto statements and labels in the curent function.
 static Node *gotos;
@@ -171,6 +188,7 @@ static Type *enum_specifier(Token **rest, Token *tok);
 static Type *typeof_specifier(Token **rest, Token *tok);
 static Type *type_suffix(Token **rest, Token *tok, Type *ty);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
+static Node *compute_vla_size(Type *ty, Token *tok);
 static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr);
 static void array_initializer2(Token **rest, Token *tok, Initializer *init, int i);
 static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Member *mem);
@@ -182,7 +200,7 @@ static Node *ppc_tag_value(Member *mem, Token *tok);
 static Node *ppc_tag_initializer(Obj *var, Token *tok);
 static Node *ppc_vla_tag_initializer(Obj *var, Token *tok);
 static void ppc_gvar_tag_initializer(Obj *var, Initializer *init, Token *tok);
-static bool ppc_initializer_has_enum_feature(Initializer *init);
+static bool ppc_initializer_has_enum_feature(Initializer *init, bool runtime_only);
 static Member *ppc_read_enum_feature(Token **rest, Token *tok, Type *ty);
 static void ppc_check_enum_feature_target(Type *ty, Token *tok);
 static Node *ppc_enum_feature_assignment(Node *lhs, Member *feature, Token *tok);
@@ -193,11 +211,12 @@ static Node *expr_stmt(Token **rest, Token *tok);
 static Node *expr(Token **rest, Token *tok);
 static int64_t eval(Node *node);
 static int64_t eval2(Node *node, char ***label);
+static int64_t eval2_raw(Node *node, char ***label);
 static int64_t eval_rval(Node *node, char ***label);
 static bool is_const_expr(Node *node);
 static Node *assign(Token **rest, Token *tok);
 static Node *logor(Token **rest, Token *tok);
-static double eval_double(Node *node);
+static long double eval_float(Node *node);
 static Node *conditional(Token **rest, Token *tok);
 static Node *logand(Token **rest, Token *tok);
 static Node *bitor(Token **rest, Token *tok);
@@ -224,6 +243,8 @@ static Node *postfix(Token **rest, Token *tok);
 static Node *funcall(Token **rest, Token *tok, Node *node);
 static Node *unary(Token **rest, Token *tok);
 static Node *primary(Token **rest, Token *tok);
+static Obj *find_func(char *name);
+static Node *new_func_call_node(Obj *fn, Node *args, Token *tok);
 static Node *new_expr_stmt_node(Node *expr, Token *tok);
 static Node *ppc_tag_expr(Obj *var, Type *base_ty, Token *tok);
 static Node *ppc_extent_expr(Type *base, Token *tok);
@@ -236,16 +257,12 @@ static Node *ppc_get_subtype_index_expr(Token *tok, Type *ty);
 static Node *ppc_get_spec_var_index_expr(Token *tok, Node *ptr);
 static Node *ppc_spec_index_cmp_expr(Token *tok, Node *lhs, Node *rhs);
 static Node *ppc_funcall_expr(Token **rest, Token *tok);
-static Token *parse_typedef(Token *tok, Type *basety);
+static Token *parse_typedef(Token *tok, Type *basety, Node **vla_sizes);
 static bool is_ppc_function(Token *tok);
 static Token *ppc_function(Token *tok, Type *basety, VarAttr *attr);
 static bool is_function(Token *tok);
 static Token *function(Token *tok, Type *basety, VarAttr *attr);
 static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
-
-static int align_down(int n, int align) {
-  return align_to(n - align + 1, align);
-}
 
 static void enter_scope(void) {
   Scope *sc = calloc(1, sizeof(Scope));
@@ -453,7 +470,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
   hashmap_put2(&scope->tags, tok->loc, tok->len, ty);
 }
 
-// declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
+// declspec = ("void" | "_Bool" | "bool" | "char" | "short" | "int" | "long"
 //             | "typedef" | "static" | "extern" | "inline"
 //             | "_Thread_local" | "__thread"
 //             | "signed" | "unsigned"
@@ -495,6 +512,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   Type *ty = ty_int;
   int counter = 0;
   bool is_atomic = false;
+  bool is_volatile = false;
 
   while (is_typename(tok)) {
     // Handle storage class specifiers.
@@ -522,8 +540,13 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       continue;
     }
 
+    if (consume(&tok, tok, "volatile")) {
+      is_volatile = true;
+      continue;
+    }
+
     // These keywords are recognized but ignored.
-    if (consume(&tok, tok, "const") || consume(&tok, tok, "volatile") ||
+    if (consume(&tok, tok, "const") ||
         consume(&tok, tok, "auto") || consume(&tok, tok, "register") ||
         consume(&tok, tok, "restrict") || consume(&tok, tok, "__restrict") ||
         consume(&tok, tok, "__restrict__") || consume(&tok, tok, "_Noreturn"))
@@ -584,7 +607,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     // Handle built-in types.
     if (equal(tok, "void"))
       counter += VOID;
-    else if (equal(tok, "_Bool"))
+    else if (equal(tok, "_Bool") || equal(tok, "bool"))
       counter += BOOL;
     else if (equal(tok, "char"))
       counter += CHAR;
@@ -674,6 +697,10 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     ty = copy_type(ty);
     ty->is_atomic = true;
   }
+  if (is_volatile) {
+    ty = copy_type(ty);
+    ty->is_volatile = true;
+  }
 
   *rest = tok;
   return ty;
@@ -681,6 +708,17 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
 
 // func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = declspec declarator
+static void bind_param(Type *ty) {
+  if (!ty->name)
+    return;
+  char *name = get_ident(ty->name);
+  if (hashmap_get(&scope->vars, name))
+    error_tok(ty->name, "duplicate parameter name");
+  ty->param_var = new_var(name, ty);
+  ty->param_var->is_local = true;
+  ty->param_var->tok = ty->name;
+}
+
 static Type *func_params(Token **rest, Token *tok, Type *ty) {
   if (equal(tok, "void") && equal(tok->next, ")")) {
     *rest = tok->next->next;
@@ -690,6 +728,13 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
   Type head = {};
   Type *cur = &head;
   bool is_variadic = false;
+  Obj *saved_locals = locals;
+  Obj *saved_fn = current_fn;
+  Obj *context = calloc(1, sizeof(Obj));
+  locals = NULL;
+  current_fn = context;
+  enter_scope();
+  in_param_list++;
 
   while (!equal(tok, ")")) {
     if (cur != &head)
@@ -705,53 +750,94 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     Type *ty2 = declspec(&tok, tok, NULL);
     ty2 = declarator(&tok, tok, ty2);
 
+    Type *decl = ty2;
+    for (Type *inner = decl->base; inner; inner = inner->base)
+      if (inner->param_array_qualifiers)
+        error_tok(ty2->name_pos, "array qualifiers require the outermost parameter array");
+    Node *setup = compute_vla_size(decl, tok);
     Token *name = ty2->name;
 
-    if (ty2->kind == TY_ARRAY) {
+    if (ty2->kind == TY_ARRAY || ty2->kind == TY_VLA) {
       // "array of T" is converted to "pointer to T" only in the parameter
       // context. For example, *argv[] is converted to **argv by this.
-      ty2 = pointer_to(ty2->base);
+      Type *base = ty2->base;
+      if (ty2->is_volatile) {
+        base = copy_type(base);
+        base->is_volatile = true;
+      }
+      ty2 = pointer_to(base);
       ty2->name = name;
+      ty2->name_pos = decl->name_pos;
+      ty2->is_volatile = decl->param_array_volatile;
     } else if (ty2->kind == TY_FUNC) {
       // Likewise, a function is converted to a pointer to a function
       // only in the parameter context.
       ty2 = pointer_to(ty2);
       ty2->name = name;
+      ty2->name_pos = decl->name_pos;
     }
 
     cur = cur->next = copy_type(ty2);
+    cur->param_decl = decl;
+    cur->param_vla_setup = setup;
+    bind_param(cur);
   }
-
-  if (cur == &head)
-    is_variadic = true;
 
   ty = func_type(ty);
   ty->params = head.next;
   ty->is_variadic = is_variadic;
+  ty->is_unprototyped = cur == &head && !is_variadic;
+  ty->param_scope = scope;
+  ty->param_context = context;
+  context->locals = locals;
+  leave_scope();
+  in_param_list--;
+  locals = saved_locals;
+  current_fn = saved_fn;
   *rest = tok->next;
   return ty;
 }
 
 // array-dimensions = ("static" | "restrict")* const-expr? "]" type-suffix
 static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
-  while (equal(tok, "static") || equal(tok, "restrict"))
+  Token *start = tok;
+  bool qualifiers = false;
+  bool pointer_volatile = false;
+  bool static_bound = false;
+  while (equal(tok, "static") || equal(tok, "const") || equal(tok, "volatile") ||
+         equal(tok, "restrict") || equal(tok, "__restrict") || equal(tok, "__restrict__")) {
+    qualifiers = true;
+    pointer_volatile |= equal(tok, "volatile");
+    static_bound |= equal(tok, "static");
     tok = tok->next;
-
-  if (equal(tok, "]")) {
-    ty = type_suffix(rest, tok->next, ty);
-    return array_of(ty, -1);
   }
+  if (qualifiers && !in_param_list)
+    error_tok(start, "array qualifiers require a function parameter");
 
-  Node *expr = conditional(&tok, tok);
-  add_type(expr);
-  if (expr->ty->kind == TY_NULLPTR)
-    error_tok(expr->tok, "array size must have integer type");
-  tok = skip(tok, "]");
-  ty = type_suffix(rest, tok, ty);
-
-  if (ty->kind == TY_VLA || !is_const_expr(expr))
-    return vla_of(ty, expr);
-  return array_of(ty, eval(expr));
+  if (equal(tok, "*") && equal(tok->next, "]")) {
+    if (!in_param_list)
+      error_tok(tok, "[*] requires function prototype scope");
+    if (static_bound)
+      error_tok(tok, "static array parameter requires a bound");
+    ty = vla_of(type_suffix(rest, tok->next->next, ty), new_num(1, tok));
+    ty->is_vla_star = true;
+  } else if (equal(tok, "]")) {
+    if (static_bound)
+      error_tok(tok, "static array parameter requires a bound");
+    ty = type_suffix(rest, tok->next, ty);
+    ty = array_of(ty, -1);
+  } else {
+    Node *expr = conditional(&tok, tok);
+    add_type(expr);
+    if (expr->ty->kind == TY_NULLPTR)
+      error_tok(expr->tok, "array size must have integer type");
+    tok = skip(tok, "]");
+    ty = type_suffix(rest, tok, ty);
+    ty = ty->kind == TY_VLA || !is_const_expr(expr) ? vla_of(ty, expr) : array_of(ty, eval(expr));
+  }
+  ty->param_array_qualifiers = qualifiers;
+  ty->param_array_volatile = pointer_volatile;
+  return ty;
 }
 
 // type-suffix = "(" func-params
@@ -773,8 +859,11 @@ static Type *pointers(Token **rest, Token *tok, Type *ty) {
   while (consume(&tok, tok, "*")) {
     ty = pointer_to(ty);
     while (equal(tok, "const") || equal(tok, "volatile") || equal(tok, "restrict") ||
-           equal(tok, "__restrict") || equal(tok, "__restrict__"))
+           equal(tok, "__restrict") || equal(tok, "__restrict__")) {
+      if (equal(tok, "volatile"))
+        ty->is_volatile = true;
       tok = tok->next;
+    }
   }
   *rest = tok;
   return ty;
@@ -906,7 +995,16 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
   } else {
     Node *node = expr(&tok, tok);
     add_type(node);
+    if (node->kind == ND_MEMBER && node->member->is_bitfield)
+      error_tok(node->tok, "typeof applied to a bitfield");
     ty = node->ty;
+    // Width belongs to a value expression, not to a declared integer type.
+    // Like Clang, typeof of a comma/assignment/postfix expression uses the
+    // underlying type; variables of that type have its full integer range.
+    if (ty->bitfield_width) {
+      ty = copy_type(ty);
+      ty->bitfield_width = 0;
+    }
   }
   *rest = skip(tok, ")");
   return ty;
@@ -915,6 +1013,10 @@ static Type *typeof_specifier(Token **rest, Token *tok) {
 // Generate code for computing a VLA size.
 static Node *compute_vla_size(Type *ty, Token *tok) {
   Node *node = new_node(ND_NULL_EXPR, tok);
+  // A typedef or an earlier declaration has already captured this bound.
+  // Reuse its runtime size instead of evaluating its expression again.
+  if (ty->kind == TY_VLA && ty->vla_size)
+    return node;
   if (ty->base)
     node = new_binary(ND_COMMA, node, compute_vla_size(ty->base, tok), tok);
 
@@ -929,7 +1031,8 @@ static Node *compute_vla_size(Type *ty, Token *tok) {
 
   ty->vla_size = new_lvar("", ty_ulong);
   Node *expr = new_binary(ND_ASSIGN, new_var_node(ty->vla_size, tok),
-                          new_binary(ND_MUL, ty->vla_len, base_sz, tok),
+                          new_binary(ND_MUL, new_cast(ty->vla_len, ty_ulong),
+                                     new_cast(base_sz, ty_ulong), tok),
                           tok);
   return new_binary(ND_COMMA, node, expr, tok);
 }
@@ -966,7 +1069,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       Initializer *init = NULL;
       if (equal(tok, "="))
         init = gvar_initializer(&tok, tok->next, var);
-      if (attr->is_tls && ppc_initializer_has_enum_feature(init))
+      if (attr->is_tls && ppc_initializer_has_enum_feature(init, false))
         error_tok(tok, "PPC enum feature initialization of thread-local storage is not supported");
       ppc_gvar_tag_initializer(var, init, tok);
       continue;
@@ -986,9 +1089,13 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr) 
       // x = alloca(tmp)`.
       Obj *var = new_lvar(get_ident(ty->name), ty);
       Token *tok = ty->name;
+      Type *elem = ty;
+      while (elem->kind == TY_ARRAY || elem->kind == TY_VLA)
+        elem = elem->base;
+      Node *allocation = new_alloca(new_var_node(ty->vla_size, tok));
+      allocation->alloca_align = MAX(16, MAX(elem->align, attr ? attr->align : 0));
       Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
-                              new_alloca(new_var_node(ty->vla_size, tok)),
-                              tok);
+                              allocation, tok);
 
       cur = cur->next = new_unary(ND_EXPR_STMT, expr, tok);
 
@@ -1339,14 +1446,18 @@ static void union_initializer(Token **rest, Token *tok, Initializer *init) {
     return;
   }
 
-  init->mem = init->ty->members;
+  init->mem = next_user_member(init->ty->members);
+  if (!init->mem) {
+    *rest = skip(skip(tok, "{"), "}");
+    return;
+  }
 
   if (equal(tok, "{")) {
-    initializer2(&tok, tok->next, init->children[0]);
+    initializer2(&tok, tok->next, init->children[init->mem->idx]);
     consume(&tok, tok, ",");
     *rest = skip(tok, "}");
   } else {
-    initializer2(rest, tok, init->children[0]);
+    initializer2(rest, tok, init->children[init->mem->idx]);
   }
 }
 
@@ -1403,6 +1514,16 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
   }
 
   if (init->ty->kind == TY_UNION) {
+    if (!equal(tok, "{")) {
+      Node *expr = assign(rest, tok);
+      add_type(expr);
+      if (expr->ty->kind == TY_UNION) {
+        if (!is_assignable(init->ty, expr->ty))
+          error_tok(expr->tok, "incompatible union initializer");
+        init->expr = expr;
+        return;
+      }
+    }
     union_initializer(rest, tok, init);
     return;
   }
@@ -1422,7 +1543,8 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
 
   init->expr = assign(rest, tok);
   add_type(init->expr);
-  if (init->ty->kind == TY_NULLPTR || init->expr->ty->kind == TY_NULLPTR)
+  if (init->ty->kind == TY_BOOL || init->ty->kind == TY_NULLPTR ||
+      init->expr->ty->kind == TY_NULLPTR)
     init->expr = new_cast(init->expr, init->ty);
 }
 
@@ -1496,6 +1618,8 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
     Node *node = new_node(ND_NULL_EXPR, tok);
 
     for (Member *mem = ty->members; mem; mem = mem->next) {
+      if (mem->is_bitfield && !mem->name)
+        continue;
       InitDesg desg2 = {desg, 0, mem};
 
       if (mem->is_ppc_tag) {
@@ -1512,8 +1636,10 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
     return node;
   }
 
-  if (ty->kind == TY_UNION) {
-    Member *mem = init->mem ? init->mem : ty->members;
+  if (ty->kind == TY_UNION && !init->expr) {
+    Member *mem = init->mem;
+    if (!mem)
+      return new_node(ND_NULL_EXPR, tok);
     InitDesg desg2 = {desg, 0, mem};
     return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
   }
@@ -1578,10 +1704,19 @@ static Node *new_block_node(Node *body, Token *tok) {
   return node;
 }
 
+static bool ppc_constant_tag(Member *mem) {
+  return !mem->ppc_tag_var ||
+         (mem->ppc_tag_base && mem->ppc_tag_base->is_ppc_const_generalization);
+}
+
+static int ppc_declared_tag(Member *mem) {
+  return mem->is_ppc_tag ? mem->ppc_index : mem->idx;
+}
+
 static Node *ppc_tag_value(Member *mem, Token *tok) {
-  if (mem->ppc_tag_var)
+  if (!ppc_constant_tag(mem))
     return new_var_node(mem->ppc_tag_var, tok);
-  return new_num(0, tok);
+  return new_num(ppc_declared_tag(mem), tok);
 }
 
 static Type *ppc_enum_family(Type *ty) {
@@ -1666,7 +1801,7 @@ static bool ppc_type_has_tag(Type *ty, bool runtime_only) {
 
   for (Member *mem = ty->members; mem; mem = mem->next) {
     if (mem->is_ppc_tag) {
-      if (!runtime_only || mem->ppc_tag_var)
+      if (!runtime_only || !ppc_constant_tag(mem))
         return true;
       continue;
     }
@@ -1777,25 +1912,29 @@ static Node *ppc_vla_tag_initializer(Obj *var, Token *tok) {
   return loop;
 }
 
-static bool ppc_initializer_has_enum_feature(Initializer *init) {
+static bool ppc_initializer_has_enum_feature(Initializer *init, bool runtime_only) {
   if (!init)
     return false;
   if (init->ppc_enum_feature)
-    return true;
+    return !runtime_only || !ppc_constant_tag(init->ppc_enum_feature);
   if (init->ty->kind == TY_ARRAY) {
     for (int i = 0; i < init->ty->array_len; i++)
-      if (ppc_initializer_has_enum_feature(init->children[i]))
+      if (ppc_initializer_has_enum_feature(init->children[i], runtime_only))
         return true;
   } else if (init->ty->kind == TY_STRUCT || init->ty->kind == TY_UNION) {
     for (Member *mem = init->ty->members; mem; mem = mem->next)
-      if (ppc_initializer_has_enum_feature(init->children[mem->idx]))
+      if (ppc_initializer_has_enum_feature(init->children[mem->idx], runtime_only))
         return true;
   }
   return false;
 }
 
 static void ppc_gvar_tag_initializer(Obj *var, Initializer *init, Token *tok) {
-  if (!ppc_type_has_tag(var->ty, true) && !ppc_initializer_has_enum_feature(init))
+  // Explicit closed initializers already contain their tags in .data.
+  // Retain startup initialization for tentative/static zero-initialized
+  // objects, preserving C common-symbol merging across translation units.
+  if (!ppc_type_has_tag(var->ty, init != NULL) &&
+      !ppc_initializer_has_enum_feature(init, true))
     return;
 
   static int id = 0;
@@ -1813,16 +1952,16 @@ static void ppc_gvar_tag_initializer(Obj *var, Initializer *init, Token *tok) {
   add_type(fn->body);
 }
 
-static uint64_t read_buf(char *buf, int sz) {
-  if (sz == 1)
-    return *buf;
-  if (sz == 2)
-    return *(uint16_t *)buf;
-  if (sz == 4)
-    return *(uint32_t *)buf;
-  if (sz == 8)
-    return *(uint64_t *)buf;
-  unreachable();
+static void write_bitfield(char *buf, Member *mem, Node *expr) {
+  if (!expr)
+    return;
+  uint64_t value = eval(new_cast(expr, mem->ty));
+  for (int i = 0; i < mem->bit_width; i++) {
+    int bit = mem->bit_offset + i;
+    unsigned char mask = 1 << (bit % 8);
+    char *byte = buf + mem->offset + bit / 8;
+    *byte = (*byte & ~mask) | (((value >> i) & 1) ? mask : 0);
+  }
 }
 
 static void write_buf(char *buf, uint64_t val, int sz) {
@@ -1850,21 +1989,15 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
   if (ty->kind == TY_STRUCT) {
     for (Member *mem = ty->members; mem; mem = mem->next) {
       if (mem->is_ppc_tag) {
-        write_buf(buf + offset + mem->offset, 0, mem->ty->size);
+        Member *tag = init->ppc_enum_feature ? init->ppc_enum_feature : mem;
+        write_buf(buf + offset + mem->offset,
+                  ppc_constant_tag(tag) ? ppc_declared_tag(tag) : 0, mem->ty->size);
         continue;
       }
 
       if (mem->is_bitfield) {
-        Node *expr = init->children[mem->idx]->expr;
-        if (!expr)
-          break;
-
-        char *loc = buf + offset + mem->offset;
-        uint64_t oldval = read_buf(loc, mem->ty->size);
-        uint64_t newval = eval(expr);
-        uint64_t mask = (1L << mem->bit_width) - 1;
-        uint64_t combined = oldval | ((newval & mask) << mem->bit_offset);
-        write_buf(loc, combined, mem->ty->size);
+        if (mem->name)
+          write_bitfield(buf + offset, mem, init->children[mem->idx]->expr);
       } else {
         cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf,
                               offset + mem->offset);
@@ -1874,8 +2007,14 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
   }
 
   if (ty->kind == TY_UNION) {
+    if (init->expr)
+      error_tok(init->expr->tok, "union expression initializer is not supported for static storage");
     if (!init->mem)
       return cur;
+    if (init->mem->is_bitfield) {
+      write_bitfield(buf + offset, init->mem, init->children[init->mem->idx]->expr);
+      return cur;
+    }
     return write_gvar_data(cur, init->children[init->mem->idx],
                            init->mem->ty, buf, offset);
   }
@@ -1884,12 +2023,19 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
     return cur;
 
   if (ty->kind == TY_FLOAT) {
-    *(float *)(buf + offset) = eval_double(init->expr);
+    *(float *)(buf + offset) = eval_float(init->expr);
     return cur;
   }
 
   if (ty->kind == TY_DOUBLE) {
-    *(double *)(buf + offset) = eval_double(init->expr);
+    *(double *)(buf + offset) = eval_float(init->expr);
+    return cur;
+  }
+
+  if (ty->kind == TY_LDOUBLE) {
+    long double value = eval_float(init->expr);
+    // The target's ten value bytes are followed by six zero padding bytes.
+    memcpy(buf + offset, &value, 10);
     return cur;
   }
 
@@ -1915,7 +2061,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
 // initializer list contains a non-constant expression.
 static Initializer *gvar_initializer(Token **rest, Token *tok, Obj *var) {
   Initializer *init = initializer(rest, tok, var->ty, &var->ty);
-  if (var->is_tls && ppc_initializer_has_enum_feature(init))
+  if (var->is_tls && ppc_initializer_has_enum_feature(init, false))
     error_tok(tok, "PPC enum feature initialization of thread-local storage is not supported");
 
   Relocation head = {};
@@ -1932,7 +2078,7 @@ static bool is_typename(Token *tok) {
 
   if (map.capacity == 0) {
     static char *kw[] = {
-      "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+      "void", "_Bool", "bool", "char", "short", "int", "long", "struct", "union",
       "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
       "const", "volatile", "auto", "register", "restrict", "__restrict",
       "__restrict__", "_Noreturn", "float", "double", "typeof", "inline",
@@ -1960,6 +2106,20 @@ static Node *asm_stmt(Token **rest, Token *tok) {
   node->asm_str = tok->str;
   *rest = skip(tok->next, ")");
   return node;
+}
+
+// Convert a case constant to the promoted controlling type before comparing
+// labels. In particular, do not truncate 64-bit labels through a C int.
+static int64_t switch_case_value(Token **rest, Token *tok) {
+  Node *value = conditional(rest, tok);
+  add_type(value);
+  if (!is_integer(value->ty))
+    error_tok(value->tok, "case value must have integer type");
+  return eval(new_cast(value, current_switch->cond->ty));
+}
+
+static bool switch_case_less(Type *ty, int64_t left, int64_t right) {
+  return ty->is_unsigned ? (uint64_t)left < (uint64_t)right : left < right;
 }
 
 // stmt = "return" expr? ";"
@@ -2016,8 +2176,9 @@ static Node *stmt(Token **rest, Token *tok) {
     tok = skip(tok->next, "(");
     node->cond = expr(&tok, tok);
     add_type(node->cond);
-    if (node->cond->ty->kind == TY_NULLPTR)
+    if (!is_integer(node->cond->ty))
       error_tok(node->cond->tok, "switch condition must have integer type");
+    node->cond = new_cast(node->cond, integer_promotion(node->cond->ty));
     tok = skip(tok, ")");
 
     Node *sw = current_switch;
@@ -2038,37 +2199,44 @@ static Node *stmt(Token **rest, Token *tok) {
       error_tok(tok, "stray case");
 
     Node *node = new_node(ND_CASE, tok);
-    int begin = const_expr(&tok, tok->next);
-    int end;
+    int64_t begin = switch_case_value(&tok, tok->next);
+    int64_t end;
 
     if (equal(tok, "...")) {
       // [GNU] Case ranges, e.g. "case 1 ... 5:"
-      end = const_expr(&tok, tok->next);
-      if (end < begin)
-        error_tok(tok, "empty case range specified");
+      end = switch_case_value(&tok, tok->next);
+      if (switch_case_less(current_switch->cond->ty, end, begin))
+        error_tok(node->tok, "empty case range specified");
     } else {
       end = begin;
     }
 
     tok = skip(tok, ":");
     node->label = new_unique_name();
-    node->lhs = stmt(rest, tok);
     node->begin = begin;
     node->end = end;
+    Type *ty = current_switch->cond->ty;
+    for (Node *other = current_switch->case_next; other; other = other->case_next)
+      if (!switch_case_less(ty, end, other->begin) &&
+          !switch_case_less(ty, other->end, begin))
+        error_tok(node->tok, "duplicate or overlapping case value");
     node->case_next = current_switch->case_next;
     current_switch->case_next = node;
+    node->lhs = stmt(rest, tok);
     return node;
   }
 
   if (equal(tok, "default")) {
     if (!current_switch)
       error_tok(tok, "stray default");
+    if (current_switch->default_case)
+      error_tok(tok, "duplicate default label");
 
     Node *node = new_node(ND_CASE, tok);
     tok = skip(tok->next, ":");
     node->label = new_unique_name();
-    node->lhs = stmt(rest, tok);
     current_switch->default_case = node;
+    node->lhs = stmt(rest, tok);
     return node;
   }
 
@@ -2213,7 +2381,10 @@ static Node *compound_stmt(Token **rest, Token *tok) {
       Type *basety = declspec(&tok, tok, &attr);
 
       if (attr.is_typedef) {
-        tok = parse_typedef(tok, basety);
+        Node *sizes = NULL;
+        tok = parse_typedef(tok, basety, &sizes);
+        cur = cur->next = new_unary(ND_EXPR_STMT, sizes, tok);
+        add_type(cur);
         continue;
       }
 
@@ -2282,23 +2453,49 @@ static int64_t eval(Node *node) {
 // expression for a global variable.
 static int64_t eval2(Node *node, char ***label) {
   add_type(node);
+  int64_t value = eval2_raw(node, label);
+  // Constant expressions keep the width of every intermediate integer, not
+  // just the final initializer/case type (e.g. ~0U is UINT_MAX, not ULONG_MAX).
+  if (node->ty->kind == TY_BOOL)
+    return value != 0;
+  if (is_integer(node->ty)) {
+    if (node->ty->size == 1) {
+      if (node->ty->is_unsigned) return (uint8_t)value;
+      return (int8_t)value;
+    }
+    if (node->ty->size == 2) {
+      if (node->ty->is_unsigned) return (uint16_t)value;
+      return (int16_t)value;
+    }
+    if (node->ty->size == 4) {
+      if (node->ty->is_unsigned) return (uint32_t)value;
+      return (int32_t)value;
+    }
+  }
+  return value;
+}
 
+static bool eval_truth(Node *node) {
+  return is_flonum(node->ty) ? (bool)eval_float(node) : eval(node) != 0;
+}
+
+static int64_t eval2_raw(Node *node, char ***label) {
   if (is_flonum(node->ty))
-    return eval_double(node);
+    return eval_float(node);
 
   switch (node->kind) {
   case ND_ADD:
-    return eval2(node->lhs, label) + eval(node->rhs);
+    return (uint64_t)eval2(node->lhs, label) + eval(node->rhs);
   case ND_SUB:
-    return eval2(node->lhs, label) - eval(node->rhs);
+    return (uint64_t)eval2(node->lhs, label) - eval(node->rhs);
   case ND_MUL:
-    return eval(node->lhs) * eval(node->rhs);
+    return (uint64_t)eval(node->lhs) * eval(node->rhs);
   case ND_DIV:
     if (node->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) / eval(node->rhs);
     return eval(node->lhs) / eval(node->rhs);
   case ND_NEG:
-    return -eval(node->lhs);
+    return (uint64_t)0 - eval(node->lhs);
   case ND_MOD:
     if (node->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) % eval(node->rhs);
@@ -2310,46 +2507,74 @@ static int64_t eval2(Node *node, char ***label) {
   case ND_BITXOR:
     return eval(node->lhs) ^ eval(node->rhs);
   case ND_SHL:
-    return eval(node->lhs) << eval(node->rhs);
+    return (uint64_t)eval(node->lhs) << eval(node->rhs);
   case ND_SHR:
     if (node->ty->is_unsigned && node->ty->size == 8)
       return (uint64_t)eval(node->lhs) >> eval(node->rhs);
     return eval(node->lhs) >> eval(node->rhs);
   case ND_EQ:
+    if (is_flonum(node->lhs->ty))
+      return eval_float(node->lhs) == eval_float(node->rhs);
     return eval(node->lhs) == eval(node->rhs);
   case ND_NE:
+    if (is_flonum(node->lhs->ty))
+      return eval_float(node->lhs) != eval_float(node->rhs);
     return eval(node->lhs) != eval(node->rhs);
   case ND_LT:
+    if (is_flonum(node->lhs->ty))
+      return eval_float(node->lhs) < eval_float(node->rhs);
     if (node->lhs->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) < eval(node->rhs);
     return eval(node->lhs) < eval(node->rhs);
   case ND_LE:
+    if (is_flonum(node->lhs->ty))
+      return eval_float(node->lhs) <= eval_float(node->rhs);
     if (node->lhs->ty->is_unsigned)
       return (uint64_t)eval(node->lhs) <= eval(node->rhs);
     return eval(node->lhs) <= eval(node->rhs);
   case ND_COND:
-    return eval(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
+    return eval_truth(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
   case ND_COMMA:
     return eval2(node->rhs, label);
   case ND_NOT:
-    return !eval(node->lhs);
+    return !eval_truth(node->lhs);
   case ND_BITNOT:
     return ~eval(node->lhs);
   case ND_LOGAND:
-    return eval(node->lhs) && eval(node->rhs);
+    return eval_truth(node->lhs) && eval_truth(node->rhs);
   case ND_LOGOR:
-    return eval(node->lhs) || eval(node->rhs);
+    return eval_truth(node->lhs) || eval_truth(node->rhs);
   case ND_CAST: {
     if (node->ty->kind == TY_BOOL && is_flonum(node->lhs->ty))
-      return eval_double(node->lhs) != 0;
-    int64_t val = eval2(node->lhs, label);
-    if (node->ty->kind == TY_BOOL)
-      return val != 0;
+      return (bool)eval_float(node->lhs);
+    if (node->ty->kind == TY_BOOL) {
+      // An address constant converts to true, not to a byte relocation.
+      // Keep any symbol reference local to this conversion.
+      char **symbol = NULL;
+      int64_t value = eval2(node->lhs, &symbol);
+      if (symbol && !label)
+        error_tok(node->tok, "not a compile-time constant");
+      return symbol || value != 0;
+    }
+    int64_t val;
+    if (is_integer(node->ty) && is_flonum(node->lhs->ty)) {
+      if (node->ty->is_unsigned)
+        val = (uint64_t)eval_float(node->lhs);
+      else
+        val = (int64_t)eval_float(node->lhs);
+    } else {
+      val = eval2(node->lhs, label);
+    }
     if (is_integer(node->ty)) {
       switch (node->ty->size) {
       case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
       case 2: return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
-      case 4: return node->ty->is_unsigned ? (uint32_t)val : (int32_t)val;
+      case 4:
+        // Keep signed int negative when returning int64_t: the conditional
+        // operator would convert the signed arm to uint32_t first.
+        if (node->ty->is_unsigned)
+          return (uint32_t)val;
+        return (int32_t)val;
       }
     }
     return val;
@@ -2513,7 +2738,9 @@ int64_t const_expr(Token **rest, Token *tok) {
   return eval(node);
 }
 
-static double eval_double(Node *node) {
+// Keep the target type's precision at every node, including explicit casts.
+// In particular a long-double initializer must never pass through double.
+static long double eval_float(Node *node) {
   add_type(node);
 
   if (is_integer(node->ty)) {
@@ -2522,30 +2749,44 @@ static double eval_double(Node *node) {
     return eval(node);
   }
 
+  long double value;
   switch (node->kind) {
   case ND_ADD:
-    return eval_double(node->lhs) + eval_double(node->rhs);
+    value = eval_float(node->lhs) + eval_float(node->rhs);
+    break;
   case ND_SUB:
-    return eval_double(node->lhs) - eval_double(node->rhs);
+    value = eval_float(node->lhs) - eval_float(node->rhs);
+    break;
   case ND_MUL:
-    return eval_double(node->lhs) * eval_double(node->rhs);
+    value = eval_float(node->lhs) * eval_float(node->rhs);
+    break;
   case ND_DIV:
-    return eval_double(node->lhs) / eval_double(node->rhs);
+    value = eval_float(node->lhs) / eval_float(node->rhs);
+    break;
   case ND_NEG:
-    return -eval_double(node->lhs);
+    value = -eval_float(node->lhs);
+    break;
   case ND_COND:
-    return eval_double(node->cond) ? eval_double(node->then) : eval_double(node->els);
+    value = eval_truth(node->cond) ? eval_float(node->then) : eval_float(node->els);
+    break;
   case ND_COMMA:
-    return eval_double(node->rhs);
+    value = eval_float(node->rhs);
+    break;
   case ND_CAST:
-    if (is_flonum(node->lhs->ty))
-      return eval_double(node->lhs);
-    return eval(node->lhs);
+    value = eval_float(node->lhs);
+    break;
   case ND_NUM:
-    return node->fval;
+    value = node->fval;
+    break;
+  default:
+    error_tok(node->tok, "not a compile-time constant");
   }
 
-  error_tok(node->tok, "not a compile-time constant");
+  if (node->ty->kind == TY_FLOAT)
+    return (float)value;
+  if (node->ty->kind == TY_DOUBLE)
+    return (double)value;
+  return value;
 }
 
 // Convert op= operators to expressions containing an assignment.
@@ -2898,7 +3139,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   }
 
   // VLA + num
-  if (lhs->ty->base->kind == TY_VLA) {
+  if (lhs->ty->base && lhs->ty->base->kind == TY_VLA && is_integer(rhs->ty)) {
     rhs = new_binary(ND_MUL, rhs, new_var_node(lhs->ty->base->vla_size, tok), tok);
     return new_binary(ND_ADD, lhs, rhs, tok);
   }
@@ -2920,8 +3161,8 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
     return new_binary(ND_SUB, lhs, rhs, tok);
 
-  // VLA + num
-  if (lhs->ty->base->kind == TY_VLA) {
+  // VLA - num
+  if (lhs->ty->base && lhs->ty->base->kind == TY_VLA && is_integer(rhs->ty)) {
     rhs = new_binary(ND_MUL, rhs, new_var_node(lhs->ty->base->vla_size, tok), tok);
     add_type(rhs);
     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
@@ -2942,6 +3183,9 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
   if (lhs->ty->base && rhs->ty->base) {
     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
     node->ty = ty_long;
+    if (lhs->ty->base->kind == TY_VLA)
+      return new_binary(ND_DIV, node,
+                        new_cast(new_var_node(lhs->ty->base->vla_size, tok), ty_long), tok);
     return new_binary(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
   }
 
@@ -3027,7 +3271,7 @@ static Node *unary(Token **rest, Token *tok) {
     add_type(node);
     if (node->ty->kind == TY_NULLPTR)
       error_tok(tok, "invalid nullptr_t operand");
-    return node;
+    return new_cast(node, integer_promotion(node->ty));
   }
 
   if (equal(tok, "-"))
@@ -3096,6 +3340,26 @@ static void check_duplicate_members(HashMap *names, Member *members) {
   }
 }
 
+static void bitfield_width(Token **rest, Token *tok, Member *mem, VarAttr *attr) {
+  Node *width = conditional(rest, tok);
+  add_type(width);
+  if (!is_integer_constant_expr(width, false))
+    error_tok(tok, "bitfield width must be an integer constant expression");
+  if (!is_integer(mem->ty) || mem->ty->size < 1 || mem->ty->size > 8 ||
+      mem->ty->is_atomic)
+    error_tok(mem->tok, "bitfield requires a non-atomic integer type");
+  int max = mem->ty->kind == TY_BOOL ? 1 : mem->ty->size * 8;
+  int64_t n = eval(width);
+  if (n < 0 || n > max)
+    error_tok(tok, "bitfield width must be between 0 and %d", max);
+  if (!n && mem->name)
+    error_tok(mem->tok, "named bitfield must have nonzero width");
+  if (attr->align)
+    error_tok(mem->tok, "alignment cannot be specified for a bitfield");
+  mem->is_bitfield = true;
+  mem->bit_width = n;
+}
+
 // struct-members = (declspec declarator (","  declarator)* ";")*
 static void struct_members(Token **rest, Token *tok, Type *ty) {
   Member head = {};
@@ -3139,8 +3403,7 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       mem->align = attr.align ? attr.align : mem->ty->align;
 
       if (consume(&tok, tok, ":")) {
-        mem->is_bitfield = true;
-        mem->bit_width = const_expr(&tok, tok);
+        bitfield_width(&tok, tok, mem, &attr);
       }
 
       cur = cur->next = mem;
@@ -3190,8 +3453,7 @@ static void ppc_spec_members(Token **rest, Token *tok, Type *ty, bool pointers_o
       mem->align = attr.align ? attr.align : mem->ty->align;
 
       if (consume(&tok, tok, ":")) {
-        mem->is_bitfield = true;
-        mem->bit_width = const_expr(&tok, tok);
+        bitfield_width(&tok, tok, mem, &attr);
       }
 
       if (pointers_only && (mem->ty->kind != TY_PTR || mem->is_bitfield ||
@@ -3221,8 +3483,7 @@ static Member *ppc_default_spec_member(Token **rest, Token *tok) {
   mem->align = attr.align ? attr.align : mem->ty->align;
 
   if (consume(&tok, tok, ":")) {
-    mem->is_bitfield = true;
-    mem->bit_width = const_expr(&tok, tok);
+    bitfield_width(&tok, tok, mem, &attr);
   }
 
   *rest = skip(tok, ";");
@@ -3331,7 +3592,7 @@ static bool tok_eq(Token *a, Token *b) {
 
 static Member *next_user_member(Member *mem) {
   while (mem && (mem->is_ppc_tag || mem->is_ppc_union_storage ||
-                 mem->is_ppc_union_padding))
+                 mem->is_ppc_union_padding || (mem->is_bitfield && !mem->name)))
     mem = mem->next;
   return mem;
 }
@@ -3406,6 +3667,7 @@ static void ensure_ppc_tag_member(Type *ty) {
   mem->ty = ty_int;
   mem->align = ty_int->align;
   mem->is_ppc_tag = true;
+  mem->ppc_tag_base = ty;
   mem->ppc_index = 0;
   mem->next = ty->members;
   ty->members = mem;
@@ -3422,20 +3684,20 @@ static void layout_struct_members(Type *ty) {
       bits = align_to(bits, mem->ty->size * 8);
     } else if (mem->is_bitfield) {
       int sz = mem->ty->size;
-      if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
+      if (!ty->is_packed &&
+          bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
         bits = align_to(bits, sz * 8);
 
-      mem->offset = align_down(bits / 8, sz);
-      mem->bit_offset = bits % (sz * 8);
+      mem->offset = bits / 8;
+      mem->bit_offset = bits % 8;
       bits += mem->bit_width;
     } else {
-      if (!ty->is_packed)
-        bits = align_to(bits, mem->align * 8);
+      bits = align_to(bits, ty->is_packed ? 8 : mem->align * 8);
       mem->offset = bits / 8;
       bits += mem->ty->size * 8;
     }
 
-    if (!ty->is_packed && ty->align < mem->align)
+    if (!ty->is_packed && (!mem->is_bitfield || mem->name) && ty->align < mem->align)
       ty->align = mem->align;
   }
 
@@ -3647,6 +3909,7 @@ static void append_ppc_specs(Type *base, Member *specs) {
       error_tok(mem->name, "duplicate PPC specialization name");
 
     mem->idx = idx++;
+    mem->ppc_tag_base = base;
     mem->ppc_ty = NULL;
     mem->ppc_tag_var =
       new_ppc_common_var(format("__ppc_%s_%.*s_tag", ppc_type_name(base),
@@ -4093,10 +4356,11 @@ static Type *union_decl(Token **rest, Token *tok) {
   // are already initialized to zero. We need to compute the
   // alignment and the size though.
   for (Member *mem = ty->members; mem; mem = mem->next) {
-    if (ty->align < mem->align)
+    if (!ty->is_packed && (!mem->is_bitfield || mem->name) && ty->align < mem->align)
       ty->align = mem->align;
-    if (ty->size < mem->ty->size)
-      ty->size = mem->ty->size;
+    int size = mem->is_bitfield ? (mem->bit_width + 7) / 8 : mem->ty->size;
+    if (ty->size < size)
+      ty->size = size;
   }
   ty->size = align_to(ty->size, ty->align);
   return ty;
@@ -4160,6 +4424,21 @@ static Node *struct_ref(Node *node, Token *tok) {
 // Convert A++ to `(typeof A)((A += 1) - 1)`
 static Node *new_inc_dec(Node *node, Token *tok, int addend) {
   add_type(node);
+  if (node->kind == ND_MEMBER && node->member->is_bitfield) {
+    Obj *base = new_lvar("", pointer_to(node->lhs->ty));
+    Obj *old = new_lvar("", node->ty);
+    Node *save_base = new_binary(ND_ASSIGN, new_var_node(base, tok),
+                                new_unary(ND_ADDR, node->lhs, tok), tok);
+    Node *field = new_unary(ND_MEMBER,
+                           new_unary(ND_DEREF, new_var_node(base, tok), tok), tok);
+    field->member = node->member;
+    Node *save_old = new_binary(ND_ASSIGN, new_var_node(old, tok), field, tok);
+    Node *update = new_binary(ND_ASSIGN, field,
+                             new_add(new_var_node(old, tok), new_num(addend, tok), tok), tok);
+    return new_binary(ND_COMMA, save_base,
+      new_binary(ND_COMMA, save_old,
+        new_binary(ND_COMMA, update, new_var_node(old, tok), tok), tok), tok);
+  }
   return new_cast(new_add(to_assign(new_add(node, new_num(addend, tok), tok)),
                           new_num(-addend, tok), tok),
                   node->ty);
@@ -4264,7 +4543,7 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
     Node *arg = assign(&tok, tok);
     add_type(arg);
 
-    if (!param_ty && !ty->is_variadic)
+    if (!param_ty && !ty->is_variadic && !ty->is_unprototyped)
       error_tok(tok, "too many arguments");
 
     if (param_ty) {
@@ -4279,6 +4558,8 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
       // If parameter type is omitted (e.g. in "..."), float
       // arguments are promoted to double.
       arg = new_cast(arg, ty_double);
+    } else if (is_integer(arg->ty)) {
+      arg = new_cast(arg, integer_promotion(arg->ty));
     }
 
     cur = cur->next = arg;
@@ -4353,11 +4634,19 @@ static Node *generic_selection(Token **rest, Token *tok) {
 //         | "_Generic" generic-selection
 //         | "__builtin_types_compatible_p" "(" type-name, type-name, ")"
 //         | "__builtin_reg_class" "(" type-name ")"
+//         | "__builtin_va_arg" "(" assign "," type-name ")"
 //         | ident
 //         | str
 //         | num
 static Node *primary(Token **rest, Token *tok) {
   Token *start = tok;
+
+  if (equal(tok, "true") || equal(tok, "false")) {
+    Node *node = new_num(equal(tok, "true"), tok);
+    node->ty = ty_bool;
+    *rest = tok->next;
+    return node;
+  }
 
   if (equal(tok, "nullptr")) {
     Node *node = new_num(0, tok);
@@ -4399,6 +4688,8 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "sizeof")) {
     Node *node = unary(rest, tok->next);
     add_type(node);
+    if (node->kind == ND_MEMBER && node->member->is_bitfield)
+      error_tok(node->tok, "sizeof applied to a bitfield");
     if (node->ty->kind == TY_VLA)
       return new_var_node(node->ty->vla_size, tok);
     return new_ulong(node->ty->size, tok);
@@ -4413,6 +4704,8 @@ static Node *primary(Token **rest, Token *tok) {
   if (equal(tok, "_Alignof")) {
     Node *node = unary(rest, tok->next);
     add_type(node);
+    if (node->kind == ND_MEMBER && node->member->is_bitfield)
+      error_tok(node->tok, "_Alignof applied to a bitfield");
     return new_ulong(node->ty->align, tok);
   }
 
@@ -4426,6 +4719,45 @@ static Node *primary(Token **rest, Token *tok) {
     Type *t2 = typename(&tok, tok);
     *rest = skip(tok, ")");
     return new_num(is_compatible(t1, t2), start);
+  }
+
+  if (equal(tok, "__builtin_va_arg")) {
+    tok = skip(tok->next, "(");
+    Node *ap = assign(&tok, tok);
+    tok = skip(tok, ",");
+    Type *ty = typename(&tok, tok);
+    *rest = skip(tok, ")");
+    if (ty->kind == TY_VOID || ty->kind == TY_FUNC || ty->kind == TY_ARRAY ||
+        ty->kind == TY_VLA || ty->size < 0)
+      error_tok(start, "va_arg requires a complete object type");
+    char *helper = "__va_arg_mem";
+    if (is_integer(ty) || ty->kind == TY_PTR || ty->kind == TY_NULLPTR)
+      helper = "__va_arg_gp";
+    if (ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE)
+      helper = "__va_arg_fp";
+    Obj *fn = find_func(helper);
+    if (!fn)
+      error_tok(start, "include <stdarg.h> before using va_arg");
+    add_type(ap);
+    if ((ap->ty->kind != TY_PTR && ap->ty->kind != TY_ARRAY && ap->ty->kind != TY_VLA) ||
+        !is_compatible(ap->ty->base, fn->ty->params->base))
+      error_tok(start, "va_arg requires a va_list argument");
+    ap = new_cast(ap, fn->ty->params);
+    if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+      // Keep the type and list expression for the backend's ABI classifier.
+      // Reuse one entry/local buffer rather than growing the stack in loops.
+      Node *node = new_unary(ND_VA_ARG, ap, start);
+      node->ty = ty;
+      node->ret_buffer = new_lvar("", ty);
+      return node;
+    }
+    if (current_fn)
+      strarray_push(&current_fn->refs, fn->name);
+    ap->next = new_num(ty->size, start);
+    ap->next->next = new_num(ty->align, start);
+    Node *call = new_func_call_node(fn, ap, start);
+    Node *value = new_unary(ND_DEREF, new_cast(call, pointer_to(ty)), start);
+    return new_unary(ND_VA_ARG, value, start);
   }
 
   if (equal(tok, "__builtin_reg_class")) {
@@ -4574,7 +4906,7 @@ static Node *primary(Token **rest, Token *tok) {
   error_tok(tok, "expected an expression");
 }
 
-static Token *parse_typedef(Token *tok, Type *basety) {
+static Token *parse_typedef(Token *tok, Type *basety, Node **vla_sizes) {
   bool first = true;
 
   while (!consume(&tok, tok, ";")) {
@@ -4587,6 +4919,10 @@ static Token *parse_typedef(Token *tok, Type *basety) {
       error_tok(ty->name_pos, "typedef name omitted");
     if (ty->is_ppc_generalization && !ty->ppc_name)
       ty->ppc_name = get_ident(ty->name);
+    if (vla_sizes) {
+      Node *size = compute_vla_size(ty, tok);
+      *vla_sizes = *vla_sizes ? new_binary(ND_COMMA, *vla_sizes, size, tok) : size;
+    }
     push_scope(get_ident(ty->name))->type_def = ty;
   }
   return tok;
@@ -4597,7 +4933,14 @@ static void create_param_lvars(Type *param) {
     create_param_lvars(param->next);
     if (!param->name)
       error_tok(param->name_pos, "parameter name omitted");
-    new_lvar(get_ident(param->name), param);
+    Obj *var = param->param_var;
+    if (!var) {
+      new_lvar(get_ident(param->name), param);
+      return;
+    }
+    var->next = locals;
+    locals = var;
+    push_scope(var->name)->var = var;
   }
 }
 
@@ -4845,6 +5188,8 @@ static Obj *get_ppc_handler_obj(PpcFunc *ppc_fn, PpcHandler *handler, Type *fn_t
       error_tok(tok, "static declaration follows a non-static declaration");
     fn->is_definition = fn->is_definition || is_definition;
     fn->is_inline = fn->is_inline || attr->is_inline;
+    if (is_definition)
+      fn->ty = fn_ty;
     return fn;
   }
 
@@ -4857,21 +5202,54 @@ static Obj *get_ppc_handler_obj(PpcFunc *ppc_fn, PpcHandler *handler, Type *fn_t
 }
 
 static Token *finish_function(Token *tok, Obj *fn, Type *ty) {
+  Scope *saved_scope = scope;
+  Obj *saved_fn = current_fn;
   current_fn = fn;
   locals = NULL;
-  enter_scope();
+  if (ty->param_scope)
+    scope = ty->param_scope;
+  else
+    enter_scope();
   create_param_lvars(ty->params);
 
   // A buffer for a struct/union return value is passed
   // as the hidden first parameter.
   Type *rty = ty->return_ty;
   if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
-    new_lvar("", pointer_to(rty));
+    fn->ret_param = new_lvar("", pointer_to(rty));
 
   fn->params = locals;
 
-  if (ty->is_variadic)
-    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
+  // Bound expressions refer to these same parameter objects. Their temporary
+  // buffers are locals, but must not become additional ABI parameters.
+  if (ty->param_context) {
+    for (Obj *var = ty->param_context->locals; var;) {
+      Obj *next = var->next;
+      var->next = locals;
+      locals = var;
+      var = next;
+    }
+    for (int i = 0; i < ty->param_context->refs.len; i++)
+      strarray_push(&fn->refs, ty->param_context->refs.data[i]);
+  }
+
+  Node head = {};
+  Node *cur = &head;
+  for (Type *param = ty->params; param; param = param->next) {
+    for (Type *decl = param->param_decl; decl; decl = decl->base)
+      if (decl->kind == TY_VLA && decl->is_vla_star)
+        error_tok(param->name, "[*] is not allowed in a function definition");
+    if (param->param_vla_setup) {
+      cur = cur->next = new_expr_stmt_node(param->param_vla_setup, tok);
+      add_type(cur);
+    }
+  }
+
+  if (ty->is_variadic) {
+    // The public System V va_list record; each backend owns its register save area.
+    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 24));
+    fn->va_area->align = 8;
+  }
   fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
 
   tok = skip(tok, "{");
@@ -4887,8 +5265,13 @@ static Token *finish_function(Token *tok, Obj *fn, Type *ty) {
     new_string_literal(fn->name, array_of(ty_char, strlen(fn->name) + 1));
 
   fn->body = compound_stmt(&tok, tok);
+  if (head.next) {
+    cur->next = fn->body->body;
+    fn->body->body = head.next;
+  }
   fn->locals = locals;
-  leave_scope();
+  scope = saved_scope;
+  current_fn = saved_fn;
   resolve_goto_labels();
   return tok;
 }
@@ -5243,18 +5626,15 @@ static Node *ppc_get_subtype_index_expr(Token *tok, Type *ty) {
 
   remember_ppc_gen(base, tok);
 
-  // The generalization itself and a named default specialization both
-  // occupy parameter index 0. Ordinary specializations receive their
-  // actual index at program startup through the shared runtime tag.
+  // The family and its named default occupy index 0. Closed families use
+  // declaration-order constants; open families load their shared startup tag.
   if (!ty->ppc_base)
     return new_num(0, tok);
 
   Member *tag = ppc_tag_member(ty);
   if (!tag)
     error_tok(tok, "PPC specialization has no specialization tag");
-  if (!tag->ppc_tag_var)
-    return new_num(tag->ppc_index, tok);
-  return new_var_node(tag->ppc_tag_var, tok);
+  return ppc_tag_value(tag, tok);
 }
 
 static Node *ppc_get_spec_var_index_expr(Token *tok, Node *ptr) {
@@ -5364,6 +5744,9 @@ static Obj *ppc_default_handler(PpcFunc *ppc_fn, Token *tok) {
   Obj **params = calloc(ppc_fn->ppc_param_count, sizeof(Obj *));
   for (int i = ppc_fn->ppc_param_count - 1; i >= 0; i--)
     params[i] = new_generated_lvar(&locals, pointer_to(ppc_fn->base_tys[i]));
+  Type *rty = ppc_fn->return_ty;
+  if ((rty->kind == TY_STRUCT || rty->kind == TY_UNION) && rty->size > 16)
+    fn->ret_param = new_generated_lvar(&locals, pointer_to(rty));
   fn->params = locals;
   fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
 
@@ -5394,7 +5777,9 @@ static Obj *ppc_default_handler(PpcFunc *ppc_fn, Token *tok) {
 }
 
 static Node *ppc_table_slot(Obj *table, Node *idx, Token *tok) {
-  return new_unary(ND_DEREF, new_add(new_var_node(table, tok), idx, tok), tok);
+  Node *addr = new_add(new_var_node(table, tok), idx, tok);
+  addr->is_ppc_table_access = true;
+  return new_unary(ND_DEREF, addr, tok);
 }
 
 static Node *ppc_cast_fnptr(Node *fn, Type *fnptr_ty) {
@@ -5402,14 +5787,17 @@ static Node *ppc_cast_fnptr(Node *fn, Type *fnptr_ty) {
 }
 
 static Node *ppc_extent_expr(Type *base, Token *tok) {
+  if (base->is_ppc_const_generalization)
+    return new_num(ppc_next_spec_index(base), tok);
   return new_add(new_var_node(base->ppc_count_var, tok), new_num(1, tok), tok);
 }
 
 static Node *ppc_table_size_expr(PpcFunc *ppc_fn, Token *tok) {
-  Node *size = new_num(1, tok);
+  Node *size = new_ulong(1, tok);
 
   for (int i = 0; i < ppc_fn->ppc_param_count; i++)
-    size = new_binary(ND_MUL, size, ppc_extent_expr(ppc_fn->base_tys[i], tok), tok);
+    size = new_binary(ND_MUL, size,
+                      new_cast(ppc_extent_expr(ppc_fn->base_tys[i], tok), ty_ulong), tok);
   return size;
 }
 
@@ -5431,11 +5819,12 @@ static bool ppc_needs_exhaustive_check(PpcFunc *ppc_fn) {
 }
 
 static Node *ppc_mixed_index_expr(PpcFunc *ppc_fn, Node **tags, Token *tok) {
-  Node *idx = tags[0];
+  Node *idx = new_cast(tags[0], ty_ulong);
 
   for (int i = 1; i < ppc_fn->ppc_param_count; i++) {
-    idx = new_binary(ND_MUL, idx, ppc_extent_expr(ppc_fn->base_tys[i], tok), tok);
-    idx = new_add(idx, tags[i], tok);
+    idx = new_binary(ND_MUL, idx,
+                     new_cast(ppc_extent_expr(ppc_fn->base_tys[i], tok), ty_ulong), tok);
+    idx = new_add(idx, new_cast(tags[i], ty_ulong), tok);
   }
   return idx;
 }
@@ -5447,7 +5836,7 @@ static Node *ppc_handler_tag_expr(Type *param_ty, Token *tok) {
   Member *tag = ppc_tag_member(param_ty->base);
   if (!tag || !tag->ppc_tag_var)
     error_tok(tok, "PPC specialization has no runtime tag");
-  return new_var_node(tag->ppc_tag_var, tok);
+  return ppc_tag_value(tag, tok);
 }
 
 static Node *ppc_handler_table_index(PpcFunc *ppc_fn, PpcHandler *handler, Token *tok) {
@@ -5477,8 +5866,13 @@ static void ppc_make_spec_ctor(Type *base, Member *spec) {
   if_node->cond = new_var_node(spec->ppc_tag_var, tok);
   if_node->then = early_return;
 
-  Node *count = new_var_node(base->ppc_count_var, tok);
+  // Retain shared metadata for units that see only an opaque forward
+  // declaration. Closed tags/counts must be independent of constructor order.
+  Node *count = base->is_ppc_const_generalization ? new_num(spec->idx, tok) :
+                new_var_node(base->ppc_count_var, tok);
   Node *inc = new_binary(ND_ASSIGN, new_var_node(base->ppc_count_var, tok),
+                         base->is_ppc_const_generalization ?
+                         new_num(ppc_next_spec_index(base) - 1, tok) :
                          new_add(new_var_node(base->ppc_count_var, tok), new_num(1, tok), tok),
                          tok);
   Node *set_tag = new_binary(ND_ASSIGN, new_var_node(spec->ppc_tag_var, tok), count, tok);
@@ -5589,67 +5983,114 @@ static void ppc_make_spec_ptr_tags_dtor(PpcGen *gen) {
   add_type(fn->body);
 }
 
-static void ppc_make_table_ctor(PpcFunc *ppc_fn) {
+static Node *ppc_table_failure(PpcFunc *family, char *message, Node *slots, Token *tok) {
+  char *fmt = format("PPC table error: %s for %s%s\n", message, family->name,
+                     slots ? " (slots %lu)" : "");
+  Obj *text = new_string_literal(fmt, array_of(ty_char, strlen(fmt) + 1));
+  Node *args = new_num(2, tok);
+  args->next = new_cast(new_var_node(text, tok), pointer_to(ty_char));
+  args->next->next = slots;
+  Node *print = new_expr_stmt_node(new_func_call_node(get_dprintf_func(), args, tok), tok);
+  print->next = new_expr_stmt_node(new_func_call_node(get_abort_func(), NULL, tok), tok);
+  return new_block_node(print, tok);
+}
+
+// Full runtime-table representability is independent of the tiny local
+// optimization catalog's 16-cell limit.
+static uint64_t ppc_closed_table_size(PpcFunc *family) {
+  for (int i = 0; i < family->ppc_param_count; i++)
+    if (!family->base_tys[i]->is_ppc_const_generalization)
+      return 0;
+  uint64_t slots = 1;
+  uint64_t limit = (uint64_t)-1 / 8;
+  for (int i = 0; i < family->ppc_param_count; i++) {
+    int extent = ppc_next_spec_index(family->base_tys[i]);
+    if (slots > limit / extent)
+      error_tok(family->name_tok, "PPC table size overflows for %s", family->name);
+    slots *= extent;
+  }
+  return slots;
+}
+
+static Obj *ppc_make_table_ctor(PpcFunc *ppc_fn) {
+  uint64_t closed_slots = ppc_closed_table_size(ppc_fn);
   static int id = 0;
   Token *tok = ppc_fn->name_tok;
-  Type *generic_ty = ppc_generic_func_type(ppc_fn);
-  Type *fnptr_ty = pointer_to(generic_ty);
-
   Obj *fn = new_generated_func(format("__ppc_ctor_201_table_%d", id++),
                                func_type(ty_void), 201);
-
   Obj *locals = NULL;
   fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
-  Obj *i = new_generated_lvar(&locals, ty_int);
-
   Node *early_return = new_node(ND_RETURN, tok);
   Node *if_node = new_node(ND_IF, tok);
   if_node->cond = new_var_node(ppc_fn->table_var, tok);
   if_node->then = early_return;
-
-  Node *table_size = ppc_table_size_expr(ppc_fn, tok);
-  Node *arg1 = new_cast(table_size, ty_ulong);
-  Node *arg2 = new_ulong(8, tok);
-  arg1->next = arg2;
-  Node *calloc_call = new_func_call_node(get_calloc_func(), arg1, tok);
+  Obj *slots = new_generated_lvar(&locals, ty_ulong);
+  Obj *extent = new_generated_lvar(&locals, ty_ulong);
+  Node *last = if_node;
+  last = last->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+    new_var_node(slots, tok), new_ulong(closed_slots ? closed_slots : 1, tok), tok), tok);
+  for (int i = 0; !closed_slots && i < ppc_fn->ppc_param_count; i++) {
+    last = last->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+      new_var_node(extent, tok), new_cast(ppc_extent_expr(ppc_fn->base_tys[i], tok), ty_ulong), tok), tok);
+    Node *check = new_node(ND_IF, tok);
+    Node *zero = new_binary(ND_EQ, new_var_node(extent, tok), new_ulong(0, tok), tok);
+    Node *limit = new_binary(ND_DIV, new_ulong((uint64_t)-1 / 8, tok), new_var_node(extent, tok), tok);
+    check->cond = new_binary(ND_LOGOR, zero,
+      new_binary(ND_LT, limit, new_var_node(slots, tok), tok), tok);
+    check->then = ppc_table_failure(ppc_fn, "size overflow", NULL, tok);
+    last = last->next = check;
+    last = last->next = new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(slots, tok),
+      new_binary(ND_MUL, new_var_node(slots, tok), new_var_node(extent, tok), tok), tok), tok);
+  }
+  Node *arg1 = new_var_node(slots, tok);
+  arg1->next = new_ulong(8, tok);
   Node *alloc = new_binary(ND_ASSIGN, new_var_node(ppc_fn->table_var, tok),
-                           new_cast(calloc_call, ppc_fn->table_var->ty), tok);
-
-  Node *init = new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(i, tok),
-                                             new_num(0, tok), tok),
-                                  tok);
-  Node *cond = new_binary(ND_LT, new_var_node(i, tok),
-                          ppc_table_size_expr(ppc_fn, tok), tok);
-  Node *inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
-                         new_add(new_var_node(i, tok), new_num(1, tok), tok), tok);
-
-  Node *slot = ppc_table_slot(ppc_fn->table_var, new_var_node(i, tok), tok);
-  Node *def = ppc_needs_exhaustive_check(ppc_fn) ?
-    new_cast(new_num(0, tok), fnptr_ty) :
-    ppc_cast_fnptr(new_var_node(ppc_default_handler(ppc_fn, tok), tok), fnptr_ty);
-  Node *fill = new_expr_stmt_node(new_binary(ND_ASSIGN, slot, def, tok), tok);
-
-  Node *loop = new_node(ND_FOR, tok);
-  loop->init = init;
-  loop->cond = cond;
-  loop->inc = inc;
-  loop->then = new_block_node(fill, tok);
-  loop->brk_label = new_unique_name();
-  loop->cont_label = new_unique_name();
-
-  Node *stmt1 = if_node;
-  Node *stmt2 = new_expr_stmt_node(alloc, tok);
-  stmt1->next = stmt2;
-  stmt2->next = loop;
-
-  fn->body = new_block_node(stmt1, tok);
+    new_cast(new_func_call_node(get_calloc_func(), arg1, tok), ppc_fn->table_var->ty), tok);
+  // Leave holes null until actual defaults and concrete handlers register.
+  last = last->next = new_expr_stmt_node(alloc, tok);
+  Node *failed = new_node(ND_IF, tok);
+  failed->cond = new_unary(ND_NOT, new_var_node(ppc_fn->table_var, tok), tok);
+  failed->then = ppc_table_failure(ppc_fn, "allocation failed", new_var_node(slots, tok), tok);
+  last->next = failed;
+  fn->body = new_block_node(if_node, tok);
   fn->locals = locals;
   add_type(fn->body);
+  return fn;
 }
 
-static void ppc_make_exhaustive_check_ctor(PpcFunc *ppc_fn) {
+static Obj *ppc_make_fill_ctor(PpcFunc *ppc_fn, Obj *target, int priority) {
+  static int id = 0;
+  Token *tok = ppc_fn->name_tok;
+  Obj *fn = new_generated_func(format("__ppc_ctor_%d_fill_%d", priority, id++),
+                               func_type(ty_void), priority);
+  Obj *locals = NULL;
+  fn->alloca_bottom = new_generated_lvar(&locals, pointer_to(ty_char));
+  Obj *i = new_generated_lvar(&locals, ty_ulong);
+  Node *slot = ppc_table_slot(ppc_fn->table_var, new_var_node(i, tok), tok);
+  Node *fill = new_node(ND_IF, tok);
+  fill->cond = new_unary(ND_NOT, slot, tok);
+  fill->then = new_expr_stmt_node(new_binary(ND_ASSIGN,
+    ppc_table_slot(ppc_fn->table_var, new_var_node(i, tok), tok),
+    ppc_cast_fnptr(new_var_node(target, tok), ppc_fn->fnptr_ty), tok), tok);
+  Node *loop = new_node(ND_FOR, tok);
+  loop->init = new_expr_stmt_node(new_binary(ND_ASSIGN,
+    new_var_node(i, tok), new_ulong(0, tok), tok), tok);
+  loop->cond = new_binary(ND_LT, new_var_node(i, tok), ppc_table_size_expr(ppc_fn, tok), tok);
+  loop->inc = new_binary(ND_ASSIGN, new_var_node(i, tok),
+    new_add(new_var_node(i, tok), new_ulong(1, tok), tok), tok);
+  loop->then = fill;
+  loop->brk_label = new_unique_name();
+  loop->cont_label = new_unique_name();
+  fn->body = new_block_node(loop, tok);
+  fn->locals = locals;
+  target->is_root = true;
+  add_type(fn->body);
+  return fn;
+}
+
+static Obj *ppc_make_exhaustive_check_ctor(PpcFunc *ppc_fn) {
   if (!ppc_needs_exhaustive_check(ppc_fn))
-    return;
+    return NULL;
 
   static int id = 0;
   Token *tok = ppc_fn->name_tok;
@@ -5700,9 +6141,10 @@ static void ppc_make_exhaustive_check_ctor(PpcFunc *ppc_fn) {
   fn->body = new_block_node(loop, tok);
   fn->locals = locals;
   add_type(fn->body);
+  return fn;
 }
 
-static void ppc_make_table_dtor(PpcFunc *ppc_fn) {
+static Obj *ppc_make_table_dtor(PpcFunc *ppc_fn) {
   static int id = 0;
   Token *tok = ppc_fn->name_tok;
 
@@ -5732,11 +6174,12 @@ static void ppc_make_table_dtor(PpcFunc *ppc_fn) {
   fn->body = new_block_node(if_node, tok);
   fn->locals = locals;
   add_type(fn->body);
+  return fn;
 }
 
-static void ppc_make_handler_ctor(PpcFunc *ppc_fn, PpcHandler *handler) {
+static Obj *ppc_make_handler_ctor(PpcFunc *ppc_fn, PpcHandler *handler) {
   if (handler->is_default || handler->is_abstract || !handler->fn)
-    return;
+    return NULL;
 
   static int id = 0;
   Token *tok = handler->param_tys && handler->param_tys->name ?
@@ -5752,10 +6195,12 @@ static void ppc_make_handler_ctor(PpcFunc *ppc_fn, PpcHandler *handler) {
   Node *slot = ppc_table_slot(ppc_fn->table_var, ppc_handler_table_index(ppc_fn, handler, tok), tok);
   Node *rhs = ppc_cast_fnptr(new_var_node(handler->fn, tok), fnptr_ty);
   Node *stmt = new_expr_stmt_node(new_binary(ND_ASSIGN, slot, rhs, tok), tok);
+  handler->fn->is_root = true;
 
   fn->body = new_block_node(stmt, tok);
   fn->locals = locals;
   add_type(fn->body);
+  return fn;
 }
 
 static void ppc_make_spec_ctors(Type *base, Member *spec) {
@@ -5763,6 +6208,202 @@ static void ppc_make_spec_ctors(Type *base, Member *spec) {
     return;
   ppc_make_spec_ctors(base, spec->next);
   ppc_make_spec_ctor(base, spec);
+}
+
+// Closed types do not close the registry of handlers. The local catalog is
+// immutable, but every optimized call guards it against the active runtime
+// slot. Another module (including native code) may still register a handler.
+// The limit is on the product of extents, not on each axis. Check before
+// multiplication so large/partly open grids cannot overflow or be optimized.
+static int ppc_closed_table_count(PpcFunc *family) {
+  int count = 1;
+  for (int i = 0; i < family->ppc_param_count; i++) {
+    Type *base = family->base_tys[i];
+    if (!base->is_ppc_const_generalization)
+      return 0;
+    int extent = ppc_next_spec_index(base);
+    if (extent > 16 / count)
+      return 0;
+    count *= extent;
+  }
+  return count;
+}
+
+static void ppc_make_candidates(PpcFunc *family) {
+  if (opt_ppc_dispatch == PPC_DISPATCH_RUNTIME)
+    return;
+  int count = ppc_closed_table_count(family);
+  if (!count)
+    return;
+  bool used = false;
+  for (PpcCall *site = ppc_calls; site; site = site->next)
+    if (site->family == family)
+      used = true;
+  if (!used)
+    return;
+  Obj **targets = calloc(count, sizeof(Obj *));
+  // Defaults fill holes; concrete coordinates always take precedence,
+  // independently of declaration/definition order in the source unit.
+  if (ppc_has_concrete_default_handler(family)) {
+    Obj *fallback = ppc_default_handler(family, family->name_tok);
+    for (int i = 0; i < count; i++)
+      targets[i] = fallback;
+  }
+  for (PpcHandler *h = family->handlers; h; h = h->next)
+    if (!h->is_default && !h->is_abstract && h->fn) {
+      int index = h->indices[0];
+      for (int i = 1; i < family->ppc_param_count; i++)
+        index = index * ppc_next_spec_index(family->base_tys[i]) + h->indices[i];
+      targets[index] = h->fn;
+    }
+  for (int i = 0; i < count; i++)
+    if (!targets[i])
+      return;
+
+  Obj *table = new_gvar(format(".L.ppc_candidates.%s", family->name),
+                        array_of(family->fnptr_ty, count));
+  table->is_readonly = true;
+  table->init_data = calloc(count, 8);
+  Relocation head = {};
+  Relocation *last = &head;
+  for (int i = 0; i < count; i++) {
+    Relocation *r = calloc(1, sizeof(Relocation));
+    r->offset = i * 8;
+    r->label = &targets[i]->name;
+    last = last->next = r;
+    targets[i]->is_root = true;
+  }
+  table->rel = head.next;
+  family->candidates = table;
+  family->targets = targets;
+  family->target_count = count;
+}
+
+static Node *ppc_call_result(Node *call, Obj *result, Token *tok) {
+  return new_expr_stmt_node(result ?
+    new_binary(ND_ASSIGN, new_var_node(result, tok), call, tok) : call, tok);
+}
+
+static void ppc_optimize_call(PpcCall *site) {
+  PpcFunc *family = site->family;
+  if (!family->candidates) {
+    // No complete local catalog: retain the original callee/argument order.
+    site->prefix->next = site->prefix->next->next->next;
+    site->call->lhs = site->runtime_callee;
+    add_type(site->call->lhs);
+    return;
+  }
+  Node *original = site->call;
+  Token *tok = original->tok;
+  Obj *result = original->ty->kind == TY_VOID ? NULL :
+                new_generated_lvar(&site->owner->locals, original->ty);
+  // Evaluate arguments before copying the call into alternatives. In
+  // particular a nested PPC call owns labels that cannot be emitted again
+  // in each outer switch branch. Snapshot records and decay array/functions.
+  Node prefix = {};
+  Node *last = &prefix;
+  Node arguments = {};
+  Node *arg_last = &arguments;
+  for (Node *arg = original->args; arg; arg = arg->next) {
+    Type *ty = arg->ty;
+    if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+      ty = pointer_to(ty->base);
+    else if (ty->kind == TY_FUNC)
+      ty = pointer_to(ty);
+    Obj *saved = new_generated_lvar(&site->owner->locals, ty);
+    last = last->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+      new_var_node(saved, tok), ty == arg->ty ? arg : new_cast(arg, ty), tok), tok);
+    arg_last = arg_last->next = new_var_node(saved, tok);
+    add_type(arg_last);
+  }
+  original->args = arguments.next;
+  Node *known = ppc_table_slot(family->candidates, new_var_node(site->tag, tok), tok);
+  Node *active = new_var_node(site->active, tok);
+  Node *slow = clone_node(original);
+  Node *guard = new_node(ND_IF, tok);
+  guard->cond = new_binary(ND_EQ, active, known, tok);
+  guard->els = ppc_call_result(slow, result, tok);
+
+  if (opt_ppc_dispatch == PPC_DISPATCH_TABLE) {
+    Node *fast = clone_node(original);
+    fast->lhs = known;
+    add_type(fast->lhs);
+    guard->then = ppc_call_result(fast, result, tok);
+  } else {
+    Node *sw = new_node(ND_SWITCH, tok);
+    sw->cond = new_var_node(site->tag, tok);
+    sw->brk_label = new_unique_name();
+    Node head = {};
+    Node *last = &head;
+    for (int i = 0; i < family->target_count; i++) {
+      Node *fast = clone_node(original);
+      fast->lhs = new_var_node(family->targets[i], tok);
+      add_type(fast->lhs);
+      Node *stmt = ppc_call_result(fast, result, tok);
+      Node *jump = new_node(ND_GOTO, tok);
+      jump->unique_label = sw->brk_label;
+      stmt->next = jump;
+      Node *c = new_node(ND_CASE, tok);
+      c->begin = c->end = i;
+      c->label = new_unique_name();
+      c->lhs = new_block_node(stmt, tok);
+      c->case_next = sw->case_next;
+      sw->case_next = c;
+      last = last->next = c;
+    }
+    sw->then = new_block_node(head.next, tok);
+    guard->then = sw;
+  }
+  guard->next = new_expr_stmt_node(result ? new_var_node(result, tok) :
+                                  new_cast(new_num(0, tok), ty_void), tok);
+  Node *replacement = new_node(ND_STMT_EXPR, tok);
+  last->next = guard;
+  replacement->body = prefix.next;
+  add_type(replacement);
+  Node *next = original->next;
+  *original = *replacement;
+  original->next = next;
+}
+
+PpcDispatchInfo *ppc_dispatch_info(void) {
+  PpcDispatchInfo head = {};
+  PpcDispatchInfo *tail = &head;
+  for (PpcFunc *family = ppc_funcs; family; family = family->next) {
+    tail = tail->next = calloc(1, sizeof(PpcDispatchInfo));
+    tail->name = family->name;
+    tail->all_closed = true;
+    for (int i = 0; i < family->ppc_param_count; i++)
+      if (!family->base_tys[i]->is_ppc_const_generalization)
+        tail->all_closed = false;
+    if (!tail->all_closed)
+      continue;
+    tail->table = family->table_var;
+    tail->function_ty = ppc_generic_func_type(family);
+    tail->bases = family->base_tys;
+    tail->arity = family->ppc_param_count;
+    tail->runtime = family->runtime;
+    for (PpcHandler *h = family->handlers; h; h = h->next) {
+      if (h->is_abstract || !h->fn)
+        continue;
+      PpcDispatchHandlerInfo *info = calloc(1, sizeof(PpcDispatchHandlerInfo));
+      info->fn = h->fn;
+      info->indices = h->indices;
+      info->is_default = h->is_default;
+      info->next = tail->handlers;
+      tail->handlers = info;
+    }
+  }
+  return head.next;
+}
+
+static void ppc_describe_runtime(PpcFunc *family, char *role, Obj *fn) {
+  if (!fn)
+    return;
+  PpcDispatchRuntimeInfo *info = calloc(1, sizeof(PpcDispatchRuntimeInfo));
+  info->role = role;
+  info->fn = fn;
+  info->next = family->runtime;
+  family->runtime = info;
 }
 
 static void finalize_ppc_runtime(void) {
@@ -5773,12 +6414,21 @@ static void finalize_ppc_runtime(void) {
   }
 
   for (PpcFunc *fn = ppc_funcs; fn; fn = fn->next) {
-    ppc_make_table_ctor(fn);
-    ppc_make_table_dtor(fn);
+    ppc_make_candidates(fn);
+    ppc_describe_runtime(fn, "allocate", ppc_make_table_ctor(fn));
+    ppc_describe_runtime(fn, "release", ppc_make_table_dtor(fn));
     for (PpcHandler *handler = fn->handlers; handler; handler = handler->next)
-      ppc_make_handler_ctor(fn, handler);
-    ppc_make_exhaustive_check_ctor(fn);
+      ppc_describe_runtime(fn, "handler", ppc_make_handler_ctor(fn, handler));
+    if (ppc_has_concrete_default_handler(fn))
+      ppc_describe_runtime(fn, "default", ppc_make_fill_ctor(fn, ppc_default_handler(fn, fn->name_tok), 301));
+    ppc_describe_runtime(fn, "check", ppc_make_exhaustive_check_ctor(fn));
+    // Error stubs must not mask a closed-family completeness check or
+    // block a real default coming from another (possibly opaque) unit.
+    if (!ppc_needs_exhaustive_check(fn) && !ppc_has_concrete_default_handler(fn))
+      ppc_describe_runtime(fn, "stub", ppc_make_fill_ctor(fn, ppc_default_handler(fn, fn->name_tok), 361));
   }
+  for (PpcCall *site = ppc_calls; site; site = site->next)
+    ppc_optimize_call(site);
 }
 
 static bool is_ppc_function(Token *tok) {
@@ -5828,7 +6478,7 @@ static PpcFunc *get_or_create_ppc_func(Token *name, Type *return_ty, Type *ppc_p
 
 static Type *ppc_param(Token **rest, Token *tok) {
   Type *ty = declspec(&tok, tok, NULL);
-  ty = declarator(&tok, tok, ty);
+  ty = copy_type(declarator(&tok, tok, ty));
   if (!ty->name)
     error_tok(ty->name_pos, "PPC parameter name omitted");
   *rest = tok;
@@ -5845,6 +6495,7 @@ static Type *ppc_param_list(Token **rest, Token *tok) {
 
     cur = cur->next = ppc_param(&tok, tok);
     cur->next = NULL;
+    bind_param(cur);
   }
 
   *rest = tok;
@@ -5858,12 +6509,22 @@ static Token *ppc_function(Token *tok, Type *basety, VarAttr *attr) {
   get_ident(tok);
   tok = skip(tok->next, "<");
 
+  enter_scope();
+  Scope *polymorphic_scope = scope;
   Type *ppc_param_tys = ppc_param_list(&tok, tok);
   tok = skip(tok, ">");
 
   if (!equal(tok, "("))
     error_tok(tok, "expected '(' after PPC parameter list");
   Type *ordinary_fn_ty = func_params(&tok, tok->next, basety);
+  if (!ordinary_fn_ty->param_scope)
+    ordinary_fn_ty->param_scope = polymorphic_scope;
+  for (Type *param = ordinary_fn_ty->params; param; param = param->next)
+    if (param->name && hashmap_get(&scope->vars, get_ident(param->name)))
+      error_tok(param->name, "duplicate parameter name");
+  leave_scope();
+  // PPC already has an explicit polymorphic parameter list. An empty ordinary
+  // list denotes zero ordinary arguments, just like (void), not C varargs.
 
   int ppc_param_count = type_list_len(ppc_param_tys);
   if (!ppc_param_count)
@@ -5902,6 +6563,8 @@ static Token *ppc_function(Token *tok, Type *basety, VarAttr *attr) {
 
   Type *actual_ty = ppc_actual_func_type(ordinary_fn_ty->return_ty, ppc_param_tys,
                                          ordinary_fn_ty->params, ordinary_fn_ty->is_variadic);
+  actual_ty->param_scope = ordinary_fn_ty->param_scope;
+  actual_ty->param_context = ordinary_fn_ty->param_context;
 
   bool is_definition = equal(tok, "{");
   Obj *fn = get_ppc_handler_obj(ppc_fn, handler, actual_ty, attr, name, is_definition);
@@ -5962,6 +6625,26 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
   }
 
   Node *fn = ppc_table_slot(ppc_fn->table_var, ppc_mixed_index_expr(ppc_fn, tags, tok), tok);
+  PpcCall *site = NULL;
+  if (opt_ppc_dispatch != PPC_DISPATCH_RUNTIME && ppc_closed_table_count(ppc_fn) &&
+      current_fn && !in_param_list) {
+    site = calloc(1, sizeof(PpcCall));
+    site->family = ppc_fn;
+    site->owner = current_fn;
+    site->prefix = cur;
+    site->runtime_callee = fn;
+    // A local catalog has at most 16 cells, so its switch index fits int.
+    site->tag = new_lvar("", ty_int);
+    site->active = new_lvar("", ppc_fn->fnptr_ty);
+    cur = cur->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+      new_var_node(site->tag, tok), ppc_mixed_index_expr(ppc_fn, tags, tok), tok), tok);
+    cur = cur->next = new_expr_stmt_node(new_binary(ND_ASSIGN,
+      new_var_node(site->active, tok),
+      ppc_table_slot(ppc_fn->table_var, new_var_node(site->tag, tok), tok), tok), tok);
+    fn = new_var_node(site->active, tok);
+    site->next = ppc_calls;
+    ppc_calls = site;
+  }
 
   Type *fn_ty = ppc_generic_func_type(ppc_fn);
   Type *param_ty = fn_ty->params;
@@ -5987,6 +6670,8 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
       param_ty = param_ty->next;
     } else if (copy->ty->kind == TY_FLOAT) {
       copy = new_cast(copy, ty_double);
+    } else if (is_integer(copy->ty)) {
+      copy = new_cast(copy, integer_promotion(copy->ty));
     }
 
     arg_cur = arg_cur->next = copy;
@@ -5998,6 +6683,8 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
   Node *call = new_unary(ND_FUNCALL, fn, tok);
   call->func_ty = fn_ty;
   call->args = arg_head.next;
+  if (site)
+    site->call = call;
 
   if (fn_ty->return_ty->kind == TY_STRUCT || fn_ty->return_ty->kind == TY_UNION)
     call->ret_buffer = new_lvar("", fn_ty->return_ty);
@@ -6072,6 +6759,16 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
       error_tok(tok, "redefinition of %s", name_str);
     if (!fn->is_static && attr->is_static)
       error_tok(tok, "static declaration follows a non-static declaration");
+    if ((fn->ty->is_unprototyped || ty->is_unprototyped) &&
+        !is_compatible(fn->ty, ty))
+      error_tok(ty->name, "incompatible function declaration");
+    if ((equal(tok, "{") && ty->is_unprototyped && fn->ty->params) ||
+        (fn->is_definition && fn->ty->is_unprototyped && ty->params))
+      error_tok(ty->name, "function definition has no parameters");
+    // Keep an existing prototype after a later f() declaration; definitions
+    // with named parameters must replace an earlier unspecified signature.
+    if (!ty->is_unprototyped || fn->ty->is_unprototyped)
+      fn->ty = ty;
     fn->is_definition = fn->is_definition || equal(tok, "{");
   } else {
     fn = new_gvar(name_str, ty);
@@ -6162,7 +6859,7 @@ static void scan_globals(void) {
 
 static void declare_builtin_functions(void) {
   Type *ty = func_type(pointer_to(ty_void));
-  ty->params = copy_type(ty_int);
+  ty->params = copy_type(ty_ulong);
   builtin_alloca = new_gvar("alloca", ty);
   builtin_alloca->is_definition = false;
 }
@@ -6174,6 +6871,7 @@ Obj *parse(Token *tok) {
   ppc_funcs = NULL;
   ppc_gens = NULL;
   ppc_nested_types = NULL;
+  ppc_calls = NULL;
 
   while (tok->kind != TK_EOF) {
     if (equal(tok, "struct") && tok->next->kind == TK_IDENT &&
@@ -6198,7 +6896,7 @@ Obj *parse(Token *tok) {
 
     // Typedef
     if (attr.is_typedef) {
-      tok = parse_typedef(tok, basety);
+      tok = parse_typedef(tok, basety, NULL);
       continue;
     }
 

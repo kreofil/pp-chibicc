@@ -4,19 +4,131 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   cmake-test-all:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake make
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Prepare build tools
+        run: |
+          python -m pip install --disable-pip-version-check cmake==3.31.6
+          cc --version
+          make --version
+          cmake --version
 
       - name: Run tests
         run: |
-          mkdir build
-          cd build
-          cmake ..
-          make test-all
+          cmake -S . -B build
+          cmake --build build --target test-all
+
+  llvm-23:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Prepare build tools
+        run: |
+          python -m pip install --disable-pip-version-check cmake==3.31.6
+          gcc --version
+          make --version
+          cmake --version
+
+      - name: Cache pinned LLVM packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ppchibicc-llvm/packages
+          key: llvm-noble-amd64-${{ hashFiles('cmake/ci-llvm23.json') }}
+
+      - name: Prepare LLVM 23
+        run: |
+          python cmake/setup-ci-llvm.py --prefix "$RUNNER_TEMP/ppchibicc-llvm"
+          echo "$RUNNER_TEMP/ppchibicc-llvm/bin" >> "$GITHUB_PATH"
+
+      - name: Run LLVM tests and optimization demos
+        run: |
+          cmake -S . -B build-llvm-ci \
+            -DCMAKE_C_COMPILER=gcc -DPPCHIBICC_LLVM_VERSION=23
+          cmake --build build-llvm-ci --target \
+            test-llvm test-llvm-stage2 llvm-opt-demo llvm-dispatch-demo \
+            llvm-dispatch-report test-llvm-dispatch-report-stage2 \
+            llvm-static-dispatch-demo test-llvm-static-dispatch-stage2 \
+            test-llvm-static-dispatch-bench test-llvm-static-dispatch-bench-stage2 \
+            test-llvm-closed-compiler test-llvm-closed-compiler-stage2 \
+            llvm-real-programs test-llvm-real-programs-stage2 \
+            test-llvm-life-bench test-llvm-life-bench-stage2
+
+      - name: Preserve LLVM diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm23-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build-llvm-ci/llvm-*
+          if-no-files-found: ignore
+          retention-days: 7
+
+  llvm-selfhost-23:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare build tools
+        run: python -m pip install --disable-pip-version-check cmake==3.31.6
+      - name: Cache pinned LLVM packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ppchibicc-llvm/packages
+          key: llvm-noble-amd64-${{ hashFiles('cmake/ci-llvm23.json') }}
+      - name: Prepare LLVM 23
+        run: |
+          python cmake/setup-ci-llvm.py --prefix "$RUNNER_TEMP/ppchibicc-llvm"
+          echo "$RUNNER_TEMP/ppchibicc-llvm/bin" >> "$GITHUB_PATH"
+      - name: Bootstrap through LLVM O0
+        run: |
+          cmake -S . -B build-llvm-selfhost-O0 -DCMAKE_C_COMPILER=gcc \
+            -DPPCHIBICC_STAGE2_BACKEND=llvm -DPPCHIBICC_LLVM_VERSION=23 \
+            -DPPCHIBICC_STAGE2_LLVM_OPTIMIZATION=0
+          cmake --build build-llvm-selfhost-O0 --target llvm-selfhost -j2
+      - name: Bootstrap and test LLVM O2 compiler
+        run: |
+          cmake -S . -B build-llvm-selfhost -DCMAKE_C_COMPILER=gcc \
+            -DPPCHIBICC_STAGE2_BACKEND=llvm -DPPCHIBICC_LLVM_VERSION=23
+          cmake --build build-llvm-selfhost --target test-llvm-selfhost -j2
+      - name: Preserve bootstrap reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-selfhost-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build-llvm-selfhost/llvm-selfhost/
+            build-llvm-selfhost-O0/llvm-selfhost/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Preserve compiler artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-selfhost-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build-llvm-selfhost/
+            build-llvm-selfhost-O0/
+          if-no-files-found: ignore
+          retention-days: 7

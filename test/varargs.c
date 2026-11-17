@@ -35,7 +35,17 @@ void fmt(char *buf, char *fmt, ...) {
   va_list ap2;
   va_copy(ap2, ap);
   vsprintf(buf, fmt, ap2);
-  va_end(buf);
+  va_end(ap2);
+  va_end(ap);
+}
+
+long double sum_long_double(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  long double result = 0;
+  for (int i = 0; i < n; i++) result += va_arg(ap, long double);
+  va_end(ap);
+  return result;
 }
 
 int main() {
@@ -45,6 +55,7 @@ int main() {
   ASSERT(21, sum2(1, 2.0, 3, 4.0, 5, 6.0, 0));
   ASSERT(210, sum2(1, 2.0, 3, 4.0, 5, 6.0, 7, 8.0, 9, 10.0, 11, 12.0, 13, 14.0, 15, 16.0, 17, 18.0, 19, 20.0, 0));
   ASSERT(0, ({ char buf[100]; fmt(buf, "%d %d", 2, 3); strcmp(buf, "2 3"); }));
+  ASSERT(1, sum_long_double(2, 1.25L, 2.5L) == 3.75L);
 
   printf("OK\n");
   return 0;

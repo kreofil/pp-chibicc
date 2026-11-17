@@ -39,7 +39,7 @@ void ppVector_print(FILE* f, ppVector* v) {
 //------------------------------------------------------------------------------
 // Функция, осуществляющая сортировку элементов вектора.
 // Операция сортировки задается непосредственно для каждой специализации.
-void ppVector_sort<ppVector* v>()  {
+void ppVector_sort<ppVector* v>(void)  {
   printf("There is no specialization for sorting!\n"
   "You need to write special function for your data type."
   );

@@ -29,6 +29,6 @@ void PrintRectPerimeter(RectPerimeter* rp, const char* str);
 
 // Обработчик специализации, запускаемый в потоке
 // вычисляет периметр прямоугольника.
-void RunThread<ThreadData.RectPerimeter *rp>();
+void RunThread<ThreadData.RectPerimeter *rp>(void);
 
 #endif // rectangle_thread
