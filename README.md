@@ -3,7 +3,7 @@
 # ppchibicc: A procedural-parametric extension of the C language built upon the chibicc compiler
 ppchibicc is an attempt to implement a compiler for the PPC programming language on top of the [chibicc](https://github.com/rui314/chibicc) compiler using "vibe coding." The PPC language extends C by adding constructs that support the procedural-parametric programming (PPP) paradigm. A description of this paradigm and its capabilities can be found on the [https://www.softcraft.ru/](https://www.softcraft.ru/) website, in the section dedicated to the [procedural-parametric programming paradigm](https://www.softcraft.ru/ppp/).
 
-The choice of chibicc stems from the goal of creating a lightweight compiler suitable for educational and experimental purposes. Additionally, it serves as a testbed for new language constructs that will eventually be integrated into the [ppclang](https://gitverse.ru/kpdev/llvm-project) compiler—an extension of the [clang](https://clang.llvm.org/) compiler.
+The choice of chibicc stems from the goal of creating a lightweight compiler for educational and experimental purposes. ppchibicc is developed independently, with direct x86-64 code generation and an LLVM IR backend. The separate ppclang project is outside this work.
 
 Along with the compiler, the repository contains examples demonstrating the capabilities of the procedural-parametric programming paradigm.
 
@@ -14,6 +14,9 @@ The current version of the compiler is being developed for the Linux operating s
 [LLVM self-hosting](docs/llvm-selfhost-ru.md) is available in a separate CMake
 build with `-DPPCHIBICC_STAGE2_BACKEND=llvm`. The `test-llvm-selfhost` target
 compares stage2/stage3 IR and objects and tests the LLVM-built compiler.
+See the [LLVM compiler guide](docs/llvm-compiler-ru.md),
+[tester instructions](docs/testing-ru.md) and
+[stabilization and migration notes](docs/llvm-stabilization-ru.md) (in Russian).
 
 ## Building the compiler
 
@@ -56,19 +59,22 @@ Another CMake project can select it with:
 set(CMAKE_C_COMPILER ppchibicc)
 ```
 
-If you wish to use a different file extension—for example, `ppc`—you must invoke the compiler with the `-xc` option. For instance:
+The compiler recognizes `.c` and `.ppc` sources. Include `.h` and `.pph`
+headers through `#include`. A `.ppc` source needs no `-x c` option:
 
-```
-ppchibicc -xc main.c -o main
+```sh
+ppchibicc main.ppc -o main
+ppchibicc -x c main.custom -o main
 ```
 
-In CMake, you also need to specify the following:
+The second command selects C for an arbitrary extension. CMake itself still
+needs the language specified for `.ppc` sources:
 
-```
+```cmake
 set_source_files_properties(
-${SOURCE_FILES}
-PROPERTIES
-LANGUAGE C
+    ${SOURCE_FILES}
+    PROPERTIES
+    LANGUAGE C
 )
 ```
 

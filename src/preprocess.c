@@ -793,9 +793,19 @@ static char *detect_include_guard(Token *tok) {
   return NULL;
 }
 
+// Paths may name the same file through relative/absolute names or links.
+// Keep source names intact for diagnostics, __FILE__ and include resolution.
+static char *pragma_once_key(char *path) {
+  struct stat st;
+  if (stat(path, &st))
+    return NULL;
+  return format("%ju:%ju", (uintmax_t)st.st_dev, (uintmax_t)st.st_ino);
+}
+
 static Token *include_file(Token *tok, char *path, Token *filename_tok) {
   // Check for "#pragma once"
-  if (hashmap_get(&pragma_once, path))
+  char *key = pragma_once_key(path);
+  if (key && hashmap_get(&pragma_once, key))
     return tok;
 
   // If we read the same file before, and if the file was guarded
@@ -965,7 +975,9 @@ static Token *preprocess2(Token *tok) {
     }
 
     if (equal(tok, "pragma") && equal(tok->next, "once")) {
-      hashmap_put(&pragma_once, tok->file->name, (void *)1);
+      char *key = pragma_once_key(tok->file->name);
+      if (key)
+        hashmap_put(&pragma_once, key, (void *)1);
       tok = skip_line(tok->next->next);
       continue;
     }

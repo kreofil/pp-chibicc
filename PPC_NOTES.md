@@ -1,7 +1,14 @@
-# PPC extension snapshot 27
+# PPC extension snapshot 28
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
+
+Stabilization fixes #pragma once to identify files by device/inode rather
+than path text. Relative/absolute names, symbolic links and hard links now
+share the once guard; source names, #line and include lookup stay intact.
+Driver regressions cover aliases, distinct files and an absolute primary
+source that includes itself. The change applies to both backends and all
+bootstrap stages; PPC semantics, registration ABI and metadata v2 are unchanged.
 
 LLVM self-hosting is verified without further frontend/backend changes.
 The optional CMake PPCHIBICC_STAGE2_BACKEND=llvm mode builds stage2 through

@@ -453,6 +453,38 @@ echo "#include \"$tmp/out1\"" | $chibicc -E -o $tmp/out2 -xc -
 cat $tmp/out2 | grep -q foo
 check '-E and -o'
 
+# #pragma once identifies a file independently of its path spelling.
+mkdir -p "$tmp/once/sub"
+cat > "$tmp/once/unit.pph" <<'EOF'
+#pragma once
+struct OnlyOnce { int value; };
+static char *original_file = __FILE__;
+#line 100 "virtual-once.pph"
+static char *display_file = __FILE__;
+EOF
+ln -s unit.pph "$tmp/once/symbolic.pph"
+ln "$tmp/once/unit.pph" "$tmp/once/hard.pph"
+cat > "$tmp/once/main.c" <<EOF
+#include "unit.pph"
+#include "$tmp/once/unit.pph"
+#include "sub/../unit.pph"
+#include "symbolic.pph"
+#include "hard.pph"
+#include "other.pph"
+int strcmp(char *, char *);
+int main(void) {
+  return strcmp(original_file, "./unit.pph") ||
+         strcmp(display_file, "virtual-once.pph") || other_value != 7;
+}
+EOF
+printf '#pragma once\nstatic int other_value = 7;\n' > "$tmp/once/other.pph"
+(cd "$tmp/once" && "$chibicc" main.c -o main && ./main)
+check '#pragma once relative/absolute paths, links and source names'
+
+# The initial source file can also include itself under a different name.
+"$chibicc" -Itest -I. -c "$(realpath test/pragma-once.c)" -o "$tmp/once/self.o"
+check '#pragma once absolute primary source'
+
 # -I
 mkdir $tmp/dir
 echo foo > $tmp/dir/i-option-test
