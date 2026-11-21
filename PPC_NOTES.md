@@ -1,7 +1,28 @@
-# PPC extension snapshot 28
+# PPC extension snapshot 29
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
+
+LLVM supports volatile scalar accesses, pointer qualifiers, arrays/VLA,
+record members and bitfields, aggregate copies/arguments/returns and PPC
+handlers in runtime/table/switch and closed-program modes. Loads/stores
+carry volatile; memory intrinsics conservatively mark whole-object copies.
+Array typedef qualifiers propagate to elements, member qualifiers inherit
+from their containing record, and qualified forward tags acquire completed
+layouts. Generated value temporaries do not become volatile objects; PPC
+dispatch retains the actual argument's qualifier when reading its tag.
+Complete scalar/record value initializers no longer zero the destination
+before assigning it, avoiding a spurious volatile write; partial aggregate
+initializers retain the existing zero-fill strategy.
+Scalar value conversions drop top-level volatile while lvalue types and
+pointer targets retain it, including GNU typeof of computed expressions.
+Raw/O2 IR regressions check observable reads/writes and their sequence,
+assignment results, unused values, pointer-vs-pointee qualification and
+aggregate copies. Native/LLVM execution is compared with host C; closed
+dispatch and multimethod checks cover polymorphic handlers. Volatile is
+not atomic, a synchronization primitive or a general memory fence; bitfield
+updates can read again to preserve neighbours. Public ABI, metadata v2 and
+tag numbers are unchanged. See docs/llvm-volatile-ru.md.
 
 Stabilization fixes #pragma once to identify files by device/inode rather
 than path text. Relative/absolute names, symbolic links and hard links now
@@ -465,7 +486,7 @@ and LLVM ABI. Array compatibility now compares element types and constant
 lengths, allowing a variable or unspecified bound to match a compatible array.
 Prototype [*] and outermost static/const/restrict array qualifiers are parsed;
 [*] definitions, misplaced qualifiers, duplicate/escaped names and incompatible
-PPC row types are diagnosed. LLVM volatile limitations are retained.
+PPC row types are diagnosed. Volatile support was added in snapshot 29.
 
 Native/stage2, LLVM O0/O2 and closed-mode checks cover C and polymorphic
 handlers (including all dispatch representations), host calls in both
@@ -573,9 +594,9 @@ While adding it, the shared type pass was corrected to apply C integer
 promotions to `~`, `<<` and `>>`: narrow integer operands promote to `int`,
 and the result type follows the promoted left operand. Regression coverage
 is included in `test/usualconv.c` and the LLVM differential tests.
-The frontend also retains `volatile` qualifiers so the LLVM MVP can diagnose
-unsupported volatile accesses rather than silently optimize them. This does
-not add volatile lowering to the native backend.
+The initial LLVM MVP retained `volatile` qualifiers to diagnose unsupported
+accesses. Snapshot 29 adds LLVM lowering and qualifier propagation; the
+direct native backend still has no optimizer.
 
 Implemented so far:
 

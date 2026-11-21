@@ -56,7 +56,8 @@ for source in "$source_dir"/test/llvm/valid/*.c \
     "$source_dir"/examples/llvm/ppc-vla-matrix.c \
     "$source_dir"/examples/llvm/ppc-bool-flags.c \
     "$source_dir"/examples/llvm/ppc-bitfields.c \
-    "$source_dir"/examples/llvm/ppc-vararg-items.c; do
+    "$source_dir"/examples/llvm/ppc-vararg-items.c \
+    "$source_dir"/examples/llvm/volatile-sample.c; do
   name=$(basename "$source" .c)
   prefix=$result_dir/$name
   expected_status=0
@@ -181,6 +182,8 @@ done
   "$result_dir/bitfields-modes" "$llvm_opt" "$llvm_llc"
 "$source_dir/cmake/run-vararg-record-tests.sh" "$source_dir" "$compiler" \
   "$result_dir/record-varargs-modes" "$llvm_opt" "$llvm_llc"
+"$source_dir/cmake/run-volatile-tests.sh" "$source_dir" "$compiler" \
+  "$result_dir/volatile-modes" "$llvm_opt" "$llvm_llc" "$host_cc"
 
 # VLA constraints are shared frontend diagnostics in both backends.
 for statement in 'int a[n], b[n]; a = b;' 'int a[n] = {1};'; do
@@ -270,7 +273,7 @@ done
 
 # Unsupported source constructs must produce a compiler diagnostic instead
 # of invalid IR or a silently different executable.
-for feature in VA_ARG_ATOMIC_RECORD VA_ARG_VOLATILE_RECORD UNPROTOTYPED_AGGREGATE TLS ATOMIC MIXED_X87_BITFIELD VOLATILE VOLATILE_POINTER VOLATILE_TYPEDEF VOLATILE_VLA_PARAMETER VOLATILE_VLA_ELEMENT ASM COMPUTED_GOTO; do
+for feature in VA_ARG_ATOMIC_RECORD UNPROTOTYPED_AGGREGATE TLS ATOMIC MIXED_X87_BITFIELD ASM COMPUTED_GOTO; do
   echo "testing LLVM diagnostic $feature"
   if "$compiler" -S -emit-llvm -DREJECT_$feature \
       "$source_dir/test/llvm/reject.c" -o "$result_dir/rejected.ll" \
