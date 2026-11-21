@@ -361,6 +361,9 @@ Node *new_cast(Node *expr, Type *ty) {
   node->tok = expr->tok;
   node->lhs = expr;
   node->ty = copy_type(ty);
+  if (ty->kind != TY_STRUCT && ty->kind != TY_UNION &&
+      ty->kind != TY_ARRAY && ty->kind != TY_VLA)
+    node->ty->is_volatile = false;
   return node;
 }
 
@@ -420,6 +423,11 @@ static Obj *new_var(char *name, Type *ty) {
 }
 
 static Obj *new_lvar(char *name, Type *ty) {
+  // Compiler-generated value temporaries are not user volatile objects.
+  if (!*name && ty->is_volatile) {
+    ty = copy_type(ty);
+    ty->is_volatile = false;
+  }
   Obj *var = new_var(name, ty);
   var->is_local = true;
   var->next = locals;
@@ -697,11 +705,10 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     ty = copy_type(ty);
     ty->is_atomic = true;
   }
-  if (is_volatile) {
-    ty = copy_type(ty);
-    ty->is_volatile = true;
-  }
+  if (is_volatile)
+    ty = volatile_type(ty);
 
+  complete_type(ty);
   *rest = tok;
   return ty;
 }
@@ -1664,6 +1671,12 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
 static Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
   Initializer *init = initializer(rest, tok, var->ty, &var->ty);
   InitDesg desg = {NULL, 0, NULL, var};
+  Node *rhs = create_lvar_init(init, var->ty, &desg, tok);
+
+  // A complete value initializer needs no preliminary zero write. In
+  // particular, that write would be an extra observable volatile access.
+  if (init->expr)
+    return rhs;
 
   // If a partial initializer list is given, the standard requires
   // that unspecified elements are set to 0. Here, we simply
@@ -1672,11 +1685,14 @@ static Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
   Node *lhs = new_node(ND_MEMZERO, tok);
   lhs->var = var;
 
-  Node *rhs = create_lvar_init(init, var->ty, &desg, tok);
   return new_binary(ND_COMMA, lhs, rhs, tok);
 }
 
 static Obj *new_generated_lvar(Obj **list, Type *ty) {
+  if (ty->is_volatile) {
+    ty = copy_type(ty);
+    ty->is_volatile = false;
+  }
   Obj *var = calloc(1, sizeof(Obj));
   var->name = "";
   var->ty = ty;
@@ -5004,6 +5020,8 @@ static Type *ppc_param_base_ty(Type *ty, Token *tok) {
     error_tok(tok, "PPC parameter must be a pointer");
 
   Type *base = ty->base;
+  while (base->origin)
+    base = base->origin;
   if (base->ppc_base)
     return base->ppc_base;
   if (base->is_ppc_generalization)
@@ -6587,10 +6605,12 @@ static Node *new_expr_stmt_node(Node *expr, Token *tok) {
 
 static Node *ppc_tag_expr(Obj *var, Type *base_ty, Token *tok) {
   Member *tag = ppc_tag_member(base_ty);
-  if (!tag && base_ty->is_ppc_generalization && is_incomplete_struct(base_ty))
+  if (!tag && base_ty->is_ppc_generalization && is_incomplete_struct(base_ty)) {
+    Type *ty = var->ty->base->is_volatile ? volatile_type(ty_int) : ty_int;
     return new_unary(ND_DEREF,
-                     new_cast(new_var_node(var, tok), pointer_to(ty_int)),
+                     new_cast(new_var_node(var, tok), pointer_to(ty)),
                      tok);
+  }
   if (!tag)
     error_tok(tok, "PPC generalization has no specialization tag");
 
@@ -6615,10 +6635,14 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
 
   int i = 0;
   for (Node *arg = ppc_args; arg; arg = arg->next) {
-    arg_vars[i] = new_lvar("", pointer_to(ppc_fn->base_tys[i]));
+    Type *base = ppc_fn->base_tys[i];
+    if (arg->ty->base->is_volatile)
+      base = volatile_type(base);
+    Type *ptr_ty = pointer_to(base);
+    arg_vars[i] = new_lvar("", ptr_ty);
     cur = cur->next =
       new_expr_stmt_node(new_binary(ND_ASSIGN, new_var_node(arg_vars[i], tok),
-                                    new_cast(arg, pointer_to(ppc_fn->base_tys[i])), tok),
+                                    new_cast(arg, ptr_ty), tok),
                          tok);
     tags[i] = ppc_tag_expr(arg_vars[i], ppc_fn->base_tys[i], tok);
     i++;

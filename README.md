@@ -17,6 +17,8 @@ compares stage2/stage3 IR and objects and tests the LLVM-built compiler.
 See the [LLVM compiler guide](docs/llvm-compiler-ru.md),
 [tester instructions](docs/testing-ru.md) and
 [stabilization and migration notes](docs/llvm-stabilization-ru.md) (in Russian).
+[Volatile accesses](docs/llvm-volatile-ru.md) are supported by the LLVM backend,
+including optimized code, arrays, records and polymorphic handlers.
 
 ## Building the compiler
 

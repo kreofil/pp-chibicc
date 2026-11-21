@@ -86,6 +86,22 @@ class ClosedCompilerTests(unittest.TestCase):
         run(options.compiler, '--closed-program', '-O2', '-S', *self.objects, '-o', asm)
         self.assertIn('main:', asm.read_text())
 
+    def test_volatile(self):
+        for name in ('volatile', 'ppc-volatile'):
+            source = self.root/'test'/(name+'.c')
+            expected = (self.root/'test/llvm/valid'/(name+'.expected')).read_text()
+            for level in ('0', '2'):
+                exe = self.out/(name+'-O'+level+'.exe')
+                run(options.compiler, '--closed-program', '-O'+level, source, '-o', exe)
+                self.assertEqual(expected, run(exe).stdout)
+                report = json.loads(Path(str(exe)+'.closed.json').read_text())
+                self.assertEqual(name == 'ppc-volatile', report['optimization_applied'])
+        ir = self.out/'volatile-frozen.ll'
+        run(options.compiler, '--closed-program', '-O2', '-S', '-emit-llvm',
+            self.root/'test/ppc-volatile.c', '-o', ir)
+        self.assertIn('load volatile ', ir.read_text())
+        self.assertIn('store volatile ', ir.read_text())
+
     def test_program_without_eligible_tables(self):
         pure = self.source('pure', 'int main(void) { return 0; }\n')
         exe = self.out/'pure.exe'

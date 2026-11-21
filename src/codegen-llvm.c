@@ -55,6 +55,7 @@ static LlvmAbi llvm_return_abi;
 static char *llvm_expr(Node *node);
 static void llvm_stmt(Node *node);
 static char *llvm_load(char *addr, Type *ty, Token *tok);
+static void llvm_discard(Node *node);
 
 static void llvm_print(char *fmt, ...) {
   va_list ap;
@@ -82,18 +83,15 @@ static bool llvm_aggregate(Type *ty) {
 static void llvm_check_scalar(Type *ty, Token *tok) {
   if (ty->is_atomic)
     llvm_unsupported(tok, "atomic types");
-  if (ty->is_volatile)
-    llvm_unsupported(tok, "volatile types");
   if (is_integer(ty) || is_flonum(ty) || llvm_pointer(ty) || ty->kind == TY_VOID)
     return;
   llvm_unsupported(tok, "this value type");
 }
 
 static void llvm_check_object(Type *ty, Token *tok) {
+  complete_type(ty);
   if (ty->is_atomic)
     llvm_unsupported(tok, "atomic types");
-  if (ty->is_volatile)
-    llvm_unsupported(tok, "volatile types");
   if (ty->kind == TY_ARRAY || ty->kind == TY_VLA) {
     llvm_check_object(ty->base, tok);
     return;
@@ -468,22 +466,36 @@ static char *llvm_offset(char *addr, int offset) {
   return result;
 }
 
-static void llvm_copy(char *dest, char *source, Type *ty) {
-  llvm_memmove = true;
-  llvm_print("  call void @llvm.memmove.p0.p0.i64(ptr %s, ptr %s, i64 %d, i1 false)",
-             dest, source, ty->size);
+static bool llvm_volatile_object(Type *ty) {
+  if (ty->is_volatile)
+    return true;
+  if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+    return llvm_volatile_object(ty->base);
+  if (llvm_aggregate(ty))
+    for (Member *mem = ty->members; mem; mem = mem->next)
+      if (llvm_volatile_object(mem->ty))
+        return true;
+  return false;
 }
 
-static char *llvm_load_piece(char *addr, LlvmAbi *abi, int index) {
+static void llvm_copy(char *dest, char *source, Type *ty, bool is_volatile) {
+  llvm_memmove = true;
+  llvm_print("  call void @llvm.memmove.p0.p0.i64(ptr %s, ptr %s, i64 %d, i1 %s)",
+             dest, source, ty->size, is_volatile ? "true" : "false");
+}
+
+static char *llvm_load_piece(char *addr, LlvmAbi *abi, int index, bool is_volatile) {
   addr = llvm_offset(addr, abi->offsets[index]);
   char *value = llvm_reg();
-  llvm_print("  %s = load %s, ptr %s, align 1", value, abi->types[index], addr);
+  llvm_print("  %s = load %s%s, ptr %s, align 1", value,
+             is_volatile ? "volatile " : "", abi->types[index], addr);
   return value;
 }
 
-static void llvm_store_piece(char *addr, LlvmAbi *abi, int index, char *value) {
+static void llvm_store_piece(char *addr, LlvmAbi *abi, int index, char *value, bool is_volatile) {
   addr = llvm_offset(addr, abi->offsets[index]);
-  llvm_print("  store %s %s, ptr %s, align 1", abi->types[index], value, addr);
+  llvm_print("  store %s%s %s, ptr %s, align 1",
+             is_volatile ? "volatile " : "", abi->types[index], value, addr);
 }
 
 // Snapshot aggregate arguments into reusable entry-block slots. An alloca at
@@ -547,7 +559,7 @@ static void llvm_va_arg_memory(char *ap, char *dest, Type *ty) {
   }
   char *next = llvm_offset(source, align_to(ty->size, 8));
   llvm_print("  store ptr %s, ptr %s, align 1", next, overflow);
-  llvm_copy(dest, source, ty);
+  llvm_copy(dest, source, ty, false);
 }
 
 static char *llvm_va_arg(Node *node) {
@@ -604,7 +616,7 @@ static char *llvm_va_arg(Node *node) {
     source = llvm_offset(source, used[cls]++ * (cls ? 16 : 8));
     char *value = llvm_reg();
     llvm_print("  %s = load %s, ptr %s, align 1", value, abi.types[i], source);
-    llvm_store_piece(dest, &abi, i, value);
+    llvm_store_piece(dest, &abi, i, value, false);
   }
   for (int cls = 0; cls < 2; cls++) {
     if (!needs[cls])
@@ -696,7 +708,7 @@ static char *llvm_addr(Node *node) {
   case ND_DEREF:
     return llvm_expr(node->lhs);
   case ND_COMMA:
-    llvm_expr(node->lhs);
+    llvm_discard(node->lhs);
     return llvm_addr(node->rhs);
   case ND_MEMBER: {
     char *base = llvm_expr(node->lhs);
@@ -719,7 +731,8 @@ static char *llvm_load(char *addr, Type *ty, Token *tok) {
   if (ty->kind == TY_ARRAY || ty->kind == TY_VLA || ty->kind == TY_FUNC)
     return addr;
   char *result = llvm_reg();
-  llvm_print("  %s = load %s, ptr %s, align 1", result, llvm_type(ty), addr);
+  llvm_print("  %s = load %s%s, ptr %s, align 1", result,
+             ty->is_volatile ? "volatile " : "", llvm_type(ty), addr);
   return result;
 }
 
@@ -736,10 +749,11 @@ static char *llvm_bitfield_extend(char *value, Member *mem) {
   return result;
 }
 
-static char *llvm_load_bitfield(char *addr, Member *mem) {
+static char *llvm_load_bitfield(char *addr, Member *mem, bool is_volatile) {
   int bits = (mem->bit_offset + mem->bit_width + 7) / 8 * 8;
   char *value = llvm_reg();
-  llvm_print("  %s = load i%d, ptr %s, align 1", value, bits, addr);
+  llvm_print("  %s = load %si%d, ptr %s, align 1", value,
+             is_volatile ? "volatile " : "", bits, addr);
   if (mem->bit_offset) {
     char *shifted = llvm_reg();
     llvm_print("  %s = lshr i%d %s, %d", shifted, bits, value, mem->bit_offset);
@@ -753,7 +767,7 @@ static char *llvm_load_bitfield(char *addr, Member *mem) {
   return llvm_bitfield_extend(value, mem);
 }
 
-static char *llvm_store_bitfield(char *addr, char *value, Member *mem) {
+static char *llvm_store_bitfield(char *addr, char *value, Member *mem, bool is_volatile) {
   int width = mem->bit_width;
   int bits = (mem->bit_offset + width + 7) / 8 * 8;
   char *narrow = value;
@@ -781,12 +795,14 @@ static char *llvm_store_bitfield(char *addr, char *value, Member *mem) {
     char *kept = llvm_reg();
     char *merged = llvm_reg();
     llvm_print("  %s = xor i%d %s, -1", inverse, bits, mask);
-    llvm_print("  %s = load i%d, ptr %s, align 1", old, bits, addr);
+    llvm_print("  %s = load %si%d, ptr %s, align 1", old,
+               is_volatile ? "volatile " : "", bits, addr);
     llvm_print("  %s = and i%d %s, %s", kept, bits, old, inverse);
     llvm_print("  %s = or i%d %s, %s", merged, bits, kept, value);
     value = merged;
   }
-  llvm_print("  store i%d %s, ptr %s, align 1", bits, value, addr);
+  llvm_print("  store %si%d %s, ptr %s, align 1",
+             is_volatile ? "volatile " : "", bits, value, addr);
   return result;
 }
 
@@ -812,7 +828,7 @@ static char *llvm_logical(Node *node) {
   return result;
 }
 
-static char *llvm_conditional(Node *node) {
+static char *llvm_conditional(Node *node, bool discard) {
   if (llvm_aggregate(node->ty))
     llvm_check_object(node->ty, node->tok);
   else
@@ -825,15 +841,23 @@ static char *llvm_conditional(Node *node) {
              then_block, else_block);
   llvm_terminated = true;
   llvm_begin(then_block);
-  char *then_value = llvm_expr(node->then);
+  char *then_value = "0";
+  if (discard)
+    llvm_discard(node->then);
+  else
+    then_value = llvm_expr(node->then);
   char *then_end = llvm_block;
   llvm_branch(end);
   llvm_begin(else_block);
-  char *else_value = llvm_expr(node->els);
+  char *else_value = "0";
+  if (discard)
+    llvm_discard(node->els);
+  else
+    else_value = llvm_expr(node->els);
   char *else_end = llvm_block;
   llvm_branch(end);
   llvm_begin(end);
-  if (node->ty->kind == TY_VOID)
+  if (discard || node->ty->kind == TY_VOID)
     return "0";
   char *result = llvm_reg();
   llvm_print("  %s = phi %s [%s, %%\"%s\"], [%s, %%\"%s\"]", result,
@@ -890,14 +914,14 @@ static char *llvm_call(Node *node) {
       llvm_parameter_abi(target, &gp, &fp, &abi);
       char *source = llvm_expr(arg);
       char *slot = llvm_argument_slot(arg);
-      llvm_copy(slot, source, target);
+      llvm_copy(slot, source, target, llvm_volatile_object(arg->ty));
       if (abi.memory) {
         args = llvm_list_append(args, format("ptr byval(%s) align %d %s",
           llvm_storage_type(target), MAX(8, target->align), slot));
       } else {
         for (int i = 0; i < abi.count; i++)
           args = llvm_list_append(args, format("%s %s", abi.types[i],
-            llvm_load_piece(slot, &abi, i)));
+            llvm_load_piece(slot, &abi, i, false)));
       }
     } else {
       if (!param && is_integer(target))
@@ -931,7 +955,7 @@ static char *llvm_call(Node *node) {
           piece = llvm_reg();
           llvm_print("  %s = extractvalue %s %s, %d", piece, ret_type, result, i);
         }
-        llvm_store_piece(ret_addr, &ret_abi, i, piece);
+        llvm_store_piece(ret_addr, &ret_abi, i, piece, false);
       }
     return ret_addr;
   }
@@ -1041,20 +1065,27 @@ static char *llvm_expr(Node *node) {
     if (llvm_aggregate(node->ty)) {
       llvm_check_object(node->ty, node->tok);
       char *source = llvm_expr(node->rhs);
-      llvm_copy(addr, source, node->ty);
+      llvm_copy(addr, source, node->ty,
+                llvm_volatile_object(node->lhs->ty) || llvm_volatile_object(node->rhs->ty));
       return addr;
     }
     llvm_check_scalar(node->ty, node->tok);
     char *value = llvm_cast(llvm_expr(node->rhs), node->rhs->ty, node->ty, node->tok);
     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield)
-      return llvm_store_bitfield(addr, value, node->lhs->member);
-    llvm_print("  store %s %s, ptr %s, align 1", llvm_type(node->ty), value, addr);
+      return llvm_store_bitfield(addr, value, node->lhs->member, node->lhs->ty->is_volatile);
+    llvm_print("  store %s%s %s, ptr %s, align 1",
+               node->lhs->kind != ND_VLA_PTR && node->lhs->ty->is_volatile ? "volatile " : "",
+               llvm_type(node->ty), value, addr);
     return value;
   }
   case ND_CAST:
+    if (node->ty->kind == TY_VOID) {
+      llvm_discard(node->lhs);
+      return "0";
+    }
     return llvm_cast(llvm_expr(node->lhs), node->lhs->ty, node->ty, node->tok);
   case ND_COMMA:
-    llvm_expr(node->lhs);
+    llvm_discard(node->lhs);
     return llvm_expr(node->rhs);
   case ND_NEG:
   case ND_BITNOT: {
@@ -1081,7 +1112,7 @@ static char *llvm_expr(Node *node) {
   case ND_LOGOR:
     return llvm_logical(node);
   case ND_COND:
-    return llvm_conditional(node);
+    return llvm_conditional(node, false);
   case ND_FUNCALL:
     return llvm_call(node);
   case ND_VA_ARG:
@@ -1091,8 +1122,9 @@ static char *llvm_expr(Node *node) {
     return llvm_expr(node->lhs);
   case ND_MEMZERO:
     llvm_memset = true;
-    llvm_print("  call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 %d, i1 false)",
-               llvm_addr_var(node->var), node->var->ty->size);
+    llvm_print("  call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 %d, i1 %s)",
+               llvm_addr_var(node->var), node->var->ty->size,
+               llvm_volatile_object(node->var->ty) ? "true" : "false");
     return "0";
   case ND_STMT_EXPR: {
     char *value = "0";
@@ -1122,7 +1154,7 @@ static char *llvm_expr(Node *node) {
   case ND_MEMBER:
     if (node->member->is_bitfield) {
       llvm_check_scalar(node->ty, node->tok);
-      return llvm_load_bitfield(llvm_addr(node), node->member);
+      return llvm_load_bitfield(llvm_addr(node), node->member, node->ty->is_volatile);
     }
     return llvm_load(llvm_addr(node), node->ty, node->tok);
   case ND_CAS:
@@ -1136,6 +1168,30 @@ static char *llvm_expr(Node *node) {
   return NULL;
 }
 
+// Discarding a volatile aggregate lvalue still accesses the object. Arrays
+// decay to pointers; assignments already performed their destination access.
+static void llvm_discard(Node *node) {
+  if (node->kind == ND_STMT_EXPR) {
+    for (Node *stmt = node->body; stmt; stmt = stmt->next)
+      llvm_stmt(stmt);
+    return;
+  }
+  if (node->kind == ND_COMMA) {
+    llvm_discard(node->lhs);
+    llvm_discard(node->rhs);
+    return;
+  }
+  if (node->kind == ND_COND && llvm_aggregate(node->ty)) {
+    llvm_conditional(node, true);
+    return;
+  }
+  char *value = llvm_expr(node);
+  if (node->ty && llvm_aggregate(node->ty) && llvm_volatile_object(node->ty) &&
+      (node->kind == ND_VAR || node->kind == ND_DEREF || node->kind == ND_MEMBER))
+    llvm_print("  %s = load volatile %s, ptr %s, align 1",
+               llvm_reg(), llvm_storage_type(node->ty), value);
+}
+
 static void llvm_stmt(Node *node) {
   if (node->kind != ND_BLOCK && node->kind != ND_LABEL && node->kind != ND_CASE)
     llvm_ensure_block();
@@ -1145,7 +1201,7 @@ static void llvm_stmt(Node *node) {
       llvm_stmt(stmt);
     return;
   case ND_EXPR_STMT:
-    llvm_expr(node->lhs);
+    llvm_discard(node->lhs);
     return;
   case ND_RETURN: {
     Type *ty = llvm_fn->ty->return_ty;
@@ -1155,7 +1211,7 @@ static void llvm_stmt(Node *node) {
         error_tok(node->tok, "LLVM backend: incompatible aggregate return value");
       char *source = llvm_expr(node->lhs);
       if (llvm_return_abi.memory) {
-        llvm_copy("%sret", source, ty);
+        llvm_copy("%sret", source, ty, llvm_volatile_object(node->lhs->ty));
         llvm_end_varargs();
         llvm_print("  ret void");
       } else if (!llvm_return_abi.count) {
@@ -1165,7 +1221,8 @@ static void llvm_stmt(Node *node) {
         char *result = NULL;
         char *ret_type = llvm_return_type(ty);
         for (int i = 0; i < llvm_return_abi.count; i++) {
-          char *piece = llvm_load_piece(source, &llvm_return_abi, i);
+          char *piece = llvm_load_piece(source, &llvm_return_abi, i,
+                                        llvm_volatile_object(node->lhs->ty));
           if (llvm_return_abi.count == 1) {
             result = piece;
           } else {
@@ -1228,7 +1285,7 @@ static void llvm_stmt(Node *node) {
     llvm_stmt(node->then);
     llvm_begin(node->cont_label);
     if (node->inc)
-      llvm_expr(node->inc);
+      llvm_discard(node->inc);
     llvm_branch(test);
     llvm_begin(node->brk_label);
     return;
@@ -1431,15 +1488,16 @@ static void llvm_function(Obj *fn) {
       if (param) {
         char *addr = llvm_addr_var(param);
         if (abi.memory)
-          llvm_copy(addr, format("%%a%d", index), ty);
+          llvm_copy(addr, format("%%a%d", index), ty, llvm_volatile_object(ty));
         else
           for (int i = 0; i < abi.count; i++)
-            llvm_store_piece(addr, &abi, i, format("%%a%d_%d", index, i));
+            llvm_store_piece(addr, &abi, i, format("%%a%d_%d", index, i),
+                             llvm_volatile_object(ty));
       }
     } else {
       if (param)
-        llvm_print("  store %s %%a%d, ptr %s, align 1", llvm_type(ty),
-                   index, llvm_addr_var(param));
+        llvm_print("  store %s%s %%a%d, ptr %s, align 1",
+                   ty->is_volatile ? "volatile " : "", llvm_type(ty), index, llvm_addr_var(param));
       llvm_scalar_abi(ty, &gp, &fp);
     }
     // Generated abort handlers can omit their unused ordinary parameters.

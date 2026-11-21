@@ -196,6 +196,46 @@ Type *pointer_to(Type *base) {
   return ty;
 }
 
+// Qualifying an array typedef qualifies its elements, including nested arrays.
+// Do not qualify a pointer's target when qualifying the pointer itself.
+Type *volatile_type(Type *ty) {
+  ty = copy_type(ty);
+  ty->is_volatile = true;
+  if (ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+    ty->base = volatile_type(ty->base);
+  return ty;
+}
+
+Type *unqualified_type(Type *ty) {
+  if (!ty->is_volatile)
+    return ty;
+  ty = copy_type(ty);
+  ty->is_volatile = false;
+  return ty;
+}
+
+// A qualified copy can predate its struct/union tag's definition. Refresh
+// its layout while retaining qualifiers and declarator/parameter identity.
+void complete_type(Type *ty) {
+  Type *base = canonical_type(ty);
+  if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) &&
+      ty->size < 0 && base->size >= 0) {
+    Type saved = *ty;
+    *ty = *base;
+    ty->origin = saved.origin;
+    ty->is_volatile = saved.is_volatile;
+    ty->is_atomic = saved.is_atomic;
+    ty->name = saved.name;
+    ty->name_pos = saved.name_pos;
+    ty->next = saved.next;
+    ty->param_var = saved.param_var;
+    ty->param_decl = saved.param_decl;
+    ty->param_vla_setup = saved.param_vla_setup;
+  }
+  if (ty->kind == TY_PTR || ty->kind == TY_ARRAY || ty->kind == TY_VLA)
+    complete_type(ty->base);
+}
+
 Type *func_type(Type *return_ty) {
   // The C spec disallows sizeof(<function type>), but
   // GCC allows that and the expression is evaluated to 1.
@@ -231,6 +271,7 @@ Type *struct_type(void) {
 Type *integer_promotion(Type *ty) {
   if (!is_integer(ty))
     return ty;
+  ty = unqualified_type(ty);
   if (ty->bitfield_width && ty->bitfield_width <= 32)
     return ty->bitfield_width < 32 || !ty->is_unsigned ? ty_int : ty_uint;
   if (ty->size < 4)
@@ -243,8 +284,12 @@ Type *integer_promotion(Type *ty) {
 }
 
 static Type *get_common_type(Type *ty1, Type *ty2) {
-  if (ty1->base)
-    return pointer_to(ty1->base);
+  if (ty1->base) {
+    Type *base = ty1->base;
+    if (ty2->base && ty2->base->is_volatile && !base->is_volatile)
+      base = volatile_type(base);
+    return pointer_to(base);
+  }
 
   if (ty1->kind == TY_FUNC)
     return pointer_to(ty1);
@@ -358,7 +403,7 @@ void add_type(Node *node) {
     } else {
       node->rhs = new_cast(node->rhs, node->lhs->ty);
     }
-    node->ty = node->lhs->ty;
+    node->ty = is_aggregate(node->lhs->ty) ? node->lhs->ty : unqualified_type(node->lhs->ty);
     return;
   case ND_EQ:
   case ND_NE:
@@ -375,6 +420,8 @@ void add_type(Node *node) {
     return;
   case ND_FUNCALL:
     node->ty = node->func_ty->return_ty;
+    if (!is_aggregate(node->ty))
+      node->ty = unqualified_type(node->ty);
     return;
   case ND_VA_ARG:
     node->ty = node->lhs->ty;
@@ -399,6 +446,7 @@ void add_type(Node *node) {
     return;
   case ND_VAR:
   case ND_VLA_PTR:
+    complete_type(node->var->ty);
     node->ty = node->var->ty;
     return;
   case ND_COND:
@@ -413,6 +461,8 @@ void add_type(Node *node) {
       if (!is_compatible(node->then->ty, node->els->ty))
         error_tok(node->els->tok, "incompatible aggregate operands");
       node->ty = node->then->ty;
+      if (node->els->ty->is_volatile && !node->ty->is_volatile)
+        node->ty = volatile_type(node->ty);
     } else {
       usual_arith_conv(&node->then, &node->els);
       node->ty = node->then->ty;
@@ -420,9 +470,13 @@ void add_type(Node *node) {
     return;
   case ND_COMMA:
     node->ty = node->rhs->ty;
+    if (node->ty && !is_aggregate(node->ty) && node->ty->kind != TY_ARRAY && node->ty->kind != TY_VLA)
+      node->ty = unqualified_type(node->ty);
     return;
   case ND_MEMBER:
     node->ty = node->member->ty;
+    if (node->lhs->ty->is_volatile)
+      node->ty = volatile_type(node->ty);
     if (node->member->is_bitfield) {
       node->ty = copy_type(node->ty);
       node->ty->bitfield_width = node->member->bit_width;
@@ -442,6 +496,7 @@ void add_type(Node *node) {
     if (node->lhs->ty->base->kind == TY_VOID)
       error_tok(node->tok, "dereferencing a void pointer");
 
+    complete_type(node->lhs->ty->base);
     node->ty = node->lhs->ty->base;
     return;
   case ND_STMT_EXPR:
@@ -451,6 +506,8 @@ void add_type(Node *node) {
         stmt = stmt->next;
       if (stmt->kind == ND_EXPR_STMT) {
         node->ty = stmt->lhs->ty;
+        if (node->ty && !is_aggregate(node->ty) && node->ty->kind != TY_ARRAY && node->ty->kind != TY_VLA)
+          node->ty = unqualified_type(node->ty);
         return;
       }
     }

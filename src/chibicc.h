@@ -365,7 +365,7 @@ struct Type {
   int align;          // alignment
   bool is_unsigned;   // unsigned or signed
   bool is_atomic;     // true if _Atomic
-  bool is_volatile;   // retained so unsupported backends can diagnose access
+  bool is_volatile;   // volatile-qualified object access
   int bitfield_width; // Value-expression range; zero for ordinary types
   Type *origin;       // for type compatibility check
 
@@ -489,6 +489,9 @@ bool is_numeric(Type *ty);
 bool is_compatible(Type *t1, Type *t2);
 bool is_assignable(Type *lhs, Type *rhs);
 Type *copy_type(Type *ty);
+Type *volatile_type(Type *ty);
+Type *unqualified_type(Type *ty);
+void complete_type(Type *ty);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);
