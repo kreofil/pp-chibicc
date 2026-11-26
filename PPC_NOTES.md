@@ -1,7 +1,17 @@
-# PPC extension snapshot 29
+# PPC extension snapshot 30
 
 This snapshot starts a Procedural-Parametric C experiment on top of
 `rui314/chibicc` commit `90d1f7f199cc55b13c7fdb5839d1409806633fdb`.
+
+PPC calls accept assignment expressions as polymorphic arguments, rather
+than only cast/unary expressions. Unparenthesized conditional expressions,
+pointer arithmetic and assignments now work. A token boundary separates
+the closing > from relational operators; comparisons within grouped
+expressions and nested calls keep ordinary C parsing. A bare top-level >
+closes the list, so greater-than comparisons require parentheses. Commas
+separate arguments except within grouped expressions or the middle of ?:.
+Argument evaluation remains once per argument in all dispatch modes;
+registration ABI and LLVM metadata are unchanged.
 
 LLVM supports volatile scalar accesses, pointer qualifiers, arrays/VLA,
 record members and bitfields, aggregate copies/arguments/returns and PPC

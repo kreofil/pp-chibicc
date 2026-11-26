@@ -3075,11 +3075,18 @@ static Node *equality(Token **rest, Token *tok) {
 }
 
 // relational = shift ("<" shift | "<=" shift | ">" shift | ">=" shift)*
+static Token *ppc_argument_end;
+
 static Node *relational(Token **rest, Token *tok) {
   Node *node = shift(&tok, tok);
 
   for (;;) {
     Token *start = tok;
+
+    if (tok == ppc_argument_end) {
+      *rest = tok;
+      return node;
+    }
 
     if (equal(tok, "<")) {
       node = new_binary(ND_LT, node, shift(&tok, tok->next), start);
@@ -6723,6 +6730,35 @@ static Node *ppc_runtime_dispatch(PpcFunc *ppc_fn, Node *ppc_args, Node *regular
   return node;
 }
 
+// Locate the list delimiter without treating comparisons inside (), [] or
+// {} as delimiters. Nested PPC calls own their own angle-bracket lists.
+static Token *ppc_argument_group_end(Token *tok) {
+  char *close = equal(tok, "(") ? ")" : equal(tok, "[") ? "]" : "}";
+  Token *start = tok;
+  for (tok = tok->next; !equal(tok, close); tok = tok->next) {
+    if (tok->kind == TK_EOF)
+      error_tok(start, "expected '%s'", close);
+    if (equal(tok, "(") || equal(tok, "[") || equal(tok, "{"))
+      tok = ppc_argument_group_end(tok);
+  }
+  return tok;
+}
+
+static Token *ppc_argument_list_end(Token *tok) {
+  Token *start = tok;
+  Token *previous = NULL;
+  for (; tok->kind != TK_EOF; previous = tok, tok = tok->next) {
+    if (equal(tok, ">"))
+      return tok;
+    if (equal(tok, "(") || equal(tok, "[") || equal(tok, "{"))
+      tok = ppc_argument_group_end(tok);
+    else if (tok->kind == TK_IDENT && equal(tok->next, "<") && find_ppc_func(tok) &&
+             (!previous || (!equal(previous, ".") && !equal(previous, "->"))))
+      tok = ppc_argument_list_end(tok->next->next);
+  }
+  error_tok(start, "expected '>' after PPC arguments");
+}
+
 static Node *ppc_funcall_expr(Token **rest, Token *tok) {
   PpcFunc *ppc_fn = find_ppc_func(tok);
   if (!ppc_fn)
@@ -6733,13 +6769,17 @@ static Node *ppc_funcall_expr(Token **rest, Token *tok) {
 
   Node ppc_head = {};
   Node *ppc_cur = &ppc_head;
+  Token *saved_end = ppc_argument_end;
+  Token *end = ppc_argument_list_end(tok);
+  ppc_argument_end = end;
 
-  while (!equal(tok, ">")) {
+  while (tok != end) {
     if (ppc_cur != &ppc_head)
       tok = skip(tok, ",");
-    ppc_cur = ppc_cur->next = cast(&tok, tok);
+    ppc_cur = ppc_cur->next = assign(&tok, tok);
   }
 
+  ppc_argument_end = saved_end;
   tok = skip(tok, ">");
   tok = skip(tok, "(");
 
